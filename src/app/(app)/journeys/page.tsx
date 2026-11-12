@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Activity, Mail, Workflow } from "lucide-react";
-import { isTenantOwner } from "@/lib/auth";
+import { getActiveTenantId, isTenantOwner } from "@/lib/auth";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { leadOptionLabels } from "@/lib/leadOption";
@@ -168,8 +168,12 @@ export default async function JourneysPage() {
     }),
   ]);
   // The workspace's modules: the builder offers no trigger or step of a module it hasn't got (journeyModules.ts).
+  // THIS workspace's fields, named explicitly (review of #1064).
+  const fieldsTenantId = await getActiveTenantId();
   const fieldList = async (entity: "lead" | "contact") =>
-    (await getFieldDefs(entity)).map((d) => ({ key: d.key, label: d.label, type: d.type, options: d.options }));
+    fieldsTenantId
+      ? (await getFieldDefs(entity, { tenantId: fieldsTenantId })).map((d) => ({ key: d.key, label: d.label, type: d.type, options: d.options }))
+      : [];
   const options = {
     stages,
     users,

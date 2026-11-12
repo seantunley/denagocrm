@@ -58,6 +58,7 @@ export async function stageGateFactsForLead(
       source: true,
       contactId: true,
       stageEnteredAt: true,
+      tenantId: true,
       contact: { select: { email: true, phone: true } },
     },
   });
@@ -86,7 +87,10 @@ export async function stageGateFactsForLead(
       where: { leadId },
       _count: { _all: true },
     }),
-    customRuleValues("lead", leadId),
+    // The lead's OWN workspace's fields (review of #1064): another workspace with the
+    // same field key must never feed this lead's rule facts. A lead with no workspace
+    // has no custom facts — never a guess.
+    lead.tenantId ? customRuleValues("lead", leadId, lead.tenantId) : Promise.resolve({}),
   ]);
   const signatures = await signatureCounts(quotes.map((quote) => quote.id));
 

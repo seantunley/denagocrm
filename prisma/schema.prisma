@@ -3634,7 +3634,8 @@ model CustomFieldDef {
 
   values CustomFieldValue[]
 
-  @@unique([entity, key])
+  /// A key is unique within ONE workspace (review of #1064) — two workspaces may both have "finance_house".
+  @@unique([tenantId, entity, key])
   @@index([entity, active, order])
   @@index([tenantId])
   @@unique([tenantId, id])

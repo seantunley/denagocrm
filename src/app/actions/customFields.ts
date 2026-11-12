@@ -18,6 +18,7 @@ import {
 } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { withActingStaffScope } from "@/lib/actingScope";
+import { actingTenantId } from "@/lib/actingTenant";
 import {
   isCustomEntity,
   isFieldType,
@@ -37,10 +38,17 @@ import {
 
 const str = (fd: FormData, k: string) => String(fd.get(k) ?? "").trim();
 
-/** Create or update a custom-field definition. Owner only. */
+/*
+ * EVERY read and write below names the acting workspace (review of #1064). With
+ * enforcement dormant the Prisma client is not scoped, so an unnamed query reads
+ * — and a by-id write reaches — every workspace's rows.
+ */
+
+/** Create or update a custom-field definition. Owner only, this workspace only. */
 export async function saveCustomFieldDef(formData: FormData) {
   return asActionResult(async () => {
     const owner = await requireTenantOwner();
+    const tenantId = await actingTenantId();
     const id = str(formData, "id") || null;
     const entity = str(formData, "entity");
     const label = str(formData, "label");
@@ -68,7 +76,7 @@ export async function saveCustomFieldDef(formData: FormData) {
     const whenKey = str(formData, "showWhenKey");
     let showWhen: Prisma.InputJsonValue | typeof Prisma.DbNull = Prisma.DbNull;
     if (whenKey) {
-      const siblings = await getFieldDefs(entity, { includeInactive: true });
+      const siblings = await getFieldDefs(entity, { tenantId, includeInactive: true });
       const control = siblings.find((d) => d.key === whenKey);
       if (!control || control.id === id) refuse("“Show only when” must name another field on the same record.");
       const rule = parseShowWhen({ key: whenKey, op: str(formData, "showWhenOp"), value: str(formData, "showWhenValue") });
@@ -78,22 +86,25 @@ export async function saveCustomFieldDef(formData: FormData) {
     }
 
     if (id) {
-      await prisma.customFieldDef.update({
-        where: { id },
+      // Only this workspace's field: a by-id update would otherwise reach another's.
+      const updated = await prisma.customFieldDef.updateMany({
+        where: { id, tenantId },
         data: { label, type, options, required, active, showWhen, linkTo },
       });
+      if (updated.count !== 1) refuse("That field is not in this workspace — refresh the page.");
     } else {
       // Machine key must be unique within the entity — suffix on collision.
-      const existing = new Set((await getFieldDefs(entity, { includeInactive: true })).map((d) => d.key));
+      const existing = new Set((await getFieldDefs(entity, { tenantId, includeInactive: true })).map((d) => d.key));
       const base = slugifyKey(label);
       let key = base;
       for (let i = 2; existing.has(key); i++) key = `${base}_${i}`;
       const max = await prisma.customFieldDef.aggregate({
-        where: { entity },
+        where: { entity, tenantId },
         _max: { order: true },
       });
       await prisma.customFieldDef.create({
         data: {
+          tenantId,
           entity,
           key,
           label,
@@ -122,9 +133,10 @@ export async function saveCustomFieldDef(formData: FormData) {
 export async function deleteCustomFieldDef(id: string) {
   return asActionResult(async () => {
     const owner = await requireTenantOwner();
-    const def = await prisma.customFieldDef.findUnique({ where: { id } });
+    const tenantId = await actingTenantId();
+    const def = await prisma.customFieldDef.findFirst({ where: { id, tenantId } });
     if (!def) refuse("That field is already gone — refresh the page.");
-    await prisma.customFieldDef.delete({ where: { id } });
+    await prisma.customFieldDef.deleteMany({ where: { id, tenantId } });
     await logAudit({
       action: "custom_field.deleted",
       summary: `Deleted custom ${def.entity} field “${def.label}”`,
@@ -135,8 +147,11 @@ export async function deleteCustomFieldDef(id: string) {
   });
 }
 
-/** Guard editing a record's custom-field values with that entity's own edit boundary. */
-async function requireEntityEdit(entity: CustomEntity, recordId: string): Promise<PermissionUser> {
+/**
+ * Guard editing a record's custom-field values with that entity's own edit
+ * boundary — and, for every record type, that the record is in `tenantId`.
+ */
+async function requireEntityEdit(entity: CustomEntity, recordId: string, tenantId: string): Promise<PermissionUser> {
   switch (entity) {
     case "contact": return requireContactAccess(recordId, "contacts.edit");
     case "lead": return requireLeadAccess(recordId, "leads.edit");
@@ -146,14 +161,15 @@ async function requireEntityEdit(entity: CustomEntity, recordId: string): Promis
     case "jobcard": return requireJobCardAccess(recordId, "jobcards.manage");
     // Same doors as editing the row itself (updateProduct / updateStockUnit), plus
     // the row must be in this workspace — a role check alone is not row ownership.
+    // The row's workspace is checked explicitly (review of #1064), not left to the client's scope.
     case "product": {
       const user = await requireTenantOwner();
-      if ((await prisma.product.count({ where: { id: recordId, deletedAt: null } })) !== 1) refuse("That product is not in this workspace.");
+      if ((await prisma.product.count({ where: { id: recordId, tenantId, deletedAt: null } })) !== 1) refuse("That product is not in this workspace.");
       return user;
     }
     case "stock": {
       const user = await requirePermission("stock.manage");
-      if ((await prisma.stockUnit.count({ where: { id: recordId, deletedAt: null } })) !== 1) refuse("That stock unit is not in this workspace.");
+      if ((await prisma.stockUnit.count({ where: { id: recordId, tenantId, deletedAt: null } })) !== 1) refuse("That stock unit is not in this workspace.");
       return user;
     }
   }
@@ -183,12 +199,13 @@ export async function recordCustomFields(
 ): Promise<FieldWithValue[]> {
   return withActingStaffScope(async () => {
     if (!isCustomEntity(entity)) return [];
+    const tenantId = await actingTenantId();
     try {
-      await requireEntityEdit(entity, recordId);
+      await requireEntityEdit(entity, recordId, tenantId);
     } catch {
       return [];
     }
-    return getFieldsWithValues(entity, recordId);
+    return getFieldsWithValues(entity, recordId, tenantId);
   });
 }
 
@@ -199,12 +216,13 @@ export async function recordCustomFields(
 export async function recordLinkChoices(entity: string, recordId: string): Promise<LinkChoices> {
   return withActingStaffScope(async () => {
     if (!isCustomEntity(entity)) return {};
+    const tenantId = await actingTenantId();
     try {
-      await requireEntityEdit(entity, recordId);
+      await requireEntityEdit(entity, recordId, tenantId);
     } catch {
       return {};
     }
-    return loadLinkChoices(await getFieldsWithValues(entity, recordId));
+    return loadLinkChoices(await getFieldsWithValues(entity, recordId, tenantId), tenantId);
   });
 }
 
@@ -224,7 +242,7 @@ export async function saveCustomFieldValues(
   recordId: string,
   formData: FormData,
 ): Promise<ActionResult> {
-  return asActionResult(async () => saveCustomFieldValuesBody(entity, recordId, formData));
+  return asActionResult(async () => withActingStaffScope(() => saveCustomFieldValuesBody(entity, recordId, formData)));
 }
 
 async function saveCustomFieldValuesBody(
@@ -233,8 +251,9 @@ async function saveCustomFieldValuesBody(
   formData: FormData,
 ) {
   if (!isCustomEntity(entity)) throw new Error("Unknown entity");
-  await requireEntityEdit(entity, recordId);
-  const defs = await getFieldDefs(entity);
+  const tenantId = await actingTenantId();
+  await requireEntityEdit(entity, recordId, tenantId);
+  const defs = await getFieldDefs(entity, { tenantId });
 
   const rawOf = (def: (typeof defs)[number]) =>
     def.type === "checkbox"
@@ -262,7 +281,7 @@ async function saveCustomFieldValuesBody(
       errors.push(parsed.error);
       continue;
     }
-    if (parsed.value && def.type === "link" && (!def.linkTo || !(await linkTargetExists(def.linkTo, parsed.value)))) {
+    if (parsed.value && def.type === "link" && (!def.linkTo || !(await linkTargetExists(def.linkTo, parsed.value, tenantId)))) {
       errors.push(`${def.label} points at a record that isn't in this workspace.`);
       continue;
     }
@@ -276,13 +295,14 @@ async function saveCustomFieldValuesBody(
   // old preflight findUnique + separate upserts was a TOCTOU).
   const applyValues = async (tx: Prisma.TransactionClient) => {
     for (const m of mutations) {
+      // The def ids came from THIS workspace's definitions; the rows are stamped with it too.
       if (m.value === null) {
-        await tx.customFieldValue.deleteMany({ where: { defId: m.defId, recordId } });
+        await tx.customFieldValue.deleteMany({ where: { defId: m.defId, recordId, tenantId } });
       } else {
         await tx.customFieldValue.upsert({
           where: { defId_recordId: { defId: m.defId, recordId } },
           update: { value: m.value },
-          create: { defId: m.defId, recordId, value: m.value },
+          create: { tenantId, defId: m.defId, recordId, value: m.value },
         });
       }
     }

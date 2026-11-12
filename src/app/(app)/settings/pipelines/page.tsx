@@ -1,6 +1,7 @@
 import { Plus, Zap } from "lucide-react";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { requirePermission } from "@/lib/permissions";
+import { getActiveTenantId } from "@/lib/auth";
 import { listSalesPipelines, listPipelineStages } from "@/lib/pipelines";
 import {
   archiveSalesPipeline,
@@ -80,7 +81,10 @@ export default async function PipelineSettingsPage() {
   );
   const automationRulesByStage = await stageJourneyNames();
   // The lead's own fields a rule may test (Settings → Custom fields → Leads).
-  const leadFields = (await getFieldDefs("lead")).map((d) => ({ key: d.key, label: d.label, type: d.type, options: d.options }));
+  const fieldsTenantId = await getActiveTenantId();
+  const leadFields = fieldsTenantId
+    ? (await getFieldDefs("lead", { tenantId: fieldsTenantId })).map((d) => ({ key: d.key, label: d.label, type: d.type, options: d.options }))
+    : [];
 
   return (
     <SettingsWorkspace

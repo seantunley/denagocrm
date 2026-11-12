@@ -1,3 +1,4 @@
+import { getActiveTenantId } from "@/lib/auth";
 import { getFieldsWithValues, loadLinkChoices, type CustomEntity } from "@/lib/customFields";
 import { saveCustomFieldValues } from "@/app/actions/customFields";
 import CustomFieldsForm from "./CustomFieldsForm";
@@ -20,9 +21,12 @@ export default async function CustomFieldsCard({
   recordId: string;
   readOnly?: boolean;
 }) {
-  const fields = await getFieldsWithValues(entity, recordId);
+  // THIS workspace's fields and values, named explicitly (review of #1064). No workspace, no card.
+  const tenantId = await getActiveTenantId();
+  if (!tenantId) return null;
+  const fields = await getFieldsWithValues(entity, recordId, tenantId);
   if (fields.length === 0) return null;
-  const links = await loadLinkChoices(fields);
+  const links = await loadLinkChoices(fields, tenantId);
 
   return (
     <CustomFieldsForm

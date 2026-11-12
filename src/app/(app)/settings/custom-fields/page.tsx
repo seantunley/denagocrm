@@ -1,4 +1,4 @@
-import { requireTenantOwner } from "@/lib/auth";
+import { getActiveTenantId, requireTenantOwner } from "@/lib/auth";
 import { SettingsWorkspace, SettingsSection } from "@/components/settings-workspace";
 import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
 import ConfirmDelete from "@/components/ConfirmDelete";
@@ -25,10 +25,12 @@ function summary(def: FieldDef, defs: FieldDef[]): string {
 
 export default async function CustomFieldsSettingsPage() {
   await requireTenantOwner();
+  // THIS workspace's fields, named explicitly (review of #1064).
+  const tenantId = await getActiveTenantId();
   const sections = await Promise.all(
     CUSTOM_ENTITIES.map(async (e) => ({
       entity: e,
-      defs: await getFieldDefs(e.id, { includeInactive: true }),
+      defs: tenantId ? await getFieldDefs(e.id, { tenantId, includeInactive: true }) : [],
     })),
   );
 

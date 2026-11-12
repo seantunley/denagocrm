@@ -15,16 +15,23 @@ import {
 // those modules in plain node. Anything that knows the signed-in user
 // (loadLinkChoices) stays in customFields.ts, which re-exports all of this.
 
-/** Definitions for an entity, ordered. Active-only unless includeInactive. */
+/*
+ * EVERY lookup here names its workspace — `tenantId` is REQUIRED, never optional
+ * (review of #1064). With enforcement dormant the client is not scoped, so an
+ * optional filter was no filter: a link to another workspace's record passed
+ * the existence check, and two workspaces with the same field key fed one
+ * lead's stage-rule facts.
+ */
+
+/** Definitions for an entity in ONE workspace, ordered. Active-only unless includeInactive. */
 export async function getFieldDefs(
   entity: CustomEntity,
-  /** `tenantId`: name the workspace explicitly — the journey engine and other system-scoped callers must. */
-  opts: { includeInactive?: boolean; tenantId?: string } = {},
+  opts: { tenantId: string; includeInactive?: boolean },
 ): Promise<FieldDef[]> {
   const rows = await prisma.customFieldDef.findMany({
     where: {
       entity,
-      ...(opts.tenantId ? { tenantId: opts.tenantId } : {}),
+      tenantId: opts.tenantId,
       ...(opts.includeInactive ? {} : { active: true }),
     },
     orderBy: [{ order: "asc" }, { createdAt: "asc" }],
@@ -32,16 +39,16 @@ export async function getFieldDefs(
   return rows.map((r) => normalizeDef(r as DefRow));
 }
 
-/** Active definitions for an entity paired with a record's current values. */
+/** Active definitions for an entity paired with a record's current values — in ONE workspace. */
 export async function getFieldsWithValues(
   entity: CustomEntity,
   recordId: string,
-  tenantId?: string,
+  tenantId: string,
 ): Promise<FieldWithValue[]> {
   const defs = await getFieldDefs(entity, { tenantId });
   if (defs.length === 0) return [];
   const values = await prisma.customFieldValue.findMany({
-    where: { recordId, defId: { in: defs.map((d) => d.id) }, ...(tenantId ? { tenantId } : {}) },
+    where: { recordId, defId: { in: defs.map((d) => d.id) }, tenantId },
   });
   const byDef = new Map(values.map((v) => [v.defId, v.value]));
   return defs.map((def) => ({ def, value: byDef.get(def.id) ?? null }));
@@ -56,15 +63,15 @@ export async function getFieldsWithValues(
 export async function customRuleValues(
   entity: CustomEntity,
   recordId: string,
-  tenantId?: string,
+  tenantId: string,
 ): Promise<Record<string, ReturnType<typeof ruleValue>>> {
   const fields = await getFieldsWithValues(entity, recordId, tenantId);
   return Object.fromEntries(fields.map(({ def, value }) => [def.key, ruleValue(def, value)]));
 }
 
-/** Does a link field's target record exist in this workspace (and isn't deleted)? */
-export async function linkTargetExists(target: LinkTarget, id: string, tenantId?: string): Promise<boolean> {
-  const t = tenantId ? { tenantId } : {};
+/** Does a link field's target record exist in THIS workspace (and isn't deleted)? */
+export async function linkTargetExists(target: LinkTarget, id: string, tenantId: string): Promise<boolean> {
+  const t = { tenantId };
   switch (target) {
     case "contact":
       return (await prisma.contact.count({ where: { id, deletedAt: null, ...t } })) === 1;

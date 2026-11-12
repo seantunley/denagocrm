@@ -32,6 +32,7 @@
     "test:flow-crm-deals": "tsx --tsconfig tsconfig.harness.json scripts/test-flow-crm-deals.ts",
     "test:flow-notify": "tsx --tsconfig tsconfig.harness.json scripts/test-flow-notify.ts",
     "test:xero-workspace-settings": "tsx --tsconfig tsconfig.harness.json scripts/test-xero-workspace-settings.ts",
+    "test:custom-fields-workspaces": "tsx --tsconfig tsconfig.harness.json scripts/test-custom-fields-workspaces.ts",
     "test:dax-send-facts": "tsx --tsconfig tsconfig.harness.json scripts/test-dax-send-facts.ts",
     "test:assistant-task": "tsx --tsconfig tsconfig.harness.json scripts/test-assistant-task.ts",
     "test:assistant-goals": "tsx --tsconfig tsconfig.harness.json scripts/test-assistant-goals.ts",

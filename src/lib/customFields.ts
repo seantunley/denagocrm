@@ -94,7 +94,7 @@ const narrow = (ids: string[] | null) => (ids === null ? {} : { id: { in: ids } 
  * already-linked ones are preloaded. A linked record the viewer may not open is
  * left out, so it shows as "a record you can't open" rather than leaking its name.
  */
-export async function loadLinkChoices(fields: FieldWithValue[]): Promise<LinkChoices> {
+export async function loadLinkChoices(fields: FieldWithValue[], tenantId: string): Promise<LinkChoices> {
   const targets = new Set(fields.map((f) => f.def.linkTo).filter((t): t is LinkTarget => t != null));
   if (targets.size === 0) return {};
   const user = await getCurrentUser();
@@ -102,11 +102,14 @@ export async function loadLinkChoices(fields: FieldWithValue[]): Promise<LinkCho
   const linked = (target: LinkTarget) =>
     fields.filter((f) => f.def.linkTo === target && f.value).map((f) => f.value as string);
   const choices: LinkChoices = {};
+  // EVERY list names the workspace (review of #1064): an owner's "all records" is
+  // `null` from getAccessible*Ids, which with enforcement dormant meant every
+  // workspace's records.
 
   if (targets.has("contact")) {
     const ids = await getAccessibleContactIds(user);
     const rows = await prisma.contact.findMany({
-      where: { id: { in: linked("contact") }, deletedAt: null, ...(ids === null ? {} : { AND: [{ id: { in: ids } }] }) },
+      where: { id: { in: linked("contact") }, tenantId, deletedAt: null, ...(ids === null ? {} : { AND: [{ id: { in: ids } }] }) },
       select: { id: true, firstName: true, lastName: true, company: true },
     });
     choices.contact = rows.map((c) => ({ id: c.id, label: contactName(c) }));
@@ -114,13 +117,13 @@ export async function loadLinkChoices(fields: FieldWithValue[]): Promise<LinkCho
   if (targets.has("lead")) {
     const ids = await getAccessibleLeadIds(user);
     const rows = await prisma.lead.findMany({
-      where: { deletedAt: null, ...narrow(ids) },
+      where: { tenantId, deletedAt: null, ...narrow(ids) },
       select: { id: true, title: true, name: true },
       orderBy: { updatedAt: "desc" },
       take: LINK_LIST_CAP,
     });
     choices.lead = await withLinked(rows.map((l) => ({ id: l.id, label: l.title || l.name })), linked("lead"), async (missing) =>
-      (await prisma.lead.findMany({ where: { id: { in: missing }, deletedAt: null, ...narrow(ids) }, select: { id: true, title: true, name: true } }))
+      (await prisma.lead.findMany({ where: { id: { in: missing }, tenantId, deletedAt: null, ...narrow(ids) }, select: { id: true, title: true, name: true } }))
         .map((l) => ({ id: l.id, label: l.title || l.name })),
     );
   }
@@ -130,20 +133,21 @@ export async function loadLinkChoices(fields: FieldWithValue[]): Promise<LinkCho
       [v.model, v.regNumber ?? v.vin].filter(Boolean).join(" · ");
     const select = { id: true, model: true, regNumber: true, vin: true } as const;
     const rows = await prisma.vehicle.findMany({
-      where: { deletedAt: null, ...narrow(ids) },
+      where: { tenantId, deletedAt: null, ...narrow(ids) },
       select,
       orderBy: { createdAt: "desc" },
       take: LINK_LIST_CAP,
     });
     choices.vehicle = await withLinked(rows.map((v) => ({ id: v.id, label: label(v) })), linked("vehicle"), async (missing) =>
-      (await prisma.vehicle.findMany({ where: { id: { in: missing }, deletedAt: null, ...narrow(ids) }, select }))
+      (await prisma.vehicle.findMany({ where: { id: { in: missing }, tenantId, deletedAt: null, ...narrow(ids) }, select }))
         .map((v) => ({ id: v.id, label: label(v) })),
     );
   }
   if (targets.has("product")) {
-    // The catalogue is workspace-wide; inactive models stay listed so an old link still reads.
+    // THIS workspace's catalogue — the same list every member already picks from on
+    // a lead or quote; inactive models stay listed so an old link still reads.
     choices.product = (await prisma.product.findMany({
-      where: { deletedAt: null },
+      where: { tenantId, deletedAt: null },
       select: { id: true, name: true },
       orderBy: { name: "asc" },
     })).map((p) => ({ id: p.id, label: p.name }));
