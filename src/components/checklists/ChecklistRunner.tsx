@@ -39,6 +39,7 @@ import {
   saveDeviceSession,
 } from "@/lib/checklists/deviceStore";
 import { photoUploadAccess, preparePhoto, unsendablePhoto, uploadPhoto } from "@/lib/photoTransport";
+import { mergeRunEntries } from "@/lib/checklists/mergeRunEntries";
 import {
   completeChecklistRun,
   deleteChecklistPhoto,
@@ -222,6 +223,10 @@ export default function ChecklistRunner({
    * without this tail, a slower older keystroke can overwrite a newer answer. */
   const persistTail = useRef<Promise<void>>(Promise.resolve());
   const autoSync = useRef<() => void>(() => undefined);
+  /** A save landed while the sheet was open — refresh the page when it closes. */
+  const refreshOnClose = useRef(false);
+  /** Photos sent in the background as they are taken, one round after another. */
+  const background = useRef<Promise<void>>(Promise.resolve());
   useEffect(() => {
     const held = previews.current;
     return () => {
@@ -343,11 +348,25 @@ export default function ChecklistRunner({
     const stored = await loadDeviceSession(scope, { hostType, hostId, templateId: template.id });
     /* Only dirty device work may outrank the server. A clean snapshot is merely
      * a cache and can contain pre-upload photo counts; restoring it would hide
-     * evidence that has already reached the authoritative run. */
+     * evidence that has already reached the authoritative run.
+     *
+     * Never one copy blindly over the other (Sean, 2026-11-12: "Carry on" wiped
+     * the progress): the run this page rendered can be older than what this
+     * screen just saved, and the phone's copy older than the server's. Each step
+     * takes whichever copy has an answer (mergeRunEntries). */
+    const fromServer = run ? buildSession() : null;
     const built: Session = stored?.dirty
-      ? { runId: stored.runId, startedAt: stored.startedAt, templateVersion: stored.templateVersion, entries: stored.entries, dirty: true }
-      : run
-        ? buildSession()
+      ? {
+          runId: stored.runId,
+          startedAt: stored.startedAt,
+          templateVersion: stored.templateVersion,
+          entries: fromServer?.runId === stored.runId ? mergeRunEntries(fromServer.entries, stored.entries) : stored.entries,
+          dirty: true,
+        }
+      : fromServer
+        ? session?.runId === fromServer.runId
+          ? { ...fromServer, dirty: session.dirty, entries: mergeRunEntries(fromServer.entries, session.entries) }
+          : fromServer
         : session ?? buildSession();
     if (!stored) await persist(built);
     const queuedPhotos = await pending(scope, built.runId);
@@ -357,10 +376,15 @@ export default function ChecklistRunner({
       previews.current.add(preview);
       (restored[photo.entryId] ??= []).push({ id: photo.id, preview, state: "queued" });
     }
+    // A photo the rebuilt steps already count (it reached the server) is not counted twice.
+    const counted = new Set(built.entries.flatMap((entry) => entry.photos.map((photo) => photo.id)));
     setCaptures((previous) => {
       if (session?.runId !== built.runId) return restored;
       const kept = Object.fromEntries(
-        Object.entries(previous).map(([entryId, items]) => [entryId, items.filter((item) => item.state !== "queued")]),
+        Object.entries(previous).map(([entryId, items]) => [
+          entryId,
+          items.filter((item) => item.state !== "queued" && !(item.state === "registered" && counted.has(item.id))),
+        ]),
       );
       for (const [entryId, items] of Object.entries(restored)) kept[entryId] = [...(kept[entryId] ?? []), ...items];
       return kept;
@@ -378,7 +402,15 @@ export default function ChecklistRunner({
   }
 
   function onOpenChange(next: boolean) {
-    if (!next) setOpen(false);
+    if (next) return;
+    setOpen(false);
+    // Refreshed on CLOSE, not on save: the first save of a new run makes this
+    // list's Start button give way to Carry on, and refreshing then unmounted the
+    // open sheet mid-handover — "Save for later does nothing".
+    if (refreshOnClose.current) {
+      refreshOnClose.current = false;
+      router.refresh();
+    }
   }
 
   function patch(entryId: string, change: Partial<RunnerEntry>) {
@@ -455,6 +487,9 @@ export default function ChecklistRunner({
     setCaptures((previous) => ({ ...previous, [entry.id]: [...(previous[entry.id] ?? []), ...added] }));
     if (added.length > 0) patch(entry.id, { status: "done", skipReason: null });
     await refreshQueued(session.runId);
+    if (added.some((capture) => capture.state === "queued")) {
+      sendInBackground({ ...session, entries: session.entries.map((e) => (e.id === entry.id ? { ...e, status: "done", skipReason: null } : e)) });
+    }
     setBusy(null);
     setProblem(refused);
     setNotice(sentDirectly > 0 ? `${sentDirectly} photo${sentDirectly === 1 ? "" : "s"} sent immediately.` : null);
@@ -579,6 +614,8 @@ export default function ChecklistRunner({
     }
     notifyOfflineState(true);
     setBusy("Saving the checklist…");
+    // A background send still going finishes first, so the two never overlap.
+    await background.current;
     try {
       const synced = await syncChecklistRun(payload(active));
       if (synced.error) return synced.error;
@@ -624,8 +661,28 @@ export default function ChecklistRunner({
     if (!failure) {
       setSession((previous) => previous ? { ...previous, dirty: false } : previous);
       setNotice("Saved. You can close this and carry on later.");
-      router.refresh();
+      refreshOnClose.current = true;
     }
+  }
+
+  /**
+   * Send the photos as they are taken, while online (Sean, 2026-11-12: "app says
+   * online but photos are not uploading" — they waited for Save or Finish). The
+   * run is synced first, as always: the upload is authorised against its entry.
+   * Quiet: nothing is blocked while it runs, and a failure leaves the photo
+   * queued on the phone for Save, Finish or the next one.
+   */
+  function sendInBackground(active: Session) {
+    if (typeof navigator !== "undefined" && !navigator.onLine) return;
+    background.current = background.current
+      .then(async () => {
+        const synced = await syncChecklistRun(payload(active));
+        if (synced.error) return;
+        refreshOnClose.current = true;
+        await drain(scope, active.runId, uploader);
+        await refreshQueued(active.runId);
+      })
+      .catch(() => undefined);
   }
   autoSync.current = () => {
     if (session && (session.dirty || queued > 0 || carried.current.length > 0) && busy === null) void saveProgress();

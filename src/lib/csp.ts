@@ -43,12 +43,16 @@ const GOOGLE_STATIC = "https://maps.gstatic.com https://*.gstatic.com https://*.
 const GOOGLE_FONTS_CSS = "https://fonts.googleapis.com";
 const GOOGLE_FONTS_FILES = "https://fonts.gstatic.com";
 const VERCEL_BLOB = "https://*.vercel-storage.com"; // LibraryUploader uploads direct
+const VERCEL_BLOB_API = "https://vercel.com/api/blob/";
 
 /** Directives that govern where content may be LOADED FROM. Report-only for now. */
 function resourceDirectives(): string[] {
   return [
     "default-src 'self'",
-    `connect-src 'self' ${OPEN_METEO} ${GOOGLE_MAPS} ${GOOGLE_PLACES} ${VERCEL_BLOB}`,
+    // vercel.com/api/blob: the browser's direct upload asks Vercel's Blob API there
+    // for each photo (checklist photos reported it, 2026-11-12) before the bytes go
+    // to the store itself.
+    `connect-src 'self' ${OPEN_METEO} ${GOOGLE_MAPS} ${GOOGLE_PLACES} ${VERCEL_BLOB} ${VERCEL_BLOB_API}`,
     // data: for logos and signatures stamped into documents; blob: for the
     // signature pad's canvas capture.
     `img-src 'self' data: blob: ${GOOGLE_STATIC} ${VERCEL_BLOB}`,
