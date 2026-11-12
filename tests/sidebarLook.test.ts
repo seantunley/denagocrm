@@ -54,8 +54,8 @@ test("the search is an inset well with a raised key; the logo and the top-right 
 });
 
 test("the page is a sheet on the sidebar: rounded corner, inner edge, shadow at the join, no hard border", () => {
-  assert.match(shell, /fixed bottom-0 right-0 top-2\.5 -z-20 hidden rounded-tl-\[18px\] bg-background depth-sheet lg:left-70 lg:block/);
-  assert.match(shell, /<aside className="fixed inset-y-0 left-0 z-40 hidden w-70 lg:flex lg:flex-col">/, "no border between sidebar and page");
+  assert.match(shell, /fixed bottom-0 right-0 top-2\.5 -z-20 hidden rounded-tl-\[18px\] bg-background depth-sheet lg:block \$\{offset\}/);
+  assert.match(shell, /<aside className=\{`fixed inset-y-0 left-0 z-40 hidden lg:flex lg:flex-col \$\{rail \? "w-\[72px\]" : "w-70"\}`\}>/, "no border between sidebar and page");
   // A sticky bar under the top bar moves down with it.
   assert.match(src("src/components/CalendarWorkspace.tsx"), /sticky top-14[^"]*lg:top-\[66px\]/);
 });

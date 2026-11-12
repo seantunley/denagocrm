@@ -1,12 +1,14 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import BrandLogo from "@/components/BrandLogo";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import {
   Bell,
   Cake,
+  PanelLeftClose,
+  PanelLeftOpen,
   Search,
 } from "lucide-react";
 import Nav from "@/components/Nav";
@@ -105,19 +107,56 @@ function AccountCluster({ user, isOwner, tenantId, unreadNotices = 0, birthdaysT
   );
 }
 
-function SidebarInner({ user, inboxWaiting = 0, casesWaiting = 0, activitiesOverdue = 0, enabledModules, brand, phone = false }: { user: ShellUser; inboxWaiting?: number; casesWaiting?: number; activitiesOverdue?: number; enabledModules?: string[]; brand?: { logoUrl: string | null; displayName: string }; phone?: boolean }) {
+function SidebarInner({ user, inboxWaiting = 0, casesWaiting = 0, activitiesOverdue = 0, enabledModules, brand, phone = false, rail = false, fading = false, onToggleRail }: { user: ShellUser; inboxWaiting?: number; casesWaiting?: number; activitiesOverdue?: number; enabledModules?: string[]; brand?: { logoUrl: string | null; displayName: string }; phone?: boolean; rail?: boolean; fading?: boolean; onToggleRail?: () => void }) {
   const isOwner = ownsWorkspace(user);
+  const badges = { "/inbox": inboxWaiting, "/cases": casesWaiting, "/activities": activitiesOverdue };
+  // Sidebar brief PR 4: collapse to the rail, remembered per browser. The desktop only — the drawer has no rail.
+  const collapse = onToggleRail && (
+    <button
+      type="button"
+      onClick={onToggleRail}
+      aria-label={rail ? "Expand sidebar" : "Collapse sidebar"}
+      aria-pressed={rail}
+      title={rail ? "Expand sidebar" : "Collapse sidebar"}
+      className="grid size-11 shrink-0 place-items-center rounded-[10px] text-muted-foreground transition-colors hover:bg-sidebar-accent/70 hover:text-sidebar-accent-foreground pointer-fine:size-9"
+    >
+      {rail ? <PanelLeftOpen className="size-[18px]" aria-hidden /> : <PanelLeftClose className="size-[18px]" aria-hidden />}
+    </button>
+  );
+
+  if (rail) {
+    return (
+      <div className="flex h-full flex-col items-center gap-3 bg-sidebar py-4">
+        {collapse}
+        <button
+          type="button"
+          onClick={openCommandMenu}
+          aria-label="Search or jump to"
+          title="Search or jump to (⌘K)"
+          className="depth-inset grid size-11 shrink-0 place-items-center rounded-[10px] text-muted-foreground transition-colors hover:text-sidebar-accent-foreground"
+        >
+          <Search className="size-[18px]" aria-hidden />
+        </button>
+        <Nav rail isAdmin={isOwner} permissions={user.permissions} enabledModules={enabledModules} badges={badges} />
+      </div>
+    );
+  }
+
   // Sidebar brief PR 2 ("with subtle depth"): the sidebar is the lowest surface.
   // The brand stays the workspace's logo; Help, Settings and the account stay top-right.
+  // `fading`: collapsing — the labels fade out BEFORE the width closes, so text is never seen squeezed.
   return (
-    <div className="relative flex h-full flex-col gap-3 bg-sidebar px-3 py-4">
-      {/* Brand */}
-      <div className="flex h-9 items-center px-1">
-        <BrandLogo
-          logoUrl={brand?.logoUrl ?? null}
-          alt={brand?.displayName ?? "Denago Cape Town"}
-          className="h-8 w-auto object-contain"
-        />
+    <div className={`relative flex h-full flex-col gap-3 bg-sidebar px-3 py-4 transition-opacity duration-100 motion-reduce:transition-none ${fading ? "opacity-0" : "opacity-100"}`}>
+      {/* Brand, and the collapse button */}
+      <div className="flex h-9 items-center gap-2 px-1">
+        <div className="flex min-w-0 flex-1 items-center">
+          <BrandLogo
+            logoUrl={brand?.logoUrl ?? null}
+            alt={brand?.displayName ?? "Denago Cape Town"}
+            className="h-8 w-auto max-w-full object-contain"
+          />
+        </div>
+        {collapse}
       </div>
 
       {/* Command trigger — an inset well — and quick actions */}
@@ -137,11 +176,13 @@ function SidebarInner({ user, inboxWaiting = 0, casesWaiting = 0, activitiesOver
 
       {/* Nav — scrolls on its own; the brand and search stay put. */}
       <div className="flex min-h-0 flex-1 flex-col">
-        <Nav isAdmin={isOwner} permissions={user.permissions} enabledModules={enabledModules} badges={{ "/inbox": inboxWaiting, "/cases": casesWaiting, "/activities": activitiesOverdue }} phone={phone} />
+        <Nav isAdmin={isOwner} permissions={user.permissions} enabledModules={enabledModules} badges={badges} phone={phone} />
       </div>
     </div>
   );
 }
+
+const RAIL_KEY = "denago-sidebar-rail";
 
 export default function AppShell({
   user,
@@ -191,6 +232,47 @@ export default function AppShell({
   children: ReactNode;
 }) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  // The collapsed rail (sidebar brief PR 4), remembered per browser — a
+  // per-viewer convenience. Read after mount: the server renders the full sidebar.
+  const [rail, setRail] = useState(false);
+  const [fading, setFading] = useState(false);
+  const fadeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    try {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- browser-only storage, read once after hydration
+      if (localStorage.getItem(RAIL_KEY) === "1") setRail(true);
+    } catch {}
+    return () => {
+      if (fadeTimer.current) clearTimeout(fadeTimer.current);
+    };
+  }, []);
+  const remember = (on: boolean) => {
+    try {
+      localStorage.setItem(RAIL_KEY, on ? "1" : "0");
+    } catch {}
+  };
+  const toggleRail = () => {
+    if (rail) {
+      setRail(false);
+      remember(false);
+      return;
+    }
+    // Collapsing: the labels fade out first (100ms), THEN the width closes.
+    // Under reduced motion there is no fade to wait for.
+    const reduced = typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    remember(true);
+    if (reduced) {
+      setRail(true);
+      return;
+    }
+    setFading(true);
+    fadeTimer.current = setTimeout(() => {
+      setRail(true);
+      setFading(false);
+    }, 100);
+  };
+  // 280px open, 72px as a rail — the top bar, the page sheet and the page start where it ends.
+  const offset = rail ? "lg:left-[72px]" : "lg:left-70";
   const pathname = usePathname();
 
   return (
@@ -237,10 +319,10 @@ export default function AppShell({
       {/* SUBTLE DEPTH (sidebar brief PR 2): on a desktop the page sits on a sheet laid over the sidebar — 10px
           down, its top-left corner rounded, a light inner edge and a soft shadow at the join, no hard border.
           The sidebar's colour fills the strip above it (and, behind, the corner); the top bar rides the sheet. */}
-      <div aria-hidden className="pointer-events-none fixed right-0 top-0 -z-30 hidden h-8 bg-sidebar lg:left-70 lg:block" />
-      <div aria-hidden className="pointer-events-none fixed bottom-0 right-0 top-2.5 -z-20 hidden rounded-tl-[18px] bg-background depth-sheet lg:left-70 lg:block" />
-      <div aria-hidden className="pointer-events-none fixed right-0 top-0 z-30 hidden h-2.5 bg-sidebar lg:left-70 lg:block" />
-      <header className="fixed right-0 top-2.5 z-30 hidden h-14 items-center gap-4 rounded-tl-[18px] border-b border-sidebar-border bg-background/80 px-5 backdrop-blur-xl lg:left-70 lg:flex">
+      <div aria-hidden className={`pointer-events-none fixed right-0 top-0 -z-30 hidden h-8 bg-sidebar lg:block ${offset}`} />
+      <div aria-hidden className={`pointer-events-none fixed bottom-0 right-0 top-2.5 -z-20 hidden rounded-tl-[18px] bg-background depth-sheet lg:block ${offset}`} />
+      <div aria-hidden className={`pointer-events-none fixed right-0 top-0 z-30 hidden h-2.5 bg-sidebar lg:block ${offset}`} />
+      <header className={`fixed right-0 top-2.5 z-30 hidden h-14 items-center gap-4 rounded-tl-[18px] border-b border-sidebar-border bg-background/80 px-5 backdrop-blur-xl lg:flex ${offset}`}>
         <div className="min-w-0 flex-1">
           <ClockWeather cities={weatherCities} />
         </div>
@@ -267,12 +349,12 @@ export default function AppShell({
       />
 
       {/* Desktop sidebar */}
-      <aside className="fixed inset-y-0 left-0 z-40 hidden w-70 lg:flex lg:flex-col">
-        <SidebarInner user={user} inboxWaiting={inboxWaiting} casesWaiting={casesWaiting} activitiesOverdue={activitiesOverdue} enabledModules={enabledModules} brand={brand} />
+      <aside className={`fixed inset-y-0 left-0 z-40 hidden lg:flex lg:flex-col ${rail ? "w-[72px]" : "w-70"}`}>
+        <SidebarInner user={user} inboxWaiting={inboxWaiting} casesWaiting={casesWaiting} activitiesOverdue={activitiesOverdue} enabledModules={enabledModules} brand={brand} rail={rail} fading={fading} onToggleRail={toggleRail} />
       </aside>
 
-      <main className="relative lg:pl-70">
-        <div className="pointer-events-none fixed inset-x-0 top-0 -z-10 h-72 bg-[radial-gradient(circle_at_65%_0%,rgba(249,115,22,.045),transparent_42%)] lg:left-70" />
+      <main className={`relative ${rail ? "lg:pl-[72px]" : "lg:pl-70"}`}>
+        <div className={`pointer-events-none fixed inset-x-0 top-0 -z-10 h-72 bg-[radial-gradient(circle_at_65%_0%,rgba(249,115,22,.045),transparent_42%)] ${offset}`} />
         {/* No width cap: the page runs to the same edges as the top bar (both lg:px-5). Capped and centred, it sat
             inside the bar on a wide screen — the bar's ends hung out past the content and the two never lined up. */}
         <div className="denago-workspace p-3 pb-24 pt-15 sm:p-4 sm:pb-24 sm:pt-16 lg:p-5 lg:pt-[86px]">

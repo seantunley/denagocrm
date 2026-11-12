@@ -59,7 +59,8 @@ test("the page reserves the height the fixed bar takes", () => {
   // A fixed bar over unpadded content hides the first rows of every page. Since
   // the sidebar brief's PR 2 the bar rides the page sheet, 10px down.
   const shell = src("src/components/AppShell.tsx");
-  assert.match(shell, /fixed right-0 top-2\.5 z-30[^"]*h-14[^"]*lg:left-70/, "bar is fixed, on the sheet, to the right of the sidebar");
+  assert.match(shell, /fixed right-0 top-2\.5 z-30[^`]*h-14[^`]*\$\{offset\}/, "bar is fixed, on the sheet, to the right of the sidebar (wide or rail)");
+  assert.match(shell, /const offset = rail \? "lg:left-\[72px\]" : "lg:left-70";/);
   assert.match(shell, /lg:pt-\[86px\]/, "content clears it");
 });
 

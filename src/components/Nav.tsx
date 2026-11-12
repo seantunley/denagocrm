@@ -1,10 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState, type ReactElement } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ChevronRight } from "lucide-react";
 import { LayoutGroup, MotionConfig, motion } from "framer-motion";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { buildNav, type NavGroup, type NavLink } from "@/components/nav-config";
 import { cn } from "@/lib/utils";
 import { linkOnPhone } from "@/lib/phoneScope";
@@ -89,6 +91,7 @@ export default function Nav({
   enabledModules,
   badges = {},
   phone = false,
+  rail = false,
 }: {
   isAdmin?: boolean;
   permissions?: string[];
@@ -96,6 +99,8 @@ export default function Nav({
   badges?: Record<string, number>;
   /** The phone's menu (lib/phoneScope.ts): only the sections the phone keeps; a group left empty is dropped. */
   phone?: boolean;
+  /** The collapsed 72px rail (brief PR 4): pinned icons, one icon per group, each group a flyout. */
+  rail?: boolean;
 }) {
   const built = buildNav(
     isAdmin,
@@ -127,6 +132,36 @@ export default function Nav({
 
   // A faint shadow under the search block once the menu has scrolled.
   const [scrolled, setScrolled] = useState(false);
+
+  if (rail) {
+    return (
+      <MotionConfig reducedMotion="user">
+      <nav aria-label="Main" className="flex min-h-0 w-full flex-1 flex-col items-center gap-1 overflow-y-auto pb-2">
+        {topLinks.map((link) => {
+          const active = isActive(link.href);
+          const n = badges[link.href] ?? 0;
+          return (
+            <RailTip key={link.href} label={link.label}>
+              <Link
+                href={link.href}
+                aria-label={n > 0 ? `${link.label}, ${badgeLabel(link.href, n)}` : link.label}
+                aria-current={active ? "page" : undefined}
+                className={cn(RAIL_BUTTON, active ? "depth-raised text-primary" : cn("text-sidebar-foreground", HOVER))}
+              >
+                <link.icon className="size-5" aria-hidden />
+                {n > 0 && <RailCount n={n} />}
+              </Link>
+            </RailTip>
+          );
+        })}
+        {groups.length > 0 && <div aria-hidden className="depth-groove my-2 w-8 shrink-0" />}
+        {groups.map((group) => (
+          <RailGroup key={group.key} group={group} active={group.key === activeGroup} isActive={isActive} badges={badges} total={groupTotal(group)} />
+        ))}
+      </nav>
+      </MotionConfig>
+    );
+  }
 
   return (
     <MotionConfig reducedMotion="user">
@@ -198,6 +233,108 @@ export default function Nav({
     </nav>
     </LayoutGroup>
     </MotionConfig>
+  );
+}
+
+/* ── The collapsed rail (sidebar brief PR 4) ─────────────────────────────── */
+
+const RAIL_BUTTON = "relative grid size-11 shrink-0 place-items-center rounded-[10px] transition-colors";
+
+/** A count on a rail icon — the same pulse as Count, smaller and pinned to the corner. */
+function RailCount({ n }: { n: number }) {
+  return <Count n={n} label="" className="absolute -right-0.5 top-0 h-[18px] min-w-[18px] px-1 text-[11px]" />;
+}
+
+/** A pinned icon's name, after the app's usual short delay (TooltipProvider in AppShell). */
+function RailTip({ label, children }: { label: string; children: ReactElement }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent side="right" sideOffset={10}>{label}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+/**
+ * A group on the rail: its icon, and its links in a flyout beside it — the top
+ * depth level (depth-float), scaling up slightly from the icon. Opens on hover
+ * and on click; closes on Escape, on clicking away, or on leaving it. Radix's
+ * popover is the keyboard path: Enter opens it, focus moves in, and closing
+ * returns focus to the icon.
+ */
+function RailGroup({
+  group,
+  active,
+  isActive,
+  badges,
+  total,
+}: {
+  group: NavGroup;
+  active: boolean;
+  isActive: (href: string) => boolean;
+  badges: Record<string, number>;
+  total: number;
+}) {
+  const [open, setOpen] = useState(false);
+  const closing = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hold = () => {
+    if (closing.current) clearTimeout(closing.current);
+    closing.current = null;
+  };
+  const show = () => {
+    hold();
+    setOpen(true);
+  };
+  const hide = () => {
+    hold();
+    closing.current = setTimeout(() => setOpen(false), 150);
+  };
+  useEffect(() => hold, []);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label={total > 0 ? `${group.label}, ${total} waiting` : group.label}
+          onMouseEnter={show}
+          onMouseLeave={hide}
+          className={cn(RAIL_BUTTON, active || open ? "depth-raised text-primary" : cn("text-sidebar-foreground", HOVER))}
+        >
+          <group.icon className="size-5" aria-hidden />
+          {total > 0 && <RailCount n={total} />}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        side="right"
+        align="start"
+        sideOffset={14}
+        onMouseEnter={hold}
+        onMouseLeave={hide}
+        className="depth-float w-60 rounded-[14px] border-0 bg-[var(--depth-float)] p-2 motion-reduce:animate-none"
+      >
+        <nav aria-label={group.label} className="flex flex-col gap-0.5">
+          <p className="px-3 pb-1.5 pt-2 text-xs font-semibold uppercase tracking-[0.04em] text-muted-foreground">{group.label}</p>
+          {group.links.map((link) => {
+            const here = isActive(link.href);
+            const n = badges[link.href] ?? 0;
+            return (
+              <Link
+                key={link.href}
+                href={link.href}
+                onClick={() => setOpen(false)}
+                aria-current={here ? "page" : undefined}
+                className={cn(ROW, "flex items-center gap-2.5 px-3 text-sm transition-colors", here ? "depth-raised font-semibold text-foreground" : cn("text-sidebar-foreground", HOVER))}
+              >
+                <span className="min-w-0 flex-1 truncate">{link.label}</span>
+                {n > 0 && <Count n={n} label={badgeLabel(link.href, n)} />}
+                {here && n === 0 && <span aria-hidden className="size-2 shrink-0 rounded-full bg-primary shadow-[0_0_0_3px_rgb(0_0_0/0.25)]" />}
+              </Link>
+            );
+          })}
+        </nav>
+      </PopoverContent>
+    </Popover>
   );
 }
 
