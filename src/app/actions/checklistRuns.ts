@@ -287,9 +287,10 @@ export async function syncChecklistRun(payload: unknown): Promise<ActionResult> 
 
       const storedEntries = await tx.checklistEntry.findMany({
         where: { tenantId, runId: run.id },
-        select: { id: true, itemIdSnapshot: true },
+        select: { id: true, itemIdSnapshot: true, status: true },
       });
       const storedByItem = new Map(storedEntries.map((entry) => [entry.itemIdSnapshot, entry.id]));
+      const storedStatus = new Map(storedEntries.map((entry) => [entry.id, entry.status]));
 
       for (const entry of run.entries) {
         const item = authoritative.get(entry.itemId)!;
@@ -321,7 +322,12 @@ export async function syncChecklistRun(payload: unknown): Promise<ActionResult> 
             sortOrder: item.sortOrder,
             ...answers,
           },
-          update: answers,
+          // NEVER BACK TO "NOT DONE" (Sean, 2026-11-12: Save for later "wipes all
+          // the progress"). A phone holding an older copy of the run — a reopen
+          // built before the last save landed — sends answered steps as pending;
+          // writing that would erase work saved from this or another save. A
+          // pending step from the device leaves an answered one as it is.
+          update: entry.status === "pending" && (storedStatus.get(entry.id) ?? "pending") !== "pending" ? {} : answers,
         });
       }
     });
