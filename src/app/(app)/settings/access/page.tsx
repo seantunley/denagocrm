@@ -183,7 +183,7 @@ export default async function AccessSettingsPage() {
                           <ModalTrigger label="Reset password" title={`Reset ${user.name}'s password`} buttonClass="btn-secondary btn-sm">
                             <SaveForm action={resetTeamMemberPassword.bind(null, user.id)} success="Password reset" className="space-y-3">
                               <p className="text-sm text-muted-foreground">
-                                Set a new password for {user.name} and give it to them. They&apos;ll be signed out of every device and can change it under My Account.
+                                Set a new password for {user.name} and give it to them. They&apos;ll be signed out of every device and can change it under Settings → Profile &amp; sign-in.
                               </p>
                               <div>
                                 <label className="label" htmlFor={`reset-${user.id}`}>New password</label>
