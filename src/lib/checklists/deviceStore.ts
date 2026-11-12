@@ -27,6 +27,8 @@ export type DeviceSessionEntry = {
   skipReason: string | null;
   photoCount: number;
   photos: Array<{ id: string; url: string }>;
+  /** Server photos deleted on this phone (mergeRunEntries). Absent on copies saved before 2026-11-12. */
+  removedPhotoIds?: string[];
 };
 
 export type DeviceChecklistSession = {
