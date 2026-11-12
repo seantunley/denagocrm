@@ -43,7 +43,13 @@ test("connectivity is permanently visible in both app headers — a dot on the a
   assert.match(menu, /const connectivity = useConnectivity\(\{ tenantId, userId: user\.id \}\);/);
   assert.match(menu, /<ConnectivityDot state=\{connectivity\} \/>/);
   assert.match(menu, /aria-label=\{`Account — \$\{user\.name\}\. \$\{status\}`\}/, "screen readers hear the state on the button");
-  assert.match(menu, /<p aria-live="polite"[^>]*>[\s\S]*?\{status\}/, "and the menu says it in words");
+  // Review of #1082: the announcement lives OUTSIDE the dropdown — always mounted — so going offline is
+  // announced while the menu is closed. The menu's own line just shows it in words.
+  const live = menu.indexOf('<span role="status" aria-live="polite" className="sr-only">{status}</span>');
+  assert.ok(live > 0, "an always-mounted, visually hidden live region");
+  assert.ok(live < menu.indexOf("<DropdownMenu>"), "outside the dropdown, which unmounts its content while closed");
+  assert.equal((menu.match(/aria-live=/g) ?? []).length, 1, "one live region — two would announce every change twice");
+  assert.match(menu, /\{\/\* The dot on the avatar, in words[\s\S]*?\{status\}\s*<\/p>/, "and the menu says it in words");
   const indicator = src("src/components/ConnectivityIndicator.tsx");
   assert.match(indicator, /offlinePendingCount/);
   assert.match(indicator, /state\.online \? "bg-emerald-400" : "bg-amber-400"/);

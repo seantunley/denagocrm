@@ -99,6 +99,10 @@ export default function AccountMenu({
 
   return (
     <>
+    {/* ALWAYS mounted, so a connection change is announced while the menu is closed
+        (review of #1082) — the menu's content is unmounted then, and a button's
+        changed aria-label is not reliably read out. Visually hidden: the dot shows it. */}
+    <span role="status" aria-live="polite" className="sr-only">{status}</span>
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         {/* ONE trigger. The name column is hidden below `sm` rather than being a
@@ -137,8 +141,8 @@ export default function AccountMenu({
             <span className="block truncate text-[11px] font-normal capitalize text-muted-foreground">{user.role}</span>
           </DropdownMenuLabel>
         )}
-        {/* The dot on the avatar, in words. Announced when it changes. */}
-        <p aria-live="polite" className="flex items-center gap-2 px-2 pb-1.5 pt-1 text-[11px] text-muted-foreground">
+        {/* The dot on the avatar, in words (announced by the always-mounted status above, not here). */}
+        <p className="flex items-center gap-2 px-2 pb-1.5 pt-1 text-[11px] text-muted-foreground">
           <span aria-hidden className={`size-2 shrink-0 rounded-full ${connectivity.online ? "bg-emerald-400" : "bg-amber-400"}`} />
           {status}
         </p>
