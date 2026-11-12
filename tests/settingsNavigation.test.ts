@@ -1,7 +1,28 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { SETTINGS_AREAS, SETTINGS_NAV_GROUPS, settingsByArea, visibleSettingsGroups } from "../src/lib/settings-navigation";
+import { SETTINGS_AREAS, SETTINGS_NAV_GROUPS, pickerGroupLabel, settingsByArea, visibleSettingsGroups } from "../src/lib/settings-navigation";
+
+// Review of #1076: the tablet/phone picker kept showing the group it started on
+// after navigating to another section without a remount (/settings?tab=…).
+test("the settings picker follows the section you are on, and a group you pick holds until you move", () => {
+  const groups = SETTINGS_NAV_GROUPS;
+  // Arrive on Profile & sign-in: My account.
+  assert.equal(pickerGroupLabel(groups, "account", null), "My account");
+  // Navigate to Quotes with no remount and no choice made: Sales, not My account.
+  assert.equal(pickerGroupLabel(groups, "quotes", null), "Sales");
+  // Pick Messaging while on Quotes (before choosing a setting): Messaging shows.
+  const picked = { section: "quotes", group: "Messaging" };
+  assert.equal(pickerGroupLabel(groups, "quotes", picked), "Messaging");
+  // Then go to Email (or anywhere): the new section's group, the old pick forgotten.
+  assert.equal(pickerGroupLabel(groups, "email", picked), "Messaging");
+  assert.equal(pickerGroupLabel(groups, "company", picked), "Business");
+  // The picker uses it, and keeps no stale copy of its own.
+  const picker = readFileSync(new URL("../src/components/SettingsNav.tsx", import.meta.url), "utf8");
+  assert.match(picker, /const chosen = pickerGroupLabel\(groups, current, choice\);/);
+  assert.match(picker, /const setChosen = \(label: string\) => setChoice\(\{ section: current, group: label \}\);/);
+  assert.doesNotMatch(picker, /useState\(currentGroup/);
+});
 
 // Settings reorganisation (settings-reorganisation-plan.md, 2026-11-12): split
 // first by who a setting is for, then by the job it does.

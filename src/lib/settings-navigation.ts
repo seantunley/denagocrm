@@ -182,6 +182,20 @@ export function settingsByArea(groups: SettingsNavGroup[]): Array<{ area: (typeo
   return SETTINGS_AREAS.map((area) => ({ area, groups: groups.filter((group) => group.area === area.key) })).filter((entry) => entry.groups.length > 0);
 }
 
+/** A group picked in the tablet/phone picker, and the section it was picked on. */
+export type SettingsPickerChoice = { section: string; group: string } | null;
+
+/**
+ * The group the tablet/phone picker shows (review of #1076): the one you just
+ * picked, while you are still on the section you picked it on; otherwise the
+ * group holding the section you are on. Navigating between sections without a
+ * remount (/settings?tab=…) used to leave the old group showing.
+ */
+export function pickerGroupLabel(groups: SettingsNavGroup[], current: string, choice: SettingsPickerChoice): string {
+  if (choice && choice.section === current) return choice.group;
+  return groups.find((group) => group.items.some((item) => item.key === current))?.label ?? "";
+}
+
 export const SETTINGS_TABS = SETTINGS_NAV_GROUPS.flatMap((group) => group.items);
 
 export function settingsHref(item: SettingsNavItem) {

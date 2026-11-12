@@ -5,7 +5,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { settingsByArea, settingsDestination, type SettingsGroup } from "@/lib/settings-navigation";
+import { pickerGroupLabel, settingsByArea, settingsDestination, type SettingsGroup, type SettingsPickerChoice } from "@/lib/settings-navigation";
 import { linkOnPhone } from "@/lib/phoneScope";
 
 /**
@@ -78,7 +78,12 @@ function NavLink({ href, active, label }: { href: string; active: boolean; label
 function SettingsPicker({ id, groups, current, className }: { id: string; groups: SettingsGroup[]; current: string; className: string }) {
   const router = useRouter();
   const currentGroup = groups.find((group) => group.items.some((item) => item.key === current));
-  const [chosen, setChosen] = useState(currentGroup?.label ?? "");
+  // A group chosen here holds only while you stay on the section you chose it on:
+  // moving to another section (/settings?tab=… doesn't remount this) shows THAT
+  // section's group again (review of #1076). Derived — no effect resets it.
+  const [choice, setChoice] = useState<SettingsPickerChoice>(null);
+  const chosen = pickerGroupLabel(groups, current, choice);
+  const setChosen = (label: string) => setChoice({ section: current, group: label });
   const group = groups.find((entry) => entry.label === chosen);
   const currentItem = group?.items.find((item) => item.key === current);
   const select = "input h-11 appearance-none pr-10";
