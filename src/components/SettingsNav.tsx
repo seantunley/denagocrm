@@ -84,7 +84,7 @@ function SettingsPicker({ id, groups, current, className }: { id: string; groups
   const select = "input h-11 appearance-none pr-10";
 
   return (
-    <div className={cn("gap-2 sm:grid-cols-2", className)}>
+    <div className={cn("max-w-2xl gap-2 sm:grid-cols-2", className)}>
       <div className="relative">
         <label htmlFor={`${id}-group`} className="label">Settings group</label>
         <select
