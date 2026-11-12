@@ -54,6 +54,11 @@ test("field definitions: created, updated and deleted only in the acting workspa
   assert.match(src("prisma/schema.prisma"), /@@unique\(\[tenantId, entity, key\]\)/);
   const migration = src("prisma/migrations/20261112010000_custom_field_key_per_workspace/migration.sql");
   assert.ok(migration.indexOf("CREATE UNIQUE INDEX IF NOT EXISTS") < migration.indexOf("DROP INDEX IF EXISTS"), "the new index exists before the old one goes");
+  // Legacy rows with no workspace are stamped BEFORE the per-workspace key rule applies, so none vanishes.
+  const backfill = src("prisma/migrations/20261112005000_custom_field_legacy_workspace/migration.sql");
+  assert.match(backfill, /UPDATE "CustomFieldDef" SET "tenantId" = 'tenant_denago_cpt' WHERE "tenantId" IS NULL;/);
+  assert.match(backfill, /SET "tenantId" = d\."tenantId"\s*FROM "CustomFieldDef" d\s*WHERE v\."defId" = d\.id\s*AND v\."tenantId" IS NULL/);
+  assert.ok("20261112005000_custom_field_legacy_workspace" < "20261112010000_custom_field_key_per_workspace", "backfill runs first");
   // The real-database test runs in CI.
   assert.match(src(".github/workflows/security-rbac-ci.yml"), /run: npm run test:custom-fields-workspaces/);
 });

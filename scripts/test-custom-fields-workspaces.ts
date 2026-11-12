@@ -66,6 +66,31 @@ const ok = (label: string) => console.log(`  ✓ ${++checks}. ${label}`);
       assert.equal(await asA(() => linkTargetExists("product", productB.id, A)), false, `${mode}: B's product is refused`);
       ok(`enforcement ${mode}: a link field cannot point at another workspace's contact or product`);
     }
+
+    // Legacy rows (review of #1064): a definition and value saved with NO workspace
+    // would vanish from the now workspace-named reads. The backfill migration stamps
+    // them — the definition to the founding workspace, the value to its definition's —
+    // and leaves the value exactly as it was. Run its SQL again here (it is reentrant).
+    const { readFileSync } = await import("node:fs");
+    const legacyKey = `legacy_${SFX}`;
+    const legacyDef = await basePrisma.customFieldDef.create({ data: { tenantId: null, entity: "contact", key: legacyKey, label: "Legacy", type: "text" } });
+    await basePrisma.customFieldValue.create({ data: { tenantId: null, defId: legacyDef.id, recordId: RECORD, value: "kept" } });
+    const sql = readFileSync("prisma/migrations/20261112005000_custom_field_legacy_workspace/migration.sql", "utf8")
+      .split("\n").filter((line) => !line.trim().startsWith("--")).join("\n")
+      .split(";").map((statement) => statement.trim()).filter(Boolean);
+    for (const statement of sql) await basePrisma.$executeRawUnsafe(statement);
+    for (const statement of sql) await basePrisma.$executeRawUnsafe(statement); // twice: reentrant
+    const FOUNDING = "tenant_denago_cpt";
+    const stamped = await basePrisma.customFieldDef.findUnique({ where: { id: legacyDef.id }, select: { tenantId: true } });
+    assert.equal(stamped?.tenantId, FOUNDING, "the definition joins the founding workspace");
+    const legacyValue = await basePrisma.customFieldValue.findFirst({ where: { defId: legacyDef.id }, select: { tenantId: true, value: true } });
+    assert.deepEqual(legacyValue, { tenantId: FOUNDING, value: "kept" }, "the value takes its definition's workspace, unchanged");
+    process.env.TENANT_ENFORCEMENT = "off";
+    const read = await runInTenantScope({ tenantId: FOUNDING, system: false }, () => getFieldsWithValues("contact", RECORD, FOUNDING));
+    assert.ok(read.some((f) => f.def.id === legacyDef.id && f.value === "kept"), "and the CRM shows it again");
+    await basePrisma.customFieldValue.deleteMany({ where: { defId: legacyDef.id } });
+    await basePrisma.customFieldDef.deleteMany({ where: { id: legacyDef.id } });
+    ok("a legacy definition and value with no workspace are stamped by the backfill and read back unchanged");
   } finally {
     await basePrisma.customFieldValue.deleteMany({ where: { tenantId: { in: [A, B] } } });
     await basePrisma.customFieldDef.deleteMany({ where: { tenantId: { in: [A, B] } } });
