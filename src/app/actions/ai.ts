@@ -42,7 +42,11 @@ export async function checkDraft(
     if (l) customerName = l.name;
   }
 
-  const result = await aiCheckDraft({ draft, customerName });
+  // File NAMES only, capped — the proofreader needs to know a file is attached, not its contents.
+  const attachments = formData.get("attachmentsKnown")
+    ? formData.getAll("attachment").map((v) => String(v).slice(0, 200)).slice(0, 20)
+    : undefined;
+  const result = await aiCheckDraft({ draft, customerName, attachments });
   if ("error" in result) return { error: result.error };
   return result.issues.length > 0 ? { issues: result.issues } : { ok: true };
 }

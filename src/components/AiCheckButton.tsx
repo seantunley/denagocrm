@@ -13,12 +13,19 @@ import { checkDraft, type AiCheckState } from "@/app/actions/ai";
  */
 export default function AiCheckButton({
   getDraft,
+  getAttachments,
   contactId,
   leadId,
   configured,
   label = "Check my message",
 }: {
   getDraft: () => string;
+  /**
+   * The files going with the message, by name. Without them the proofreader only
+   * sees the text, so "please see attached" read as a missing attachment even
+   * with the PDF right there (Sean, 2026-11-10). Omitted where a surface has none.
+   */
+  getAttachments?: () => string[];
   contactId?: string | null;
   leadId?: string | null;
   configured: boolean;
@@ -33,6 +40,8 @@ export default function AiCheckButton({
   const run = () => {
     const fd = new FormData();
     fd.set("draft", getDraft());
+    for (const name of getAttachments?.() ?? []) fd.append("attachment", name);
+    if (getAttachments) fd.set("attachmentsKnown", "1");
     if (contactId) fd.set("contactId", contactId);
     if (leadId) fd.set("leadId", leadId);
     startTransition(() => check(fd));
