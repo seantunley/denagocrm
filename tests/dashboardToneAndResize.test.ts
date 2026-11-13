@@ -35,13 +35,15 @@ const code = (rel: string) =>
 const rawConfig = (card: Record<string, unknown>) => ({
   views: [{ id: "v1", title: "Sales", path: "sales", sections: [{ id: "s1", cards: [card] }] }],
 });
-const stat = (over: Record<string, unknown> = {}) => ({
+// Typed as plain records: spreading `over` into a literal keeps only the literal's own keys in the
+// inferred type, so `card.bands` / `card.better` did not type-check (CI: TS2339).
+const stat = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
   id: "c1",
   type: "stat",
   query: { source: "leads" },
   ...over,
 });
-const gauge = (over: Record<string, unknown> = {}) => ({
+const gauge = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
   id: "c1",
   type: "gauge",
   query: { source: "leads" },
