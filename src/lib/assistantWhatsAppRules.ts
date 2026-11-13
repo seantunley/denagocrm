@@ -17,6 +17,7 @@
  * behaviour.
  */
 import type { RateLimitPolicy } from "./rateLimit";
+import { answerForWhatsApp } from "./answerMarkup";
 import { WA_BODY_MAX, WA_BUTTON_MAX, WA_BUTTON_TITLE_MAX, WA_TEXT_MAX } from "./whatsappRendering";
 
 /** The workspace switch (AppSetting). Absent or anything but "on" is OFF. */
@@ -617,6 +618,9 @@ export function withoutCrmLinks(text: string): string {
   return text.replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/g, (_, label: string, href: string) => (/^https?:\/\//i.test(href) ? `${label} (${href})` : label));
 }
 
+/** An answer as WhatsApp shows it: its own *bold*, a table as lines (answerForWhatsApp), and no CRM links. */
+export const forWhatsApp = (text: string) => withoutCrmLinks(answerForWhatsApp(text));
+
 /**
  * A long answer → messages WhatsApp will take whole. Cut at a paragraph, else a
  * line, else a space, as late as possible; a run with none of those is cut hard.
@@ -625,7 +629,7 @@ export function withoutCrmLinks(text: string): string {
  */
 export function splitForWhatsApp(text: string, max = WA_TEXT_MAX): string[] {
   const out: string[] = [];
-  let rest = withoutCrmLinks(text).trim();
+  let rest = forWhatsApp(text).trim();
   while (rest.length > max) {
     const window = rest.slice(0, max + 1);
     let cut = window.lastIndexOf("\n\n");
@@ -672,7 +676,7 @@ export const ASK_PAGE_HAS_THE_REST = "The full answer is on your Ask page in the
 export const TYPING_RENEW_MS = 20_000;
 
 export function planWhatsAppReply(answer: string, choices: readonly string[] = []): WhatsAppReplyPlan {
-  const text = withoutCrmLinks(answer).trim() || "I couldn't put an answer together just now — try asking again.";
+  const text = forWhatsApp(answer).trim() || "I couldn't put an answer together just now — try asking again.";
   const options = [...new Set(choices.map((c) => c.trim()).filter(Boolean))];
   if (!options.length) return { texts: splitForWhatsApp(text), buttons: null };
   if (options.length <= WA_BUTTON_MAX && options.every((o) => o.length <= WA_BUTTON_TITLE_MAX)) {

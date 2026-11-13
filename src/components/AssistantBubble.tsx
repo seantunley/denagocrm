@@ -7,11 +7,16 @@ import { Loader2, Maximize2, X } from "lucide-react";
 import { DaxIcon } from "@/components/DaxIcon";
 import { openAssistantBubble } from "@/app/actions/assistant";
 import AssistantChat from "@/components/AssistantChat";
+import { publishDax, registerDax } from "@/lib/daxLauncher";
 
 type Opened = { name: string; connected: boolean; listen: boolean; history: { question: string; answer: string; source: string }[]; conversation: string | null };
 
 /**
- * The floating "Ask DAX" bubble, on every page in the app.
+ * The "Ask DAX" chat panel, on every page in the app — opened by the sidebar's Ask the CRM button.
+ *
+ * It used to have its own floating round button in the bottom-right corner. Sean, 2026-11-13: "remove this now and
+ * make the button in the sidebar behave the same way". The panel registers with lib/daxLauncher.ts, which the
+ * sidebar button (Nav.tsx) toggles, and publishes open/unread so the button can show both.
  *
  * Nothing loads until it's opened — no request per page view. When it opens it
  * fetches the assistant's name and only TODAY's conversation (Sean: keep the
@@ -76,6 +81,23 @@ export default function AssistantBubble({ unseen = 0 }: { unseen?: number }) {
     return () => window.removeEventListener("dax:ask", onAsk);
   });
 
+  // The sidebar button opens and closes this panel (lib/daxLauncher.ts). Registered once; it calls the latest toggle.
+  const toggleRef = useRef(toggle);
+  useEffect(() => {
+    toggleRef.current = toggle;
+  });
+  useEffect(() => registerDax(() => void toggleRef.current()), []);
+  useEffect(() => publishDax({ open, unread }), [open, unread]);
+  // Escape closes it: its button is now in the sidebar, not beside it.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
+
   if (pathname?.startsWith("/assistant")) {
     if (unread) setUnread(false);
     return null;
@@ -89,7 +111,7 @@ export default function AssistantBubble({ unseen = 0 }: { unseen?: number }) {
         <div
           role="dialog"
           aria-label={`Ask ${name}`}
-          className="fixed bottom-24 right-4 z-50 flex max-h-[min(640px,calc(100vh-8rem))] w-[min(420px,calc(100vw-2rem))] flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl md:bottom-20"
+          className="fixed bottom-6 right-6 z-50 flex max-h-[min(640px,calc(100vh-5rem))] w-[min(420px,calc(100vw-2rem))] flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl"
         >
           <div className="flex items-center justify-between gap-2 border-b border-border/60 px-4 py-3">
             <p className="flex items-center gap-2 text-sm font-semibold">
@@ -140,17 +162,6 @@ export default function AssistantBubble({ unseen = 0 }: { unseen?: number }) {
           </div>
         </div>
       )}
-      <button
-        type="button"
-        onClick={toggle}
-        aria-expanded={open}
-        aria-label={open ? "Close the assistant" : unread ? `Ask ${name} — new scheduled answer` : `Ask ${name}`}
-        title={`Ask ${name}`}
-        className="fixed bottom-20 right-4 z-50 grid size-12 place-items-center rounded-full bg-primary text-primary-foreground shadow-lg transition-transform hover:scale-105 md:bottom-6 md:right-6"
-      >
-        {open ? <X className="size-5" /> : <DaxIcon className="size-6" />}
-        {unread && !open && <span className="absolute right-0.5 top-0.5 size-3 rounded-full border-2 border-card bg-destructive" aria-hidden />}
-      </button>
     </>
   );
 }

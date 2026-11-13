@@ -130,6 +130,8 @@ export const messageSearchArgs = z
     customer: z.string().trim().min(1).max(120),
     /** Any of these words, matched by stem and close spelling — not by meaning. */
     words: z.string().trim().min(1).max(200).optional(),
+    /** Other ways it may have been put ("still waiting", "not arrived") — search by meaning, as `recall` does. */
+    alternatives: z.array(z.string().trim().min(1).max(80)).max(6).optional(),
     channel: z.string().trim().regex(/^[a-z_]{2,20}$/i).optional(),
     direction: z.enum(["inbound", "outbound"]).optional(),
     from: isoDay.optional(),
@@ -141,11 +143,14 @@ export const openMessageArgs = z.object({ id: z.string().trim().regex(/^[\w-]{1,
 export const readDocumentArgs = z
   .object({
     /** A document id (from documents) or words in its file name. */
-    document: z.string().trim().min(1).max(160),
+    document: z.string().trim().min(1).max(160).optional(),
+    /** Or a message id (from search_messages / open_message): read the picture or file it came with. */
+    message: z.string().trim().regex(/^[\w-]{1,64}$/).optional(),
     customer: z.string().trim().min(1).max(120).optional(),
     fromPage: z.number().int().min(1).max(5000).optional(),
   })
-  .strict();
+  .strict()
+  .refine((args) => Boolean(args.document) !== Boolean(args.message), "a document or a message, one of them");
 
 export const activityArgs = z
   .object({
@@ -191,6 +196,12 @@ export const stuckArgs = z.object({ lead: z.string().trim().min(1).max(120) }).s
 export const catchUpArgs = z.object({ since: isoDay.optional() }).strict();
 /** Lost deals that came back to life: `mine` narrows to theirs or nobody's (the morning brief's). */
 export const lostAliveArgs = z.object({ mine: z.boolean().optional() }).strict();
+/** The areas DAX could not see (assistantAreaLookups): help desk, campaigns, forecast, surveys, referrals. */
+export const ticketsArgs = z.object({ mine: z.boolean().optional(), limit: limit.optional() }).strict();
+export const campaignsArgs = z.object({ from: isoDay.optional(), to: isoDay.optional(), name: name.optional(), limit: limit.optional() }).strict();
+export const forecastArgs = z.object({ period: z.string().trim().regex(/^\d{4}-\d{2}$/).optional() }).strict();
+export const surveysArgs = z.object({ from: isoDay.optional(), to: isoDay.optional(), survey: name.optional() }).strict();
+export const referralsArgs = z.object({ from: isoDay.optional(), to: isoDay.optional(), status: z.enum(["pending", "earned", "redeemed"]).optional() }).strict();
 /** Notes ADDED on a day or a period, across everything the person may open, with who added each (assistantNotesLookup). */
 export const notesArgs = z.object({ from: isoDay, to: isoDay.optional(), by: name.optional(), limit: z.number().int().min(1).max(40).optional() }).strict();
 /** What the business knows: products, prices, approved answers, competitors. */
@@ -231,6 +242,11 @@ export const assistantStep = z.discriminatedUnion("tool", [
   z.object({ tool: z.literal("stuck"), args: stuckArgs }),
   z.object({ tool: z.literal("catch_up"), args: catchUpArgs.default({}) }),
   z.object({ tool: z.literal("lost_alive"), args: lostAliveArgs.default({}) }),
+  z.object({ tool: z.literal("tickets"), args: ticketsArgs.default({}) }),
+  z.object({ tool: z.literal("campaigns"), args: campaignsArgs.default({}) }),
+  z.object({ tool: z.literal("forecast"), args: forecastArgs.default({}) }),
+  z.object({ tool: z.literal("surveys"), args: surveysArgs.default({}) }),
+  z.object({ tool: z.literal("referrals"), args: referralsArgs.default({}) }),
   z.object({ tool: z.literal("notes"), args: notesArgs }),
   z.object({ tool: z.literal("stuck_deals"), args: z.object({}).strict().default({}) }),
   z.object({ tool: z.literal("knowledge"), args: knowledgeArgs }),
@@ -288,16 +304,21 @@ export function planInstructions(ctx: PlanContext): string {
     '- deliveries: {"stage":"to_invoice|awaiting_deposit|to_schedule|scheduled|overdue|delivered_recently","limit":<1-25>} — signed deals on their way to the customer: invoicing, deposit, delivery date. With NO stage it returns every stage at once, each deal labelled — use that for "what\'s waiting / in progress"; ask for one stage only when that is all the question wants.',
     '- match_payment: {"amount":<amount> (required),"currency":"<3-letter code if the slip is not in the workspace\'s own currency, e.g. RUB>","reference":"<bank reference on the slip>","paidOn":"YYYY-MM-DD","payer":"<payer name on the slip>"} — a PROOF OF PAYMENT with no quote named: the invoiced quotes in THAT currency with money owing it may be for, ranked, each with why (the amount is the deposit due or the balance owing, the reference names it, the payer is the customer), and a verdict: one clear match, several, or none. Read the amount, currency, reference, date and payer from the slip.',
     '- documents: {"customer":"<customer name, lead title or id>" (required)} — what is on file for one customer (titles, tags, dates and each documentId — not contents; read_document reads one).',
-    '- search_messages: {"customer":"<customer name, lead title or id>" (required),"words":"<words to find — add the other ways it may have been written: delivery deliver transport>","channel":"email|whatsapp|call|meeting|note|…","direction":"inbound|outbound","from":"YYYY-MM-DD","to":"YYYY-MM-DD","limit":<1-20>} — EVERY message to and from one customer (all their deals this person can open), not only the latest few lead_brief shows: each match with its date, channel, who, an excerpt and its id. Words match by stem and close spelling, not by meaning. Use it for "what did we promise / tell them about X", "did they ever say Y", "when did they first ask about Z". To check an old message against today\'s record, run it beside find_quotes or lead_brief in the same round.',
+    '- search_messages: {"customer":"<customer name, lead title or id>" (required),"words":"<words to find — add the other ways it may have been written: delivery deliver transport>","alternatives":["<up to 6 other ways the SAME THING may have been said — for a complaint about delivery: \\"still waiting\\", \\"not arrived\\", \\"where is my\\", \\"late\\">"],"channel":"email|whatsapp|call|meeting|note|…","direction":"inbound|outbound","from":"YYYY-MM-DD","to":"YYYY-MM-DD","limit":<1-20>} — EVERY message to and from one customer (all their deals this person can open), not only the latest few lead_brief shows: each match with its date, channel, who, an excerpt and its id. Words match by stem and close spelling, not by meaning — so for a question about what someone MEANT (a complaint, a worry, a promise), give alternatives; when the words still find little, the result also brings their latest messages under readForMeaning for you to read and judge. Use it for "what did we promise / tell them about X", "did they ever say Y", "when did they first ask about Z". To check an old message against today\'s record, run it beside find_quotes or lead_brief in the same round.',
     '- search_everything: {"words":"<words to find>" (required),"kinds":["message","activity","case","document","knowledge","contact","lead","quote","vehicle","jobcard","product"]} — search ACROSS the whole CRM (everything the person may open) when NO customer is named: "who asked about financing", "which customers mentioned the 2-seater", "where did we talk about the warranty claim", "find anything about Acme". Messages and notes match by word stem, records by their fields; leave kinds out to search everything. Words, not meaning — try other wordings before saying nothing was found. When a customer IS named, use search_messages instead.',
     '- open_message: {"id":"<id from search_messages>" (required),"thread":true} — one message in full (up to ~8 000 characters), with whether an email bounced or an open was detected, or whether WhatsApp/Messenger reported it reached their phone; "thread":true adds the rest of that conversation. Use it when an excerpt is not enough to be sure what was said.',
-    '- read_document: {"document":"<documentId from documents, or words of its file name>" (required),"customer":"<customer name>","fromPage":<page>} — the TEXT of one PDF on file (a quote, a contract, a signed copy, an invoice), with page numbers, up to 20 pages at a time; ask again with fromPage for later pages. A scanned PDF has no text and cannot be read.',
+    '- read_document: {"document":"<documentId from documents, or words of its file name>","customer":"<customer name>","fromPage":<page>} OR {"message":"<message id from search_messages/open_message>"} — READS ONE FILE: a PDF on file (a quote, a contract, a signed copy, an invoice) as its text with page numbers, up to 20 pages at a time (fromPage for later ones); a SCANNED PDF, a PHOTO or picture on file, or the picture or file a customer SENT in a message, read from the picture by the AI (its text transcribed, then what it shows — first 5 pages of a scan; it can misread, so say so for a figure that matters); a .txt or .csv as it is. Word, Excel and other files can\'t be read yet: say so.',
     '- find_activities: {"when":"overdue|today|today_and_overdue|this_week|upcoming|past" (required),"from":"YYYY-MM-DD","to":"YYYY-MM-DD","type":"<type>","assignedTo":"<person — theirs, or a meeting they attend>","search":"<words in the activity>","limit":<1-25>} — the calendar: calls, meetings, to-dos, test drives, events, and blocked time (personal items: leave, an appointment, admin time). "What is in my calendar / diary this week" → this_week with assignedTo: today and the next six days, blocked time included — say which dates that covers. "What does X have to do today / what\'s on their plate" → today_and_overdue (what\'s late still has to be done). "When is the next golf day / launch / service" → upcoming with search — events live here, not in knowledge. What HAPPENED ("what golf days did we have last month", "what was on 22 September") → "past" with from/to (one day: from = to) — past results include what was done, each marked planned or done.',
     '- lead_brief: {"lead":"<customer name, lead title or id>" (required)} — one lead in depth: details, recent messages both ways, quotes (viewed? signed?), activities, research. Use it for "what should I do with X", "where are we with X", or to look closer at a lead found earlier.',
     '- why: {"record":"<customer name, lead title, quote number (Q-1031) or id — the page\'s record id works too>" (required)} — WHY something happened on one record: its history, each event with its CAUSE as recorded (the person who did it, the journey and step, the chatbot and its handoff reason, lead routing, the customer\'s own action — or "not recorded"): stage moves and who made them, who it was assigned to and by what, why it was marked lost, why a customer got a message (or why a journey did not enrol them / stopped), why the bot handed a chat over. Use it for every "why did…" / "how come…" / "who moved / sent / assigned…" question about a record; it usually answers on its own ("then":"answer").',
     '- stuck: {"lead":"<customer name, lead title or id>" (required)} — why ONE deal is stuck, with evidence: its blockers RANKED, each with its date and a link to the record it comes from (the customer waiting on us, an overdue follow-up, the quote unopened / declined / expiring, the deposit, time in the stage against its limit, no next step, the customer gone quiet), plus the facts behind them. Run it for every "why is X stuck / stalled / not moving / gone quiet / not closing"; it usually answers on its own ("then":"answer"). For "which of my deals are stuck", use stuck_deals.',
     '- catch_up: {"since":"YYYY-MM-DD" (only when they name a day)} — what changed on THEIR OWN deals since their last question to you (at most 7 days back): new customer messages, quotes opened / opened again / signed, stage moves by someone else, new leads for them, and their overdue and due-today tasks. Run it for "catch me up", "what\'s changed", "what did I miss", "anything new (since…)"; it answers on its own ("then":"answer").',
     '- notes: {"from":"YYYY-MM-DD" (required),"to":"YYYY-MM-DD","by":"<colleague who added them>"} — every NOTE ADDED on that day (or from–to), on all the deals and customers they may open, each with when it was added, which customer and deal it is on, WHO added it, and its words. Run it for "which notes were added yesterday", "what notes did Donovan add this week", "summarise yesterday\'s notes" — search_messages is one customer at a time and find_activities is the calendar, neither lists notes across the CRM.',
+    '- tickets: {"mine":true (only those assigned to them)} — the HELP DESK (customer cases): how many are open, waiting on our reply, overdue (a customer waiting 24 hours or more — tickets have no deadline of their own), urgent/high and unassigned, then the tickets, overdue first, each with customer, status, priority, who has it, how long the customer has waited and a link. Run it for "which tickets are overdue", "what\'s waiting in the help desk", "my open cases".',
+    '- campaigns: {"from":"YYYY-MM-DD","to":"YYYY-MM-DD","name":"<words of a campaign name>"} — MARKETING CAMPAIGNS sent in that period (default the last 30 days), or the one named: channel, when sent, audience, recipients, delivered, failed, opens and clicks with their rates, and a link. Run it for "how did last week\'s campaign do", "which campaign got the most clicks".',
+    '- forecast: {"period":"YYYY-MM" (default this month)} — the SALES FORECAST for deals expected to close that month: open, weighted, commit, best case and pipeline totals in rands, and the biggest deals with probability, category, close date, stage and owner. Run it for "what\'s the forecast for this month", "what are we committing for December".',
+    '- surveys: {"from":"YYYY-MM-DD","to":"YYYY-MM-DD","survey":"<words of a survey title>"} — CUSTOMER SURVEYS sent in that period (default the last 30 days): per survey, sent, answered, response rate, NPS or average score, and the unhappy answers with what the customer said. Run it for "how are our NPS scores", "any unhappy customers in the surveys".',
+    '- referrals: {"from":"YYYY-MM-DD","to":"YYYY-MM-DD","status":"pending|earned|redeemed"} — REFERRALS in that period (default the last 90 days): totals pending / earned-not-redeemed / redeemed, the top referrers, and the latest referrals. Run it for "how many referrals this quarter", "who refers the most", "which rewards are still owed".',
     '- lost_alive: {"mine":true (only their own deals and unassigned ones)} — deals marked LOST in the last 90 days for a went-quiet or timing reason ("gone cold", "stopped responding", "buying later") where the customer has since messaged or opened a quote: each with when and why it was lost and what the customer did since. Run it for "which lost deals are still alive", "any lost deals worth another look", "lost but not really lost"; it answers on its own ("then":"answer"), offering a nurture or reopen card for each.',
     '- stuck_deals: {} — THEIR most-stuck open deals (the three furthest past their stage\'s time limit), each with its top reason from the stuck check and its link — and, for someone who sees a team\'s deals, the team\'s worst five. Run it for "which of my deals are stuck", "my stuck deals", and the Monday brief; it answers on its own ("then":"answer").',
     '- knowledge: {"topic":"<what to look up>" (required)} — the business\'s own knowledge: products and prices (each with its productId), approved answers (finance, warranty, policies…), company details, competitor intelligence. ALWAYS run this when the person asks for a quote or names a product to quote — a quote can only be built from products found here.',
@@ -424,6 +445,11 @@ const LOOKUP_STATUS: Record<string, string> = {
   stuck: "Working out what's holding it up",
   catch_up: "Catching you up",
   lost_alive: "Checking lost deals for signs of life",
+  tickets: "Checking the help desk",
+  campaigns: "Checking campaigns",
+  forecast: "Working out the forecast",
+  surveys: "Reading the survey results",
+  referrals: "Checking referrals",
   notes: "Reading the notes added",
   stuck_deals: "Finding your most-stuck deals",
   find_activities: "Checking activities",
@@ -568,6 +594,7 @@ export const ANSWER_RULES = [
   "Answer what was asked, then stop. No disclaimers about what the CRM might not show (\"I can't tell whether he has other work…\") unless it changes what they should do. If the results answer the question indirectly, give that answer: a quote still in draft hasn't been sent, so it hasn't been opened.",
   "When several records matched a name and the results picked one, say which one you mean in a few words, and name the others only if it could have been them.",
   "Asked about a team (\"how's my team doing\", \"who needs help\") with per-salesperson figures in the results: coach, person by person, those who need it most first — what is slipping for them, with their figures, then one concrete next step for the manager as \"My read:\". One line for what's going well. Nobody the results don't list.",
-  "Plain text only (short paragraphs or simple '-' lists), no markdown tables or headings.",
+  // Rendered by components/AnswerMarkup (lib/answerMarkup.ts); WhatsApp gets the same marks converted (answerForWhatsApp).
+  "Format for reading at a glance: short paragraphs; **bold** for the one figure, name or decision that matters most in a line (not whole sentences); '-' lists for several items and '1.' lists for steps or a ranking; a small table (| Deal | Stage | Value |, a header row then a |---| row, at most 5 columns and 10 rows) only when several items are compared on the same few facts — \"my five stuck deals\" with stage, days stuck and value. No headings, no nested lists, nothing else.",
   "Emojis where they genuinely help someone scan or feel the point — ✅ done, ⚠️ risk, 📞 call, 💬 waiting on a reply, 🔥 hot deal, 📅 booked, 🚗 test drive — one or two, never a string of them, and none when the news is bad for a customer.",
 ].join("\n");

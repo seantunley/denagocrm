@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactElement } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactElement } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ChevronRight } from "lucide-react";
@@ -11,6 +11,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { buildNav, type NavGroup, type NavLink } from "@/components/nav-config";
 import { cn } from "@/lib/utils";
 import { linkOnPhone } from "@/lib/phoneScope";
+import { toggleDax, useDaxState } from "@/lib/daxLauncher";
 import { navLabelOverrides } from "@/lib/recordLabels";
 import { useRecordLabels } from "@/components/RecordLabelsProvider";
 
@@ -166,16 +167,7 @@ export default function Nav({
         ))}
         </div>
         {footLinks.map((link) => (
-          <RailTip key={link.href} label={link.label}>
-            <Link
-              href={link.href}
-              aria-label={link.label}
-              aria-current={isActive(link.href) ? "page" : undefined}
-              className={cn(RAIL_BUTTON, "depth-raised mt-2 text-primary hover:brightness-110")}
-            >
-              <link.icon className="size-5" aria-hidden />
-            </Link>
-          </RailTip>
+          <FootButton key={link.href} link={link} active={isActive(link.href)} rail />
         ))}
       </nav>
       </MotionConfig>
@@ -255,14 +247,7 @@ export default function Nav({
       {/* The foot of the sidebar: Ask the CRM, always in reach — raised like the current page, its mark in the accent. */}
       {footLinks.map((link) => (
         <div key={link.href} className="shrink-0 px-1 pt-2">
-          <Link
-            href={link.href}
-            aria-current={isActive(link.href) ? "page" : undefined}
-            className={cn(ROW, "depth-raised flex items-center gap-3 px-3 text-sm font-semibold text-sidebar-accent-foreground hover:brightness-110")}
-          >
-            <link.icon className="size-[18px] shrink-0 text-primary" aria-hidden />
-            <span className="min-w-0 flex-1 truncate">{link.label}</span>
-          </Link>
+          <FootButton link={link} active={isActive(link.href)} />
         </div>
       ))}
     </nav>
@@ -274,6 +259,62 @@ export default function Nav({
 /* ── The collapsed rail (sidebar brief PR 4) ─────────────────────────────── */
 
 const RAIL_BUTTON = "relative grid size-11 shrink-0 place-items-center rounded-[10px] transition-colors";
+
+/**
+ * Ask the CRM, at the foot of the sidebar. A click opens the DAX chat panel, as the floating button it replaced
+ * did (Sean, 2026-11-13); it carries that button's red dot for an unseen scheduled answer. Still a real link to
+ * /assistant: a new-tab click, a page with no panel (lib/daxLauncher.ts), and the Ask page itself all just go there.
+ */
+function FootButton({ link, active, rail = false }: { link: NavLink; active: boolean; rail?: boolean }) {
+  const { open, unread } = useDaxState();
+  const dot = unread && !open;
+  const onClick = (event: ReactMouseEvent<HTMLAnchorElement>) => {
+    if (active || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    if (toggleDax()) event.preventDefault();
+  };
+  // IT OPENS SOMETHING, SO IT IS A BUTTON (review of #1090): role, aria-expanded, and Space as well as Enter — Space
+  // does nothing on a link. Still an <a href> underneath, so a new-tab click opens the full page. On the Ask page
+  // itself it is the link to where you are.
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLAnchorElement>) => {
+    if (event.key !== " ") return;
+    event.preventDefault(); // not a page scroll
+    // No panel (DAX off for this person): the same as clicking — the link goes to the Ask page.
+    if (!toggleDax()) event.currentTarget.click();
+  };
+  const asButton = active ? { "aria-current": "page" as const } : { role: "button", "aria-expanded": open, onKeyDown };
+  const label = dot ? `${link.label} — new scheduled answer` : link.label;
+  const marker = dot ? <span className="absolute right-1.5 top-1.5 size-2.5 rounded-full border-2 border-sidebar bg-destructive" aria-hidden /> : null;
+  if (rail) {
+    // The tooltip wraps the Link itself: its trigger hands its props and ref to its direct child.
+    return (
+      <RailTip label={link.label}>
+        <Link
+          href={link.href}
+          onClick={onClick}
+          aria-label={label}
+          {...asButton}
+          className={cn(RAIL_BUTTON, "depth-raised mt-2 text-primary hover:brightness-110", open && "ring-1 ring-primary/50")}
+        >
+          <link.icon className="size-5" aria-hidden />
+          {marker}
+        </Link>
+      </RailTip>
+    );
+  }
+  return (
+    <Link
+      href={link.href}
+      onClick={onClick}
+      aria-label={dot ? label : undefined}
+      {...asButton}
+      className={cn(ROW, "depth-raised relative flex items-center gap-3 px-3 text-sm font-semibold text-sidebar-accent-foreground hover:brightness-110", open && "ring-1 ring-primary/50")}
+    >
+      <link.icon className="size-[18px] shrink-0 text-primary" aria-hidden />
+      <span className="min-w-0 flex-1 truncate">{link.label}</span>
+      {marker}
+    </Link>
+  );
+}
 
 /** A count on a rail icon — the same pulse as Count, smaller and pinned to the corner. */
 function RailCount({ n }: { n: number }) {
