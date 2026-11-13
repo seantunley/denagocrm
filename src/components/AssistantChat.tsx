@@ -17,6 +17,7 @@ import { audioForm, useVoiceRecorder } from "@/components/useVoiceRecorder";
 import type { ActionCard } from "@/lib/assistantActions";
 import AssistantActionCard from "@/components/AssistantActionCard";
 import AssistantPlanCard from "@/components/AssistantPlanCard";
+import { wantsReport } from "@/lib/assistantReport";
 
 type Turn = {
   question: string; answer?: string; cited?: string; evidence?: Evidence[]; turnId?: string;
@@ -103,7 +104,7 @@ function Feedback({ turnId }: { turnId: string }) {
 }
 
 /**
- * 📄 PDF — this answer as a formatted report, with the business's name and logo
+ * 📄 PDF — shown only when the question asked for a report or a PDF. This answer as a formatted report, with the business's name and logo
  * in its header (app/api/pdf/assistant-report). A plain link, opened in a new
  * tab: the server checks the answer is this person's own, and nothing is looked
  * up again to make it.
@@ -407,7 +408,8 @@ export default function AssistantChat({
         </div>
       )}
       {turn.turnId && <Feedback turnId={turn.turnId} />}
-      {turn.turnId && turn.answer && !turn.stopped && <ReportLink turnId={turn.turnId} />}
+      {/* Only under an answer to "a report on…" / "a PDF of…": never on every reply. */}
+      {turn.turnId && turn.answer && !turn.stopped && wantsReport(turn.question) && <ReportLink turnId={turn.turnId} />}
       {listen && turn.turnId && <Listen turnId={turn.turnId} />}
       {Boolean(turn.learned) && (
         <p className="text-[11px] text-muted-foreground">

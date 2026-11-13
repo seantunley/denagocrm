@@ -169,6 +169,9 @@ test("the report rule changes how an answer is written, never what may be said",
   assert.match(REPORT_RULE, /Columns: A \| B \| C/);
   // It never claims to make or send the file, and never to a customer.
   assert.match(REPORT_RULE, /You do not create, attach or send the file yourself/);
+  // It never tells them every answer has a PDF.
+  assert.match(REPORT_RULE, /appears only under an answer to a question that asked for a report or a PDF/);
+  assert.doesNotMatch(REPORT_RULE, /ANY of your answers|never refuse a PDF/);
   assert.match(REPORT_RULE, /never goes to a customer from you/);
 });
 
@@ -178,6 +181,8 @@ test("DAX knows the truth about itself: there is a PDF button, and it sends noth
   assert.match(about, /business's name and logo in its header/);
   assert.match(about, /nothing is looked up again/);
   assert.match(about, /only the person you answered can download it/);
+  assert.match(about, /Your other answers have no PDF button/);
+  assert.doesNotMatch(about, /Under every answer/);
   assert.match(about, /You never create, attach or send the file yourself/);
 });
 
@@ -239,8 +244,13 @@ test("the logo is read from the workspace's own storage, or fetched only from a 
   assert.match(logo, /catch \(error\) \{[\s\S]*return null;\s*\}/);
 });
 
-test("every answer in the chat offers its PDF — except one that was stopped or has no text", () => {
+test("a PDF is made only when asked for: the button and the route follow the same rule", () => {
   const chat = code("src/components/AssistantChat.tsx");
-  assert.match(chat, /turn\.turnId && turn\.answer && !turn\.stopped && <ReportLink turnId=\{turn\.turnId\} \/>/);
+  // The button: only under an answer to a question that asked for a report or a PDF.
+  assert.match(chat, /turn\.turnId && turn\.answer && !turn\.stopped && wantsReport\(turn\.question\) && <ReportLink turnId=\{turn\.turnId\} \/>/);
+  assert.equal((chat.match(/<ReportLink /g) ?? []).length, 1, "offered in one place only");
+  // The route: an answer to any other question is refused, even with its id in hand.
+  const route = code("src/app/api/pdf/assistant-report/[turnId]/route.tsx");
+  assert.match(route, /if \(!wantsReport\(turn\.question\)\) return new Response\("Not found", \{ status: 404 \}\)/);
   assert.match(chat, /href=\{`\/api\/pdf\/assistant-report\/\$\{encodeURIComponent\(turnId\)\}`\}/);
 });

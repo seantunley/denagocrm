@@ -6,7 +6,7 @@ import { withActingStaffScope } from "@/lib/actingScope";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { ASSISTANT_PERMISSIONS } from "@/lib/assistantUser";
 import { ASSISTANT_PROFILE_KEY, parseProfile } from "@/lib/assistantSoul";
-import { buildReport, printable, reportFileName } from "@/lib/assistantReport";
+import { buildReport, printable, reportFileName, wantsReport } from "@/lib/assistantReport";
 import { reportLogoPng } from "@/lib/assistantReportLogo";
 import { getCompanyProfile } from "@/lib/companyProfile";
 import { brandForTenant } from "@/lib/tenantBrand";
@@ -22,6 +22,9 @@ export const dynamic = "force-dynamic";
 /**
  * One of the assistant's answers, as a PDF report with the business's name and
  * logo in its header (lib/assistantReport.ts says what a report is).
+ *
+ * ONLY WHEN ASKED FOR: the question must have asked for a report or a PDF
+ * (wantsReport). Every other answer has no button and no PDF.
  *
  * WHO MAY HAVE IT: only the person the answer was given to. Conversations with
  * the assistant are private to each person — the workspace owner sees totals,
@@ -50,6 +53,8 @@ async function handleGet(turnId: string) {
       select: { question: true, answer: true, createdAt: true },
     });
     if (!turn || !turn.answer.trim()) return new Response("Not found", { status: 404 });
+    // Only an answer to a question that asked for a report or a PDF is ever made into one.
+    if (!wantsReport(turn.question)) return new Response("Not found", { status: 404 });
 
     const tenantId = ownedWriteTenantId();
     const [company, brand, profileRaw, regional] = await Promise.all([

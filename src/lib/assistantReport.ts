@@ -57,10 +57,18 @@ export const REPORT_RULE = [
   "First line: \"Report: <short title>\". Then a two- or three-sentence summary of what matters most. Then short sections, each starting with a heading on its own line that ends in a colon, with '-' lists or short paragraphs under it.",
   "A list of records with the same few details each may be a table: one line \"Columns: A | B | C\", then one '-' line per record with exactly that many parts separated by \" | \". At most six columns.",
   "End with one short line telling them to press PDF under this answer to download it with the business's name and logo (asked on WhatsApp or on a schedule: the PDF button is under this answer on their Ask page in the CRM).",
-  "You do not create, attach or send the file yourself, and a report never goes to a customer from you. Pressing PDF under ANY of your answers downloads that answer as a document, so never refuse a PDF.",
+  "You do not create, attach or send the file yourself, and a report never goes to a customer from you. The PDF button appears only under an answer to a question that asked for a report or a PDF: if someone wants an earlier answer as a PDF, they ask for it as a report and you write it again.",
 ].join(" ");
 
-/** Did they ask for a document? Such a question is researched in depth, not answered in passing. */
+/**
+ * Did they ask for a document?
+ *
+ * This one test decides two things: the question is researched in depth, and
+ * its answer — and ONLY its answer — gets a PDF button. The chat hides the
+ * button under every other answer (a button on every reply crowds the screen),
+ * and the PDF route refuses to make one for them, so a PDF exists only when
+ * somebody asked for one. Pure, with no imports, so the chat can call it too.
+ */
 export function wantsReport(question: string): boolean {
   return /\b(report|pdf|write[- ]?up|summary document|document (?:on|about|for)|brief(?:ing)? (?:on|about|for)|compile)\b/i.test(question);
 }
