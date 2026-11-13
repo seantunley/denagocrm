@@ -550,7 +550,7 @@ export default function AssistantChat({
             </p>
             <div className="max-w-[92%] space-y-2 rounded-2xl rounded-bl-sm bg-muted/50 px-3 py-2">
               {live.text ? (
-                <p className="whitespace-pre-line text-sm leading-relaxed">{live.text}</p>
+                <AnswerMarkup text={live.text} />
               ) : (
                 <p className="animate-pulse text-sm text-muted-foreground">{live.status ?? `${name} is looking into it…`}</p>
               )}
@@ -591,7 +591,7 @@ export default function AssistantChat({
             {stopButton}
           </div>
           {live?.text ? (
-            <p className="whitespace-pre-line text-sm leading-relaxed">{live.text}</p>
+            <AnswerMarkup text={live.text} />
           ) : (
             <p className="animate-pulse text-sm text-muted-foreground">{live?.status ?? `${name} is looking into it…`}</p>
           )}

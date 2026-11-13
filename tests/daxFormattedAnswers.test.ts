@@ -71,5 +71,8 @@ test("DAX is told the formatting it may use", () => {
   assert.match(rules, /\*\*bold\*\* for the one figure, name or decision/);
   assert.match(rules, /a small table \(\| Deal \| Stage \| Value \|/);
   assert.doesNotMatch(rules, /Plain text only \(short paragraphs or simple '-' lists\), no markdown tables/);
-  assert.match(src("src/components/AssistantChat.tsx"), /<AnswerMarkup text=\{turn\.cited\} evidence=\{turn\.evidence\} \/>/);
+  const chat = src("src/components/AssistantChat.tsx");
+  assert.match(chat, /<AnswerMarkup text=\{turn\.cited\} evidence=\{turn\.evidence\} \/>/);
+  assert.equal((chat.match(/<AnswerMarkup text=\{live\.text\} \/>/g) ?? []).length, 2, "formatted while it streams too, in both views");
+  assert.doesNotMatch(chat, /whitespace-pre-line text-sm leading-relaxed">\{(turn\.answer|live\.text)\}/);
 });
