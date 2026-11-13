@@ -24,7 +24,13 @@ const text = z.string().trim().min(1);
 const at = z.string().trim().regex(/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?$/);
 const atTime = z.string().trim().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/);
 const minutes = z.number().int().min(15).max(480);
-const reason = z.string().trim().min(3).max(160).optional();
+const MEETING_MAX_MINUTES = 720;
+/**
+ * Words only SHOWN on a card (its "why", a calendar item's title) are shortened, never a reason to refuse the task:
+ * one long sentence used to sink the whole booking (Sean, 2026-11-13).
+ */
+const shown = (max: number) => z.string().trim().min(1).transform((s) => (s.length > max ? `${s.slice(0, max - 1).trimEnd()}…` : s));
+const reason = shown(160).optional();
 /** The most lines the assistant may put on a quote it builds. A longer quote is built in the editor. */
 export const QUOTE_BUILD_MAX_LINES = 10;
 /** Fees the assistant may add to a draft in one go, and the most one may be (rands). More than that is the editor's. */
@@ -42,7 +48,7 @@ export const proposedAction = z.discriminatedUnion("type", [
     contactId: leadId.optional(),
     when: at,
     activity: z.enum(["call", "whatsapp", "email", "meeting", "todo"]).default("call"),
-    summary: text.max(120).optional(),
+    summary: shown(120).optional(),
     reason,
   }).strict(),
   // pin: keeps the note at the top of the timeline — only when the person asks for it pinned.
@@ -144,9 +150,11 @@ export const proposedAction = z.discriminatedUnion("type", [
     leadId: leadId.optional(),
     contactId: leadId.optional(),
     when: atTime,
-    minutes: minutes.optional(),
-    with: z.array(text.max(80)).max(5).optional(),
-    summary: text.max(120).optional(),
+    // Up to a working day, as block_time: a show or an event runs 07:00–16:00 (Sean, 2026-11-13 — the shared
+    // 8-hour cap refused it, and DAX looped on "try again").
+    minutes: z.number().int().min(15).max(MEETING_MAX_MINUTES).optional(),
+    with: z.array(text.max(80)).max(20).optional(),
+    summary: shown(120).optional(),
     reason,
   }).strict(),
   // A TEST DRIVE with a customer — on their deal (leadId) or on them directly (contactId). In a demo vehicle from
@@ -183,7 +191,7 @@ export const proposedAction = z.discriminatedUnion("type", [
     when: at,
     minutes: z.number().int().min(15).max(720).optional(),
     until: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-    summary: text.max(120).optional(),
+    summary: shown(120).optional(),
     note: text.max(300),
     reason,
   }).strict(),
@@ -446,6 +454,8 @@ export const CALENDAR_ITEM_RULE =
   "\"meeting with Mariska (a new prospect, no surname yet) Tuesday 11:00 to 11:45 at Atlantic Beach\" → " +
   "{\"type\":\"meeting\",\"when\":\"2026-11-03T11:00\",\"minutes\":45,\"with\":[\"Sean\"],\"summary\":\"Meeting with Mariska — Atlantic Beach\"}. " +
   "With neither, name who and what in the summary (it is all the calendar shows), and leave both ids out. " +
+  "An event that colleagues attend together (a show, an expo, a training day) is a meeting with them in \"with\": " +
+  "\"Tannery Motor Show, 22 Nov 07:00 to 16:00, me and Donovan\" → {\"type\":\"meeting\",\"when\":\"2026-11-22T07:00\",\"minutes\":540,\"with\":[\"Donovan\"],\"summary\":\"Tannery Motor Show — Wellington\"}; a meeting runs at most 12 hours. " +
   "NEVER say a calendar item needs a lead or a customer, never tell them to add it by hand, and never hang it on an unrelated deal or create a record to make one fit. " +
   "block_time is only for time they are UNAVAILABLE (leave, the dentist, admin).";
 
@@ -594,6 +604,33 @@ export function parseActionList(raw: unknown): ProposedAction[] {
     .filter((r) => r.success)
     .map((r) => r.data)
     .slice(0, MAX_ACTIONS);
+}
+
+/**
+ * Why each proposal that fails the shape check was refused — in words, so the person (and DAX, reading its own
+ * answer next turn) can see what to change. Without it a refused task was "couldn't be set up from what I wrote",
+ * and "try again" wrote the same task again: Sean, 2026-11-13, a 9-hour show refused by an 8-hour cap, three times.
+ */
+export function invalidActionReasons(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.slice(0, MAX_ACTIONS).flatMap((item) => {
+    const parsed = proposedAction.safeParse(item);
+    if (parsed.success) return [];
+    const type = item && typeof item === "object" && typeof (item as { type?: unknown }).type === "string" ? (item as { type: string }).type : "task";
+    const what = `The ${type.replace(/_/g, " ")}`;
+    // A discriminated union checks only the variant its `type` names, so a field issue is that task's own.
+    const issue = parsed.error.issues.find((i) => (i.path.length > 0 && i.path[0] !== "type") || i.code === "unrecognized_keys");
+    const field = issue?.path.join(".") ?? "";
+    if (issue?.code === "too_big" && field === "minutes") return [`${what} was too long — the most is ${Number(issue.maximum) / 60} hours.`];
+    if (issue?.code === "too_small" && field === "minutes") return [`${what} was too short — the least is ${Number(issue.minimum)} minutes.`];
+    if (issue?.code === "too_big") {
+      const unit = issue.origin === "string" ? " characters" : "";
+      return [`${what}'s ${field} was too ${issue.origin === "array" ? "many" : issue.origin === "string" ? "long" : "big"} — the most is ${Number(issue.maximum)}${unit}.`];
+    }
+    if (issue?.code === "unrecognized_keys") return [`${what} had details it doesn't take (${issue.keys.join(", ")}).`];
+    if (field) return [`${what} had a problem with its ${field}.`];
+    return [`${what} isn't something I can set up.`];
+  });
 }
 
 /** LEGACY: pull an old-style ACTIONS line out of the reply (see assistantReply). */

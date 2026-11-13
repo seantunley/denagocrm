@@ -156,7 +156,7 @@ test("the assistant can propose a schedule — no lead, nothing extra", () => {
   const resolve = lib.slice(lib.indexOf("async function resolveActions"), lib.indexOf("function dedupeRows"));
   const schedule = resolve.slice(resolve.indexOf('if (p.type === "schedule")'), resolve.indexOf("canAccessLead"));
   assert.match(schedule, /scheduleInput\.safeParse\(fields\)/);
-  assert.match(schedule, /!nextRun\(parsed\.data, new Date\(\)\)\) continue;/);
+  assert.match(schedule, /if \(!nextRun\(parsed\.data, new Date\(\)\)\) \{ problems\.push\(passed\(/);
   assert.match(schedule, /kind: "schedule", title: describeSchedule\(parsed\.data\)/);
 });
 

@@ -2537,7 +2537,8 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       })
     : null;
   // Where nothing can confirm it, a stray ACTIONS line is removed from the answer and dropped.
-  const problems: string[] = [];
+  // A proposal refused by its shape says why, rather than "couldn't be set up from what I wrote" (invalidActionReasons).
+  const problems: string[] = proposes ? [...reply.invalid] : [];
   const actions = !proposes ? [] : await resolveActions(user, proposals, problems, taskWrite?.ok ? taskWrite.sheet : null, cardUpload).catch(async (error: unknown) => {
     await logError("crm-assistant", "task proposals failed", error instanceof Error ? error.name : "unknown");
     return [];
@@ -2687,6 +2688,13 @@ export async function resolveActions(
   const image = upload?.image ?? null;
   const quoteSheet = sheet?.kind === "quote" ? sheet : null;
   if (!proposals.length) return [];
+  // EVERY task that becomes no card says why (Sean, 2026-11-13). A silent drop reads as "couldn't be set up from
+  // what I wrote", and "try again" then writes the same task again — a loop.
+  const DEAL_GONE = "I can't find that deal, or you can't open it — look it up again and I'll set it up.";
+  const CUSTOMER_GONE = "I can't find that customer, or you can't open them — look them up again and I'll set it up.";
+  const ITEM_GONE = "That calendar item isn't on your calendar any more, or is already done — look it up again.";
+  const passed = (at: string) => `That time (${at}) has already passed — say the day again, with the year if it isn't this one.`;
+  const BAD_TIME = "I couldn't read that date and time — say it again, like \"Tuesday 17 November at 10:00\".";
   const staff = await listActingTenantStaff();
   const cards: ActionCard[] = [];
   const moneyFmt = await getRegionalSettings();
@@ -2700,7 +2708,8 @@ export async function resolveActions(
       // reason is display-only; the strict scheduleInput rejects unknown keys.
       const { type: _type, reason: _reason, ...fields } = p;
       const parsed = scheduleInput.safeParse(fields);
-      if (!parsed.success || !nextRun(parsed.data, new Date())) continue;
+      if (!parsed.success) { problems.push("I couldn't read when that should run — say the day and time again."); continue; }
+      if (!nextRun(parsed.data, new Date())) { problems.push(passed(parsed.data.onDate ? `${parsed.data.onDate} ${parsed.data.timeOfDay}` : parsed.data.timeOfDay)); continue; }
       cards.push({ id: `a${index}-schedule`, kind: "schedule", title: describeSchedule(parsed.data), ...parsed.data, ...(p.reason ? { reason: p.reason } : {}) });
       continue;
     }
@@ -2712,11 +2721,12 @@ export async function resolveActions(
       const base = { id: `a${index}-block`, kind: "block_time" as const, leadId: null, leadLabel: "Your calendar", summary, detail: p.note, ...(p.reason ? { reason: p.reason } : {}) };
       if (p.when.includes("T")) {
         const start = new Date(`${p.when}:00+02:00`);
-        if (Number.isNaN(start.getTime()) || start.getTime() < Date.now() - 60 * 60 * 1000) continue;
+        if (Number.isNaN(start.getTime())) { problems.push(BAD_TIME); continue; }
+        if (start.getTime() < Date.now() - 60 * 60 * 1000) { problems.push(passed(when(start))); continue; }
         const end = new Date(start.getTime() + (p.minutes ?? 60) * 60 * 1000);
         cards.push({ ...base, allDay: false, start: p.when, end: saLocal(end), title: `Block your calendar: ${summary} — ${when(start)} to ${saLocal(end).slice(11)}` });
       } else {
-        if (p.when < johannesburgDateKey(new Date())) continue;
+        if (p.when < johannesburgDateKey(new Date())) { problems.push(passed(p.when)); continue; }
         const until = p.until && p.until > p.when ? p.until : p.when;
         cards.push({ ...base, allDay: true, start: p.when, end: until, title: `Block your calendar: ${summary} — all day ${p.when}${until === p.when ? "" : ` to ${until}`}` });
       }
@@ -2728,10 +2738,10 @@ export async function resolveActions(
       // reason is display-only; the strict watchInput rejects unknown keys.
       const { type: _type, reason: _reason, ...fields } = p;
       const parsed = watchInput.safeParse(fields);
-      if (!parsed.success) continue;
+      if (!parsed.success) { problems.push("That isn't something I can watch — say what to watch, and for which quote or deal."); continue; }
       let customer: string | null = null;
       if (parsed.data.leadId) {
-        if (!(await canAccessLead(user, parsed.data.leadId))) continue;
+        if (!(await canAccessLead(user, parsed.data.leadId))) { problems.push(DEAL_GONE); continue; }
         customer = (await prisma.lead.findUnique({ where: { id: parsed.data.leadId }, select: { name: true } }))?.name ?? null;
       }
       const quote = parsed.data.quoteId && /^Q-?\d+$/i.test(parsed.data.quoteId) ? parsed.data.quoteId.toUpperCase().replace(/^Q-?/, "Q-") : null;
@@ -2741,19 +2751,20 @@ export async function resolveActions(
     if (p.type === "reschedule" || p.type === "cancel_activity") {
       // Only an activity the calendar would show this person, and still planned.
       const visible = await getAccessibleActivityIds(user);
-      if (visible !== null && !visible.includes(p.activityId)) continue;
+      if (visible !== null && !visible.includes(p.activityId)) { problems.push(ITEM_GONE); continue; }
       const activity = await prisma.activity.findFirst({
         where: { id: p.activityId, status: "planned" },
         select: { summary: true, type: true, dueDate: true, leadId: true, lead: { select: { name: true, title: true } } },
       });
-      if (!activity) continue;
+      if (!activity) { problems.push(ITEM_GONE); continue; }
       const leadLabel = activity.lead ? `${activity.lead.name} — ${activity.lead.title}` : activity.type;
       if (p.type === "cancel_activity") {
         cards.push({ id: `a${index}-${p.activityId}`, kind: "cancel_activity", activityId: p.activityId, leadId: activity.leadId, leadLabel, fromDue: activity.dueDate.toISOString(), title: `Cancel “${activity.summary}” (${when(activity.dueDate)})`, ...(p.reason ? { reason: p.reason } : {}) });
       } else {
         const target = p.when.includes("T") ? p.when : `${p.when}T${saLocal(activity.dueDate).slice(11)}`;
         const at = new Date(`${target}:00+02:00`);
-        if (Number.isNaN(at.getTime()) || at.getTime() < Date.now() - 60 * 60 * 1000) continue;
+        if (Number.isNaN(at.getTime())) { problems.push(BAD_TIME); continue; }
+        if (at.getTime() < Date.now() - 60 * 60 * 1000) { problems.push(passed(when(at))); continue; }
         cards.push({ id: `a${index}-${p.activityId}`, kind: "reschedule", activityId: p.activityId, leadId: activity.leadId, leadLabel, when: target, fromDue: activity.dueDate.toISOString(), title: `Move “${activity.summary}” to ${when(at)}`, ...(p.reason ? { reason: p.reason } : {}) });
       }
       continue;
@@ -2988,9 +2999,9 @@ export async function resolveActions(
     if (p.type === "customer_note") {
       // Only a customer this person can open, and not one in the bin. addCommunication
       // checks access again when the card is confirmed.
-      if (!(await canAccessContact(user, p.contactId))) continue;
+      if (!(await canAccessContact(user, p.contactId))) { problems.push(CUSTOMER_GONE); continue; }
       const contact = await prisma.contact.findFirst({ where: { id: p.contactId, deletedAt: null }, select: { firstName: true, lastName: true } });
-      if (!contact) continue;
+      if (!contact) { problems.push(CUSTOMER_GONE); continue; }
       if (p.attachImage && !image) { problems.push(NO_IMAGE_TO_ATTACH); continue; }
       const name = [contact.firstName, contact.lastName].filter(Boolean).join(" ");
       cards.push({
@@ -3248,16 +3259,16 @@ export async function resolveActions(
       let leadLabel = "Your calendar";
       let who: string | null = null;
       if (p.leadId) {
-        if (!(await canAccessLead(user, p.leadId))) continue;
+        if (!(await canAccessLead(user, p.leadId))) { problems.push(DEAL_GONE); continue; }
         const lead = await prisma.lead.findUnique({ where: { id: p.leadId }, select: { name: true, title: true } });
-        if (!lead) continue;
+        if (!lead) { problems.push(DEAL_GONE); continue; }
         leadId = p.leadId;
         leadLabel = `${lead.name} — ${lead.title}`;
         who = lead.name;
       } else if (p.contactId) {
         if (!(await canAccessContact(user, p.contactId))) { problems.push("I can't open that customer for you, so the item can't go on them."); continue; }
         const contact = await prisma.contact.findFirst({ where: { id: p.contactId, deletedAt: null }, select: { firstName: true, lastName: true, company: true } });
-        if (!contact) continue;
+        if (!contact) { problems.push(CUSTOMER_GONE); continue; }
         contactId = p.contactId;
         who = [contact.firstName, contact.lastName].filter(Boolean).join(" ") || contact.company || "the customer";
         leadLabel = who;
@@ -3267,20 +3278,24 @@ export async function resolveActions(
       if (p.type === "follow_up") {
         const when = p.when.includes("T") ? p.when : `${p.when}T09:00`;
         const at = new Date(`${when}:00+02:00`);
-        if (Number.isNaN(at.getTime()) || at.getTime() < Date.now() - 60 * 60 * 1000) continue;
+        if (Number.isNaN(at.getTime())) { problems.push(BAD_TIME); continue; }
+        if (at.getTime() < Date.now() - 60 * 60 * 1000) { problems.push(passed(when.replace("T", " "))); continue; }
         const label = at.toLocaleString("en-ZA", { timeZone: "Africa/Johannesburg", weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
         const what = p.summary ?? `Follow-up ${p.activity}`;
         cards.push({ id, kind: "follow_up", ...on, title: `${what}${who ? ` with ${who}` : ""} — ${label}`, when, activity: p.activity, summary: p.summary, ...(p.reason ? { reason: p.reason } : {}) });
       } else {
         const start = new Date(`${p.when}:00+02:00`);
-        if (Number.isNaN(start.getTime()) || start.getTime() < Date.now()) continue;
+        if (Number.isNaN(start.getTime())) { problems.push(BAD_TIME); continue; }
+        if (start.getTime() < Date.now()) { problems.push(passed(when(start))); continue; }
         const end = new Date(start.getTime() + (p.minutes ?? 60) * 60_000);
-        const people = (p.with ?? [])
-          .map((name) => {
-            const wanted = name.trim().toLowerCase();
-            return staff.find((s) => s.name.toLowerCase() === wanted) ?? staff.find((s) => s.name.toLowerCase().startsWith(wanted));
-          })
-          .filter((s): s is (typeof staff)[number] => Boolean(s) && s!.id !== user.id);
+        const matched = (p.with ?? []).map((name) => {
+          const wanted = name.trim().toLowerCase();
+          return { name, staff: staff.find((s) => s.name.toLowerCase() === wanted) ?? staff.find((s) => s.name.toLowerCase().startsWith(wanted)) };
+        });
+        // A colleague it can't find is said, not dropped: the meeting would otherwise be booked without them.
+        const unknown = matched.filter((m) => !m.staff).map((m) => `"${m.name}"`);
+        if (unknown.length) { problems.push(`I can't find a colleague called ${unknown.join(" or ")} — say their name as it is in the CRM.`); continue; }
+        const people = matched.map((m) => m.staff).filter((s): s is (typeof staff)[number] => Boolean(s) && s!.id !== user.id);
         const summary = p.summary ?? (who ? `Meeting with ${who}` : "Meeting");
         cards.push({
           id, kind: "meeting", ...on, title: `${summary} — ${when(start)}`,
@@ -3295,15 +3310,15 @@ export async function resolveActions(
       // A TEST DRIVE (TEST_DRIVE_RULE) with a customer — on their deal, or on them directly. In a demo vehicle from
       // stock ONLY when one is named: the CRM's booking never needed one (Sean, 2026-10-29), and this used to drop
       // the card whenever none was named, or the one named had no branch.
-      if (!(await isModuleEnabled("automotive"))) continue;
+      if (!(await isModuleEnabled("automotive"))) { problems.push("Test drives are part of the Automotive module, which is switched off in this workspace."); continue; }
       let leadId: string | null = null;
       let leadLabel: string;
       let who: string;
       let contactId: string;
       if (p.leadId) {
-        if (!(await canAccessLead(user, p.leadId))) continue;
+        if (!(await canAccessLead(user, p.leadId))) { problems.push(DEAL_GONE); continue; }
         const lead = await prisma.lead.findUnique({ where: { id: p.leadId }, select: { name: true, title: true, contactId: true } });
-        if (!lead) continue;
+        if (!lead) { problems.push(DEAL_GONE); continue; }
         if (!lead.contactId) { problems.push(`${lead.name}'s deal has no customer record yet, so a test drive can't be booked on it.`); continue; }
         leadId = p.leadId;
         leadLabel = `${lead.name} — ${lead.title}`;
@@ -3312,7 +3327,7 @@ export async function resolveActions(
       } else if (p.contactId) {
         if (!(await canAccessContact(user, p.contactId))) { problems.push("I can't open that customer for you, so I can't book them a test drive."); continue; }
         const contact = await prisma.contact.findFirst({ where: { id: p.contactId, deletedAt: null }, select: { firstName: true, lastName: true, company: true } });
-        if (!contact) continue;
+        if (!contact) { problems.push(CUSTOMER_GONE); continue; }
         who = [contact.firstName, contact.lastName].filter(Boolean).join(" ") || contact.company || "the customer";
         leadLabel = who;
         contactId = p.contactId;
@@ -3321,7 +3336,8 @@ export async function resolveActions(
         continue;
       }
       const start = new Date(`${p.when}:00+02:00`);
-      if (Number.isNaN(start.getTime()) || start.getTime() < Date.now()) continue;
+      if (Number.isNaN(start.getTime())) { problems.push(BAD_TIME); continue; }
+      if (start.getTime() < Date.now()) { problems.push(passed(when(start))); continue; }
       const end = new Date(start.getTime() + (p.minutes ?? 60) * 60_000);
       // The demo vehicle, only when one is named — and then one that is in stock.
       let demo: { id: string; name: string; branch: string | null } | null = null;
@@ -3348,7 +3364,7 @@ export async function resolveActions(
       });
       continue;
     }
-    if (!(await canAccessLead(user, p.leadId))) continue;
+    if (!(await canAccessLead(user, p.leadId))) { problems.push(DEAL_GONE); continue; }
     const lead = await prisma.lead.findUnique({
       where: { id: p.leadId },
       select: {
@@ -3358,7 +3374,7 @@ export async function resolveActions(
         nurtureReason: true, nurtureInterest: true, nurtureTrigger: true, nurtureReviewAt: true,
       },
     });
-    if (!lead) continue;
+    if (!lead) { problems.push(DEAL_GONE); continue; }
     const id = `a${index}-${p.leadId}`;
     const leadLabel = `${lead.name} — ${lead.title}`;
     if (p.type === "note") {

@@ -26,7 +26,7 @@ test("the evidence lookups parse, and anything outside their schema is refused",
   });
   assert.equal(parseStep('{"tool":"search_messages","args":{"words":"delivery"}}'), null, "a customer is required — never a workspace-wide trawl");
   assert.equal(parseStep('{"tool":"search_messages","args":{"customer":"W","channel":"email; DROP"}}'), null);
-  assert.equal(parseStep('{"tool":"search_messages","args":{"customer":"W","limit":50}}'), null);
+  assert.deepEqual(parseStep('{"tool":"search_messages","args":{"customer":"W","limit":50}}'), { tool: "search_messages", args: { customer: "W", limit: 20 } }, "too many → the most, not thrown away");
   assert.deepEqual(parseStep('{"tool":"open_message","args":{"id":"cmabcdefghijklmnopqrstuv","thread":true}}'), {
     tool: "open_message", args: { id: "cmabcdefghijklmnopqrstuv", thread: true },
   });
