@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { parseStep } from "../src/lib/crmAssistantPlan";
-import { searchStems } from "../src/lib/crmAssistantEvidence";
 
 const src = (rel: string) => readFileSync(new URL(`../${rel}`, import.meta.url), "utf8").replace(/\r\n/g, "\n");
 
@@ -15,8 +14,8 @@ test("DAX can pass other wordings with a message search", () => {
   const step = parseStep('{"tool":"search_messages","args":{"customer":"Anna","words":"complaint","alternatives":["still waiting","not arrived"]}}');
   assert.deepEqual(step, { tool: "search_messages", args: { customer: "Anna", words: "complaint", alternatives: ["still waiting", "not arrived"] } });
   assert.equal(parseStep(`{"tool":"search_messages","args":{"customer":"Anna","alternatives":${JSON.stringify(Array(7).fill("x y"))}}}`), null, "at most 6");
-  // With wordings the search may use more stems (16, not 8): "still" from "still waiting" is one of them.
-  assert.ok(searchStems("complaint still waiting not arrived where is my late", 16).includes("still"));
+  // With wordings the search uses the words AND them, and more stems (16, not 8). (crmAssistantEvidence is server-only.)
+  assert.match(src("src/lib/crmAssistantEvidence.ts"), /searchStems\(\[args\.words, \.\.\.\(args\.alternatives \?\? \[\]\)\]\.filter\(Boolean\)\.join\(" "\), args\.alternatives\?\.length \? 16 : 8\)/);
 });
 
 test("when the words find little, the latest messages come along to be read for meaning — inside the budget", () => {
