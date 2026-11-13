@@ -144,7 +144,9 @@ export function speakableText(written: string, opts: { afrikaans?: boolean; pron
     .split(/\r?\n/)
     .map((raw) => {
       const bullet = /^\s*(?:[-•–]\s+|\d+[.)]\s+)/.test(raw);
-      const text = raw.replace(/^\s*(?:[-•–]\s+|[>#]+\s*|\d+[.)]\s+)/, "").replace(/\s+/g, " ").trim();
+      // A table row ("| Anna | Quoted | R185 000 |") is said as a short list; its "|---|" rule has no words and goes.
+      const row = /^\s*\|.*\|\s*$/.test(raw) ? raw.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim()).filter(Boolean).join(", ") : raw;
+      const text = row.replace(/^\s*(?:[-•–]\s+|[>#]+\s*|\d+[.)]\s+)/, "").replace(/\s+/g, " ").trim();
       return { bullet, text };
     })
     .filter((line) => /[\p{L}\p{N}]/u.test(line.text));

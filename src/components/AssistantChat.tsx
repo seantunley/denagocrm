@@ -17,6 +17,7 @@ import { audioForm, useVoiceRecorder } from "@/components/useVoiceRecorder";
 import type { ActionCard } from "@/lib/assistantActions";
 import AssistantActionCard from "@/components/AssistantActionCard";
 import AssistantPlanCard from "@/components/AssistantPlanCard";
+import AnswerMarkup from "@/components/AnswerMarkup";
 
 type Turn = {
   question: string; answer?: string; cited?: string; evidence?: Evidence[]; turnId?: string;
@@ -36,34 +37,14 @@ const scheduledLabel = (turn: Turn) =>
               : null;
 
 /**
- * The answer, with its evidence: each [[n]] the server numbered becomes a small
- * chip that opens the record the fact came from. Only links the server kept —
- * ones its own lookups returned — ever reach here.
+ * The answer, formatted (bold, lists, small tables, links — AnswerMarkup), with its evidence: each [[n]] the server
+ * numbered becomes a small chip that opens the record the fact came from. Only links the server kept — ones its own
+ * lookups returned — ever become chips.
  */
 function AnswerText({ turn }: { turn: Turn }) {
   if (turn.stopped) return <p className="text-sm text-muted-foreground">⏹ {ASK_STOPPED}</p>;
-  if (!turn.cited || !turn.evidence?.length) return <p className="whitespace-pre-line text-sm leading-relaxed">{turn.answer}</p>;
-  const parts = turn.cited.split(/\[\[(\d+)\]\]/);
-  return (
-    <p className="whitespace-pre-line text-sm leading-relaxed">
-      {parts.map((part, i) => {
-        if (i % 2 === 0) return part;
-        const source = turn.evidence![Number(part) - 1];
-        if (!source) return null;
-        return (
-          <Link
-            key={i}
-            href={source.href}
-            title={`Open ${source.label}`}
-            className="mx-0.5 inline-flex max-w-[12rem] items-center gap-0.5 truncate rounded-full border border-primary/30 bg-primary/5 px-1.5 align-baseline text-[11px] font-medium text-primary hover:bg-primary/10"
-          >
-            {source.label}
-            <ArrowUpRight className="size-3 shrink-0" />
-          </Link>
-        );
-      })}
-    </p>
-  );
+  if (!turn.cited || !turn.evidence?.length) return <AnswerMarkup text={turn.answer ?? ""} />;
+  return <AnswerMarkup text={turn.cited} evidence={turn.evidence} />;
 }
 
 const AUTO_ASKED = new Set<number>();
