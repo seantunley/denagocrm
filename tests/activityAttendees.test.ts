@@ -24,7 +24,9 @@ test("scheduling checks and locks every person, and stamps the attendee rows", (
   assert.match(schedule, /const attendees = await resolveAttendees\(formData, assignedToId\);/);
   assert.match(schedule, /const people = \[assignedToId, \.\.\.attendees\.map\(\(person\) => person\.id\)\];/);
   assert.match(schedule, /lockStaffSchedules\(tx, scheduleTenant, people\);\s*for \(const userId of people\) \{\s*const conflict = await findStaffAvailabilityConflict/);
-  assert.match(schedule, /attendees: \{ create: attendees\.map\(\(person\) => \(\{ userId: person\.id, tenantId: scheduleTenant \}\)\) \}/);
+  // Flat, never nested in the activity create: the tenant guard refuses a nested relation write (2026-11-13, HYT9W5).
+  assert.match(schedule, /tx\.activityAttendee\.createMany\(\{\s*data: attendees\.map\(\(person\) => \(\{ activityId: created\.id, userId: person\.id, tenantId: scheduleTenant \}\)\)/);
+  assert.doesNotMatch(schedule, /attendees: \{ create/);
   assert.match(schedule, /if \(workshop && attendees\.length\) refuse\(/);
 });
 

@@ -162,7 +162,10 @@ async function updateCrmFromFlow(node: Extract<FlowNode, { type: "crm" }>, match
     const name = (node.tagName ?? "").replace(/\s+/g, " ").trim().slice(0, 40);
     if (!name || !match.contactId) return { ok: false, reason: !name ? "No tag chosen" : "No customer record to tag" };
     const tag = await prisma.tag.upsert({ where: { tenantId_name: { tenantId, name } }, create: { tenantId, name }, update: {}, select: { id: true } });
-    await prisma.contact.update({ where: { id: match.contactId }, data: { tags: { connect: { id: tag.id } } } });
+    // Tags are a plain many-to-many with no join model, so the link can only be written nested — which the scoped
+    // client refuses under tenant enforcement. The unscoped client, held to this workspace's contact by `tenantId`
+    // in the where (as merge.ts does for tags).
+    await basePrisma.contact.update({ where: { id: match.contactId, tenantId }, data: { tags: { connect: { id: tag.id } } } });
     await audit(`Tagged “${name}” by the chatbot`, { contactId: match.contactId });
     return { ok: true };
   }
