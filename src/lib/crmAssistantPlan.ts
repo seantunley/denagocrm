@@ -191,6 +191,8 @@ export const stuckArgs = z.object({ lead: z.string().trim().min(1).max(120) }).s
 export const catchUpArgs = z.object({ since: isoDay.optional() }).strict();
 /** Lost deals that came back to life: `mine` narrows to theirs or nobody's (the morning brief's). */
 export const lostAliveArgs = z.object({ mine: z.boolean().optional() }).strict();
+/** Notes ADDED on a day or a period, across everything the person may open, with who added each (assistantNotesLookup). */
+export const notesArgs = z.object({ from: isoDay, to: isoDay.optional(), by: name.optional(), limit: z.number().int().min(1).max(40).optional() }).strict();
 /** What the business knows: products, prices, approved answers, competitors. */
 export const knowledgeArgs = z.object({ topic: z.string().trim().min(1).max(200) }).strict();
 /** The one search (lib/crmSearch.ts) across everything the asker may open, when no customer is named. */
@@ -229,6 +231,7 @@ export const assistantStep = z.discriminatedUnion("tool", [
   z.object({ tool: z.literal("stuck"), args: stuckArgs }),
   z.object({ tool: z.literal("catch_up"), args: catchUpArgs.default({}) }),
   z.object({ tool: z.literal("lost_alive"), args: lostAliveArgs.default({}) }),
+  z.object({ tool: z.literal("notes"), args: notesArgs }),
   z.object({ tool: z.literal("stuck_deals"), args: z.object({}).strict().default({}) }),
   z.object({ tool: z.literal("knowledge"), args: knowledgeArgs }),
   z.object({ tool: z.literal("recall"), args: recallArgs }),
@@ -294,6 +297,7 @@ export function planInstructions(ctx: PlanContext): string {
     '- why: {"record":"<customer name, lead title, quote number (Q-1031) or id — the page\'s record id works too>" (required)} — WHY something happened on one record: its history, each event with its CAUSE as recorded (the person who did it, the journey and step, the chatbot and its handoff reason, lead routing, the customer\'s own action — or "not recorded"): stage moves and who made them, who it was assigned to and by what, why it was marked lost, why a customer got a message (or why a journey did not enrol them / stopped), why the bot handed a chat over. Use it for every "why did…" / "how come…" / "who moved / sent / assigned…" question about a record; it usually answers on its own ("then":"answer").',
     '- stuck: {"lead":"<customer name, lead title or id>" (required)} — why ONE deal is stuck, with evidence: its blockers RANKED, each with its date and a link to the record it comes from (the customer waiting on us, an overdue follow-up, the quote unopened / declined / expiring, the deposit, time in the stage against its limit, no next step, the customer gone quiet), plus the facts behind them. Run it for every "why is X stuck / stalled / not moving / gone quiet / not closing"; it usually answers on its own ("then":"answer"). For "which of my deals are stuck", use stuck_deals.',
     '- catch_up: {"since":"YYYY-MM-DD" (only when they name a day)} — what changed on THEIR OWN deals since their last question to you (at most 7 days back): new customer messages, quotes opened / opened again / signed, stage moves by someone else, new leads for them, and their overdue and due-today tasks. Run it for "catch me up", "what\'s changed", "what did I miss", "anything new (since…)"; it answers on its own ("then":"answer").',
+    '- notes: {"from":"YYYY-MM-DD" (required),"to":"YYYY-MM-DD","by":"<colleague who added them>"} — every NOTE ADDED on that day (or from–to), on all the deals and customers they may open, each with when it was added, which customer and deal it is on, WHO added it, and its words. Run it for "which notes were added yesterday", "what notes did Donovan add this week", "summarise yesterday\'s notes" — search_messages is one customer at a time and find_activities is the calendar, neither lists notes across the CRM.',
     '- lost_alive: {"mine":true (only their own deals and unassigned ones)} — deals marked LOST in the last 90 days for a went-quiet or timing reason ("gone cold", "stopped responding", "buying later") where the customer has since messaged or opened a quote: each with when and why it was lost and what the customer did since. Run it for "which lost deals are still alive", "any lost deals worth another look", "lost but not really lost"; it answers on its own ("then":"answer"), offering a nurture or reopen card for each.',
     '- stuck_deals: {} — THEIR most-stuck open deals (the three furthest past their stage\'s time limit), each with its top reason from the stuck check and its link — and, for someone who sees a team\'s deals, the team\'s worst five. Run it for "which of my deals are stuck", "my stuck deals", and the Monday brief; it answers on its own ("then":"answer").',
     '- knowledge: {"topic":"<what to look up>" (required)} — the business\'s own knowledge: products and prices (each with its productId), approved answers (finance, warranty, policies…), company details, competitor intelligence. ALWAYS run this when the person asks for a quote or names a product to quote — a quote can only be built from products found here.',
@@ -420,6 +424,7 @@ const LOOKUP_STATUS: Record<string, string> = {
   stuck: "Working out what's holding it up",
   catch_up: "Catching you up",
   lost_alive: "Checking lost deals for signs of life",
+  notes: "Reading the notes added",
   stuck_deals: "Finding your most-stuck deals",
   find_activities: "Checking activities",
   knowledge: "Checking what the business knows",
