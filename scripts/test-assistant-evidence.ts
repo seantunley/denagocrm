@@ -62,7 +62,7 @@ const SURNAME = `Evid${SFX}`;
 const C = { hendrik: cid(), hendrik2: cid(), strangers: cid() };
 const L = { mine: cid(), theirs: cid(), strangers: cid() };
 const CONV = cid();
-const M = { promise: cid(), askDate: cid(), bounced: cid(), long: cid(), theirDeal: cid(), phoned: cid(), otherTenant: cid(), unmatched: cid(), huge: cid() };
+const M = { promise: cid(), askDate: cid(), bounced: cid(), long: cid(), theirDeal: cid(), phoned: cid(), otherTenant: cid(), unmatched: cid(), huge: cid(), waiting: cid() };
 const D = { contract: cid(), scan: cid(), long: cid(), photo: cid(), outsiders: cid(), otherTenant: cid(), strangers: cid() };
 const UPLOADS = path.join(process.cwd(), "storage", "uploads");
 const stored = (id: string) => `evidence-test-${SFX}-${id}`;
@@ -70,7 +70,11 @@ const DAY = 86_400_000;
 
 const inT = <R>(fn: () => Promise<R>) => runInTenantScope({ tenantId: T, system: false }, fn);
 const inT2 = <R>(fn: () => Promise<R>) => runInTenantScope({ tenantId: T2, system: false }, fn);
-type Data = Record<string, unknown> & { note?: string; messages?: { id: string; excerpt: string; status?: string; deal?: string }[] };
+type Data = Record<string, unknown> & {
+  note?: string; meaningNote?: string;
+  messages?: { id: string; excerpt: string; status?: string; deal?: string }[];
+  readForMeaning?: { id: string; excerpt: string }[];
+};
 const first = (out: { data: unknown[] }) => out.data[0] as Data;
 
 async function textPdf(pages: string[]): Promise<Buffer> {
@@ -142,6 +146,8 @@ async function seed() {
       { id: M.long, tenantId: T, contactId: C.hendrik, leadId: L.mine, userId: rep.id, type: "email", direction: "outbound", occurredAt: ago(8), subject: "Summary", body: longBody, openToken: `tok${SFX}`.padEnd(30, "x"), seenAt: ago(7), openCount: 2 },
       // A colleague's deal on the same customer, in the same email thread: never the rep's to see.
       { id: M.theirDeal, tenantId: T, contactId: C.hendrik, leadId: L.theirs, userId: outsider.id, type: "email", direction: "outbound", occurredAt: ago(9.5), conversationId: CONV, subject: "Fleet", body: "Fleet delivery secret price R9,999." },
+      // A complaint about delivery that never says "delivery" or "complain" (search by meaning, Sean 2026-11-13).
+      { id: M.waiting, tenantId: T, contactId: C.hendrik, leadId: L.mine, userId: rep.id, type: "whatsapp", direction: "inbound", occurredAt: ago(4), body: "Still waiting for my bike, it has been three weeks now." },
       // On the customer, on no deal: on the customer's timeline AND each of his deals'.
       { id: M.phoned, tenantId: T, contactId: C.hendrik, leadId: null, userId: rep.id, type: "call", direction: "inbound", occurredAt: ago(5), body: "Hendrik phoned about deliveries in November." },
       { id: M.otherTenant, tenantId: T2, contactId: C.hendrik2, userId: otherOwner.id, type: "whatsapp", direction: "outbound", occurredAt: ago(3), body: "Other workspace delivery R1." },
@@ -237,8 +243,19 @@ async function main() {
     const filtered = first(await inT(() => searchMessages(rep, { customer: hendrik, channel: "email", direction: "outbound", from: new Date(Date.now() - 9.2 * DAY).toISOString().slice(0, 10) })));
     const fids = (filtered.messages ?? []).map((m) => m.id);
     check("channel, direction and date filters apply", fids.includes(M.bounced) && fids.includes(M.long) && !fids.includes(M.promise) && !fids.includes(M.askDate), JSON.stringify(fids));
+    // Nothing matches the words: the customer's latest messages come along to be read for meaning (no longer a dead end).
     const none = first(await inT(() => searchMessages(rep, { customer: hendrik, words: "helicopter" })));
-    check("nothing found says so — and that words match by stem, not meaning", /No message/.test(none.note ?? "") && /not by meaning/.test(none.note ?? ""));
+    const noneRead = (none.readForMeaning ?? []).map((m) => m.id);
+    check("no word match → no matches, but the latest messages to read for meaning", !(none.messages ?? []).length && noneRead.includes(M.waiting) && /READ FOR MEANING/.test(none.meaningNote ?? ""), JSON.stringify(none).slice(0, 300));
+    check("…held to what the rep may see: never a colleague's deal, another workspace, or an unmatched message", !noneRead.includes(M.theirDeal) && !noneRead.includes(M.otherTenant) && !noneRead.includes(M.unmatched));
+
+    console.log("\nsearch_messages — by meaning");
+    const meant = first(await inT(() => searchMessages(rep, { customer: hendrik, words: "complaint", alternatives: ["still waiting", "not arrived", "where is my"] })));
+    check("other wordings find 'Still waiting for my bike' — a complaint that never says so", (meant.messages ?? []).some((m) => m.id === M.waiting), JSON.stringify(meant).slice(0, 300));
+    const plenty = first(await inT(() => searchMessages(rep, { customer: hendrik, words: "delivery deliver" })));
+    check("plenty of word matches → no extra reading", !plenty.readForMeaning);
+    const asked = first(await inT(() => searchMessages(rep, { customer: hendrik, words: "complaint" })));
+    check("the bare word alone misses it — and then it is handed over to be read", !(asked.messages ?? []).some((m) => m.id === M.waiting) && (asked.readForMeaning ?? []).some((m) => m.id === M.waiting && /Still waiting for my bike/.test(m.excerpt)));
     const capped = await inT(() => searchMessages(rep, { customer: hendrik, limit: 2 }));
     check("limit holds, and it says there are more", ((first(capped).messages ?? []).length === 2) && capped.truncated);
     const byId = first(await inT(() => searchMessages(rep, { customer: C.hendrik, words: "delivery" })));
