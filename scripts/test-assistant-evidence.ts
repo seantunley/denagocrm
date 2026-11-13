@@ -27,6 +27,8 @@ import { DEFAULT_TENANT_ID } from "../src/lib/tenant";
 import { runInTenantScope } from "../src/lib/tenantScope";
 import { __setTenantEnforcingForTests } from "../src/lib/tenantEnforcement";
 import { EVIDENCE_CHARS, openMessage, readDocument, searchMessages } from "../src/lib/crmAssistantEvidence";
+import { __setPictureReaderForTests } from "../src/lib/assistantFileReading";
+import sharp from "sharp";
 import type { PermissionUser } from "../src/lib/permissions";
 
 const SFX = Math.random().toString(36).slice(2, 10);
@@ -62,15 +64,19 @@ const SURNAME = `Evid${SFX}`;
 const C = { hendrik: cid(), hendrik2: cid(), strangers: cid() };
 const L = { mine: cid(), theirs: cid(), strangers: cid() };
 const CONV = cid();
-const M = { promise: cid(), askDate: cid(), bounced: cid(), long: cid(), theirDeal: cid(), phoned: cid(), otherTenant: cid(), unmatched: cid(), huge: cid() };
-const D = { contract: cid(), scan: cid(), long: cid(), photo: cid(), outsiders: cid(), otherTenant: cid(), strangers: cid() };
+const M = { promise: cid(), askDate: cid(), bounced: cid(), long: cid(), theirDeal: cid(), phoned: cid(), otherTenant: cid(), unmatched: cid(), huge: cid(), waiting: cid(), photoMsg: cid(), theirPhoto: cid(), voice: cid() };
+const D = { contract: cid(), scan: cid(), long: cid(), photo: cid(), outsiders: cid(), otherTenant: cid(), strangers: cid(), longScan: cid(), drawn: cid(), sheet: cid(), word: cid(), msgPhoto: cid(), msgTheirs: cid() };
 const UPLOADS = path.join(process.cwd(), "storage", "uploads");
 const stored = (id: string) => `evidence-test-${SFX}-${id}`;
 const DAY = 86_400_000;
 
 const inT = <R>(fn: () => Promise<R>) => runInTenantScope({ tenantId: T, system: false }, fn);
 const inT2 = <R>(fn: () => Promise<R>) => runInTenantScope({ tenantId: T2, system: false }, fn);
-type Data = Record<string, unknown> & { note?: string; messages?: { id: string; excerpt: string; status?: string; deal?: string }[] };
+type Data = Record<string, unknown> & {
+  note?: string; meaningNote?: string;
+  messages?: { id: string; excerpt: string; status?: string; deal?: string }[];
+  readForMeaning?: { id: string; excerpt: string }[];
+};
 const first = (out: { data: unknown[] }) => out.data[0] as Data;
 
 async function textPdf(pages: string[]): Promise<Buffer> {
@@ -84,12 +90,21 @@ async function textPdf(pages: string[]): Promise<Buffer> {
   return Buffer.from(await doc.save());
 }
 /** A "scan": pages with only pictures on them — here, shapes — and no text layer at all. */
-async function scanPdf(): Promise<Buffer> {
+/** A real picture (a scanner's page, a photo) — a plain light rectangle, big enough to count as a page. */
+const picture = (format: "png" | "jpeg") =>
+  sharp({ create: { width: 900, height: 1200, channels: 3, background: { r: 235, g: 235, b: 235 } } })[format]().toBuffer();
+
+/** A scan: each page ONE big picture and no text — what a scanner produces. */
+async function scanPdf(pages = 2): Promise<Buffer> {
   const doc = await PDFDocument.create();
-  for (let i = 0; i < 2; i++) {
-    const page = doc.addPage([595, 842]);
-    page.drawRectangle({ x: 40, y: 200, width: 500, height: 500, color: rgb(0.8, 0.8, 0.8) });
-  }
+  const image = await doc.embedPng(await picture("png"));
+  for (let i = 0; i < pages; i++) doc.addPage([595, 842]).drawImage(image, { x: 0, y: 0, width: 595, height: 842 });
+  return Buffer.from(await doc.save());
+}
+/** A "scan" whose pages are vector drawings, with no picture to take out. */
+async function drawnPdf(): Promise<Buffer> {
+  const doc = await PDFDocument.create();
+  doc.addPage([595, 842]).drawRectangle({ x: 40, y: 200, width: 500, height: 500, color: rgb(0.8, 0.8, 0.8) });
   return Buffer.from(await doc.save());
 }
 
@@ -142,9 +157,16 @@ async function seed() {
       { id: M.long, tenantId: T, contactId: C.hendrik, leadId: L.mine, userId: rep.id, type: "email", direction: "outbound", occurredAt: ago(8), subject: "Summary", body: longBody, openToken: `tok${SFX}`.padEnd(30, "x"), seenAt: ago(7), openCount: 2 },
       // A colleague's deal on the same customer, in the same email thread: never the rep's to see.
       { id: M.theirDeal, tenantId: T, contactId: C.hendrik, leadId: L.theirs, userId: outsider.id, type: "email", direction: "outbound", occurredAt: ago(9.5), conversationId: CONV, subject: "Fleet", body: "Fleet delivery secret price R9,999." },
+      // A complaint about delivery that never says "delivery" or "complain" (search by meaning, Sean 2026-11-13).
+      { id: M.waiting, tenantId: T, contactId: C.hendrik, leadId: L.mine, userId: rep.id, type: "whatsapp", direction: "inbound", occurredAt: ago(4), body: "Still waiting for my bike, it has been three weeks now." },
       // On the customer, on no deal: on the customer's timeline AND each of his deals'.
       { id: M.phoned, tenantId: T, contactId: C.hendrik, leadId: null, userId: rep.id, type: "call", direction: "inbound", occurredAt: ago(5), body: "Hendrik phoned about deliveries in November." },
       { id: M.otherTenant, tenantId: T2, contactId: C.hendrik2, userId: otherOwner.id, type: "whatsapp", direction: "outbound", occurredAt: ago(3), body: "Other workspace delivery R1." },
+      // Pictures customers SENT (reading more files, 2026-11-13): one on the rep's deal, one on the colleague's, and a
+      // voice note — which can't be read.
+      { id: M.photoMsg, tenantId: T, contactId: C.hendrik, leadId: L.mine, userId: rep.id, type: "whatsapp", direction: "inbound", occurredAt: ago(1), body: "🖼 Image", attachmentUrl: stored(D.msgPhoto), attachmentType: "image" },
+      { id: M.theirPhoto, tenantId: T, contactId: C.hendrik, leadId: L.theirs, userId: outsider.id, type: "whatsapp", direction: "inbound", occurredAt: ago(1), body: "🖼 Image", attachmentUrl: stored(D.msgTheirs), attachmentType: "image" },
+      { id: M.voice, tenantId: T, contactId: C.hendrik, leadId: L.mine, userId: rep.id, type: "whatsapp", direction: "inbound", occurredAt: ago(1), body: "🎤 Voice note", attachmentUrl: stored(D.msgPhoto), attachmentType: "audio" },
       // An inbox message nobody matched to a customer.
       { id: M.unmatched, tenantId: T, userId: rep.id, type: "email", direction: "inbound", occurredAt: ago(2), body: "Unmatched delivery enquiry." },
     ],
@@ -161,7 +183,11 @@ async function seed() {
     [D.contract, contract, "Rover XL sales agreement (signed).pdf", "application/pdf", C.hendrik, rep.id],
     [D.scan, await scanPdf(), "Hendrik ID scan.pdf", "application/pdf", C.hendrik, rep.id],
     [D.long, longPdf, "Hendrik long terms.pdf", "application/pdf", C.hendrik, rep.id],
-    [D.photo, Buffer.from("not a pdf"), "Hendrik cart photo.jpg", "image/jpeg", C.hendrik, rep.id],
+    [D.photo, await picture("jpeg"), "Hendrik cart photo.jpg", "image/jpeg", C.hendrik, rep.id],
+    [D.longScan, await scanPdf(7), "Hendrik old contract scan.pdf", "application/pdf", C.hendrik, rep.id],
+    [D.drawn, await drawnPdf(), "Hendrik drawing.pdf", "application/pdf", C.hendrik, rep.id],
+    [D.sheet, Buffer.from("Item,Price\nRover XL,185000\nDelivery,6500\n"), "Hendrik price list.csv", "text/csv", C.hendrik, rep.id],
+    [D.word, Buffer.from("PK\u0003\u0004 not really a docx"), "Hendrik letter.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", C.hendrik, rep.id],
     [D.strangers, contract, "Petrus agreement.pdf", "application/pdf", C.strangers, stranger.id],
   ];
   for (const [id, bytes, fileName, mimeType, contactId, uploadedById] of files) {
@@ -172,6 +198,9 @@ async function seed() {
   writeFileSync(path.join(UPLOADS, stored(D.outsiders)), contract);
   await basePrisma.document.create({ data: { id: D.outsiders, tenantId: T, fileName: "Fleet agreement.pdf", storedName: stored(D.outsiders), mimeType: "application/pdf", sizeBytes: contract.length, uploadedById: outsider.id } });
   writeFileSync(path.join(UPLOADS, stored(D.otherTenant)), contract);
+  // The pictures the two messages came with (stored like any upload; not documents on file).
+  writeFileSync(path.join(UPLOADS, stored(D.msgPhoto)), await picture("jpeg"));
+  writeFileSync(path.join(UPLOADS, stored(D.msgTheirs)), await picture("jpeg"));
   await basePrisma.document.create({ data: { id: D.otherTenant, tenantId: T2, fileName: "Rover XL sales agreement (signed).pdf", storedName: stored(D.otherTenant), mimeType: "application/pdf", sizeBytes: contract.length, contactId: C.hendrik2, uploadedById: otherOwner.id } });
 }
 
@@ -237,8 +266,19 @@ async function main() {
     const filtered = first(await inT(() => searchMessages(rep, { customer: hendrik, channel: "email", direction: "outbound", from: new Date(Date.now() - 9.2 * DAY).toISOString().slice(0, 10) })));
     const fids = (filtered.messages ?? []).map((m) => m.id);
     check("channel, direction and date filters apply", fids.includes(M.bounced) && fids.includes(M.long) && !fids.includes(M.promise) && !fids.includes(M.askDate), JSON.stringify(fids));
+    // Nothing matches the words: the customer's latest messages come along to be read for meaning (no longer a dead end).
     const none = first(await inT(() => searchMessages(rep, { customer: hendrik, words: "helicopter" })));
-    check("nothing found says so — and that words match by stem, not meaning", /No message/.test(none.note ?? "") && /not by meaning/.test(none.note ?? ""));
+    const noneRead = (none.readForMeaning ?? []).map((m) => m.id);
+    check("no word match → no matches, but the latest messages to read for meaning", !(none.messages ?? []).length && noneRead.includes(M.waiting) && /READ FOR MEANING/.test(none.meaningNote ?? ""), JSON.stringify(none).slice(0, 300));
+    check("…held to what the rep may see: never a colleague's deal, another workspace, or an unmatched message", !noneRead.includes(M.theirDeal) && !noneRead.includes(M.otherTenant) && !noneRead.includes(M.unmatched));
+
+    console.log("\nsearch_messages — by meaning");
+    const meant = first(await inT(() => searchMessages(rep, { customer: hendrik, words: "complaint", alternatives: ["still waiting", "not arrived", "where is my"] })));
+    check("other wordings find 'Still waiting for my bike' — a complaint that never says so", (meant.messages ?? []).some((m) => m.id === M.waiting), JSON.stringify(meant).slice(0, 300));
+    const plenty = first(await inT(() => searchMessages(rep, { customer: hendrik, words: "delivery deliver" })));
+    check("plenty of word matches → no extra reading", !plenty.readForMeaning);
+    const asked = first(await inT(() => searchMessages(rep, { customer: hendrik, words: "complaint" })));
+    check("the bare word alone misses it — and then it is handed over to be read", !(asked.messages ?? []).some((m) => m.id === M.waiting) && (asked.readForMeaning ?? []).some((m) => m.id === M.waiting && /Still waiting for my bike/.test(m.excerpt)));
     const capped = await inT(() => searchMessages(rep, { customer: hendrik, limit: 2 }));
     check("limit holds, and it says there are more", ((first(capped).messages ?? []).length === 2) && capped.truncated);
     const byId = first(await inT(() => searchMessages(rep, { customer: C.hendrik, words: "delivery" })));
@@ -295,10 +335,40 @@ async function main() {
     check("the delivery fee is on page 2", text.find((p) => p.page === 2)?.text.includes("Delivery fee R6,500") === true);
     const byName = first(await inT(() => readDocument(rep, { document: "sales agreement", customer: hendrik })));
     check("found by words in its file name and the customer", byName.pages === 3, JSON.stringify(byName).slice(0, 200));
+    // READING MORE FILES (2026-11-13). The AI is stood in for: what reaches it, and what comes back, is what's checked.
+    const sent: { count: number; about: string }[] = [];
+    __setPictureReaderForTests(async (images, about) => {
+      sent.push({ count: images.length, about });
+      return { ok: true, text: images.map((_, i) => `Picture ${i + 1}: ID 8001015009087, VIN ABC123.`).join("\n") };
+    });
     const scan = first(await inT(() => readDocument(rep, { document: D.scan })));
-    check("a scan is refused as a scan", /is a scan/.test(scan.note ?? "") && !("text" in scan), scan.note);
+    check("a SCAN is read: its page pictures go to the AI and its words come back", /VIN ABC123/.test(String(scan.text)) && scan.pagesRead === "1, 2" && sent.at(-1)?.count === 2, JSON.stringify(scan).slice(0, 300));
+    check("…marked as read from a picture, which can misread", /can misread/.test(scan.note ?? ""));
+    const longScan = await inT(() => readDocument(rep, { document: D.longScan }));
+    check("a long scan reads its first 5 pages and says how to read the rest", first(longScan).pagesRead === "1, 2, 3, 4, 5" && /fromPage 6/.test(String(first(longScan).more)) && longScan.truncated, JSON.stringify(first(longScan)).slice(0, 300));
+    const laterScan = first(await inT(() => readDocument(rep, { document: D.longScan, fromPage: 6 })));
+    check("…and fromPage reads the later ones", laterScan.pagesRead === "6, 7", String(laterScan.pagesRead));
+    const drawn = first(await inT(() => readDocument(rep, { document: D.drawn })));
+    check("a PDF with neither text nor page pictures says so", /no text and no page pictures/.test(drawn.note ?? ""), drawn.note);
     const photo = first(await inT(() => readDocument(rep, { document: D.photo })));
-    check("a photo is not read — only PDFs", /is not a PDF/.test(photo.note ?? ""));
+    check("a PHOTO on file is read", /VIN ABC123/.test(String(photo.text)) && sent.at(-1)?.count === 1, JSON.stringify(photo).slice(0, 200));
+    const sheet = first(await inT(() => readDocument(rep, { document: D.sheet })));
+    check("a CSV is read as it is", /Rover XL,185000/.test(String(sheet.text)), JSON.stringify(sheet).slice(0, 200));
+    const word = first(await inT(() => readDocument(rep, { document: D.word })));
+    check("a Word file says it can't be read yet", /can't read yet/.test(word.note ?? ""), word.note);
+
+    const sentPhoto = first(await inT(() => readDocument(rep, { message: M.photoMsg })));
+    check("a picture a customer SENT is read, by its message", /VIN ABC123/.test(String(sentPhoto.text)), JSON.stringify(sentPhoto).slice(0, 200));
+    const before = sent.length;
+    const theirPhoto = first(await inT(() => readDocument(rep, { message: M.theirPhoto })));
+    check("NEVER the picture on a colleague's deal — and it never reaches the AI", /No message with that id that you can see/.test(theirPhoto.note ?? "") && sent.length === before, theirPhoto.note);
+    const otherWsPhoto = first(await inT2(() => readDocument(otherOwner, { message: M.photoMsg })));
+    check("NEVER another workspace's", /No message with that id/.test(otherWsPhoto.note ?? "") && sent.length === before);
+    const voice = first(await inT(() => readDocument(rep, { message: M.voice })));
+    check("a voice note says it can't be read", /voice note, which I can't read/.test(voice.note ?? ""), voice.note);
+    const plain = first(await inT(() => readDocument(rep, { message: M.promise })));
+    check("a message with nothing attached says so", /no picture or file/.test(plain.note ?? ""), plain.note);
+    __setPictureReaderForTests(null);
     const long = await inT(() => readDocument(rep, { document: D.long }));
     const lp = (first(long).text as { page: number; text: string }[]) ?? [];
     const chars = lp.reduce((n, p) => n + p.text.length, 0);

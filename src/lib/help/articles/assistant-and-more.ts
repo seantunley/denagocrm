@@ -13,9 +13,9 @@ export const assistantAndMoreArticles: HelpArticle[] = [
       { type: "p", text: "**Ask the CRM** is an assistant that reads your CRM for you. Ask it something like \"Which deals should I chase today, and why?\" and it looks up the records, then tells you what it found and what it would do. Your workspace owner can give it its own name (for example DAX), so the page may be titled **Ask** followed by that name." },
       { type: "h", text: "Where to find it" },
       { type: "list", items: [
-        "**The round button at the bottom right of every page.** It opens a small chat window. It knows which page you are on, so on a lead you can simply ask \"What should I do with this one?\".",
-        "**Automation → Ask the CRM** in the sidebar. This is the full page, with your conversation history and your scheduled questions and watches.",
-        "A red dot on the round button means a scheduled answer or a watch has something new for you.",
+        "**The Ask the CRM button at the bottom of the sidebar.** Click it to open a small chat window on any page, and click it again (or press Escape) to close it. It knows which page you are on, so on a lead you can simply ask \"What should I do with this one?\".",
+        "**The full page**, with your conversation history and your scheduled questions and watches: the expand icon at the top of the chat window, or Ctrl-click (Cmd-click on a Mac) the sidebar button to open it in a new tab.",
+        "A red dot on the sidebar button means a scheduled answer or a watch has something new for you.",
       ] },
       { type: "h", text: "Asking a question" },
       { type: "steps", items: [

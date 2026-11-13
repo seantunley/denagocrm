@@ -53,7 +53,7 @@ export const REPORT_MAX_COLUMNS = 6;
  * in the CRM:", capped results said so) still holds.
  */
 export const REPORT_RULE = [
-  "REPORTS. When the person asks for a report, a PDF, a write-up or a document about something in the CRM, look up what it needs and write the answer as a report — still plain text, and every rule above still holds.",
+  "REPORTS. When the person asks for a report, a PDF, a write-up or a document about something in the CRM, look up what it needs and write the answer as a report in the shape below — it replaces the chat formatting above: no **bold** and no | --- | tables in a report. Every other rule above still holds.",
   "First line: \"Report: <short title>\". Then a two- or three-sentence summary of what matters most. Then short sections, each starting with a heading on its own line that ends in a colon, with '-' lists or short paragraphs under it.",
   "A list of records with the same few details each may be a table: one line \"Columns: A | B | C\", then one '-' line per record with exactly that many parts separated by \" | \". At most six columns.",
   "End with one short line telling them to press PDF under this answer to download it with the business's name and logo (asked on WhatsApp or on a schedule: the PDF button is under this answer on their Ask page in the CRM).",
@@ -81,6 +81,9 @@ const EMOJI = /[\p{Extended_Pictographic}\u{FE0F}\u{200D}\u{20E3}\u{1F3FB}-\u{1F
 /** One line as the PDF can print it: no evidence markers, no emoji, no doubled spaces. */
 export function printable(line: string): string {
   return line
+    // The chat's own marks (lib/answerMarkup), should one slip into a report: words only on paper.
+    .replace(/\*\*([^*\n]+?)\*\*/g, "$1")
+    .replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/g, "$1")
     .replace(EVIDENCE, "")
     .replace(EMOJI, "")
     .replace(/[‘’]/g, "'")

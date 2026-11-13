@@ -159,12 +159,18 @@ test("asking for a report or a PDF is researched in depth, not answered in passi
   }
 });
 
+test("the chat's own marks never reach the paper — bold and links come out as their words", () => {
+  assert.equal(printable("The **R185 000** quote for [Anna Jacobs](/leads/cm1) [[2]]"), "The R185 000 quote for Anna Jacobs");
+});
+
 test("the report rule changes how an answer is written, never what may be said", () => {
   assert.ok(ANSWER_RULES.includes(REPORT_RULE));
   assert.ok(ANSWER_RULES.startsWith(DATA_RULE), "the data rule still leads");
-  // Still plain text: the chat and WhatsApp show the answer raw.
-  assert.match(ANSWER_RULES, /Plain text only/);
-  assert.match(REPORT_RULE, /still plain text, and every rule above still holds/);
+  // Chat answers may now use bold, lists and small tables (#1091); a REPORT keeps its own shape, which the PDF lays
+  // out — so the report rule replaces that formatting, and the rest still holds.
+  assert.match(ANSWER_RULES, /Format for reading at a glance/);
+  assert.ok(ANSWER_RULES.indexOf("Format for reading at a glance") < ANSWER_RULES.indexOf(REPORT_RULE), "the report rule comes after, and overrides it");
+  assert.match(REPORT_RULE, /it replaces the chat formatting above: no \*\*bold\*\* and no \| --- \| tables in a report\. Every other rule above still holds\./);
   assert.match(REPORT_RULE, /Report: <short title>/);
   assert.match(REPORT_RULE, /Columns: A \| B \| C/);
   // It never claims to make or send the file, and never to a customer.
