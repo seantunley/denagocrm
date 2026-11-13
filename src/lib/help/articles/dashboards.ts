@@ -67,8 +67,9 @@ export const dashboardArticles: HelpArticle[] = [
       { type: "p", text: "Arranging your own dashboard needs no special permission. If you can sign in, you can move your cards around." },
       { type: "steps", items: [
         "Click **Customise** at the top of the dashboard. Every card grows a dashed outline, a grip handle and a remove button.",
-        "Drag a card by its **grip handle** to move it. The cards around it shuffle live as you drag, so the gap you are about to drop into is the gap you can see.",
+        "Drag a card by its **grip handle** to move it. A dashed box the size of the card shows where it will land, and the card eases into place when you let go.",
         "Prefer the keyboard? Move focus to a grip handle and use the **arrow keys**.",
+        "Drag the **corner handle** at a card's bottom right to make it wider or taller. It snaps to whole columns and rows and shows the size as you pull; press **Escape** to put it back. With the keyboard, focus the corner handle and use the arrow keys.",
         "Click the **✕** on a card to take it off your screen. Nothing is deleted — the records it was summarising are untouched, and you can add the card back.",
         "Add cards from the **Add a card** row. It only ever offers cards you are already allowed to see.",
         "Click **Done** when you have finished.",
@@ -124,6 +125,7 @@ export const dashboardArticles: HelpArticle[] = [
       { type: "h", text: "Details worth knowing" },
       { type: "list", items: [
         "**Stat cards** can show the change against the previous period, and that only works for **This month**, which has Last month to compare against. Any other period shows no comparison rather than an invented one. A stat card can also be given a link, so clicking it opens the list behind the number.",
+        "**Stat and gauge cards** can say whether a higher number is good news or bad news — more overdue work is bad — and the change arrow is coloured to match. Turn on **Colour by threshold** to make the number green, amber or red at levels you choose; the card also says **On track**, **Watch** or **Off track** in words. For money, type the thresholds in rands.",
         "**List cards** show a footer such as \"Showing 8 of 231\" when there were more matches than rows. Leave the columns alone and the card uses the sensible defaults for that source.",
         "**Charts** group by a field with a small set of values — status, stage, owner, priority, province. Grouping by a name or a date would give you one bar per record, which is not a chart. A chart carries at most 24 slices, and when it could not count everything it says **Partial view** rather than quietly under-reporting.",
         "**Gauges** need a target. Set it against the same thing the card counts.",

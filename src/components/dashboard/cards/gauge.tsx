@@ -4,6 +4,8 @@ import { sourceById } from "@/lib/dashboard/sources";
 import { runMetricQuery, scopeContext } from "@/lib/dashboard/compile";
 import { CardShell, type RenderContext, type RenderedCard } from "./shell";
 import { formatMetric, isMoneyField, metricField } from "./values";
+import { scaleBands, toneFor } from "@/lib/dashboard/tone";
+import { TONE_RING, TonePill } from "./tone";
 
 /**
  * Progress against a target.
@@ -84,12 +86,16 @@ export async function renderGauge(card: GaugeCard, ctx: RenderContext): Promise<
     card.unit ? ` ${card.unit}` : ""
   }`;
 
+  // Thresholds are stored in rands for a money metric, like the target above.
+  const tone = toneFor(value, scaleBands(card.bands, asMoney), card.better);
+
   const ring: RingDef = {
     label: readout,
     actual: asMoney ? value / 100 : value,
     target: asMoney ? target / 100 : target,
     display: asMoney ? "zar" : "int",
-    color: "var(--chart-1)",
+    // Coloured by the card's thresholds when it has them; the brand colour otherwise.
+    color: tone ? TONE_RING[tone] : "var(--chart-1)",
   };
 
   return {
@@ -99,6 +105,11 @@ export async function renderGauge(card: GaugeCard, ctx: RenderContext): Promise<
         <div className="[&>div>div]:grid-cols-1">
           <TargetRings rings={[ring]} />
         </div>
+        {tone && (
+          <div className="mt-2 flex justify-center">
+            <TonePill tone={tone} />
+          </div>
+        )}
       </CardShell>
     ),
     // `count` is rows matched and `total` the aggregate, as everywhere else.

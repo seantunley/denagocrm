@@ -496,8 +496,11 @@ test("the editor's own wrapper carries the height, so nothing shifts on Done", (
    * the absolutely-positioned drag chrome into a 22rem click-eating overlay.
    */
   const canvas = read("src/components/dashboard/editor/DashboardCanvas.tsx");
-  assert.match(canvas, /!editing && CARD_MIN_HEIGHT\[card\.rows \?\? 1\]/);
-  assert.match(canvas, /"pointer-events-none select-none", CARD_MIN_HEIGHT\[card\.rows \?\? 1\]/);
+  // `rows` is the card's own rows, or the size being pulled to while its corner
+  // handle is held (DashboardCanvas ResizeHandle) — never anything else.
+  assert.match(canvas, /const rows = draft \? draft\.rows : card\.rows;/);
+  assert.match(canvas, /!editing && CARD_MIN_HEIGHT\[rows \?\? 1\]/);
+  assert.match(canvas, /"pointer-events-none select-none", CARD_MIN_HEIGHT\[rows \?\? 1\]/);
 
   // And the same geometry, resolved: box → wrapper → panel, all three the same
   // height, because only the innermost one has a minimum to meet.
