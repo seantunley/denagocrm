@@ -190,8 +190,13 @@ test("DAX knows the truth about itself: there is a PDF button, and it sends noth
 
 test("only the person who was answered can download the report", () => {
   const route = code("src/app/api/pdf/assistant-report/[turnId]/route.tsx");
-  // Looked up by the answer's id AND their own user id — someone else's id is a 404.
-  assert.match(route, /assistantTurn\.findFirst\(\{\s*where: \{ id: String\(turnId\), userId: user\.id \}/);
+  // Looked up by the answer's id, their own user id AND the workspace being acted in (review of #1093) — someone
+  // else's id, or another workspace's, is a 404. The workspace is resolved BEFORE the lookup.
+  const tenantAt = route.indexOf("const tenantId = ownedWriteTenantId();");
+  assert.ok(tenantAt > 0 && tenantAt < route.indexOf("findReportTurn(tenantId, user.id, String(turnId))"), "workspace first");
+  assert.match(code("src/lib/assistantReportTurn.ts"), /where: \{ id: turnId, userId, tenantId \}/);
+  assert.doesNotMatch(route, /assistantTurn\.findFirst/, "one lookup, the scoped one");
+  assert.match(code("package.json"), /"test:assistant-report-tenant"/, "proved against a real database with enforcement off");
   assert.match(route, /if \(!turn \|\| !turn\.answer\.trim\(\)\) return new Response\("Not found", \{ status: 404 \}\)/);
   // Signed in, allowed to use the assistant, in a workspace that has it, scoped to that workspace.
   assert.match(route, /withActingStaffScope\(/);
