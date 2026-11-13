@@ -9,9 +9,10 @@ import { runAutomaticXeroCheck } from "@/lib/xeroSync";
 export const maxDuration = 60;
 
 /**
- * The hourly automatic Xero payments check (Sean, 2026-11-11: "An automatic
+ * The daily automatic Xero payments check (Sean, 2026-11-11: "An automatic
  * background check of Xero for payments. Today it happens when someone presses
- * Refresh"). Per workspace, only where payments come from Xero and the owner hasn't
+ * Refresh"; 2026-11-13: "once a day, not once an hour" — vercel.json, 06:40 SA).
+ * Per workspace, only where payments come from Xero and the owner hasn't
  * switched it off (Settings → Integrations → Xero) — runAutomaticXeroCheck.
  *
  * ITS OWN ROUTE: the automations route's phases send things and guard their budget

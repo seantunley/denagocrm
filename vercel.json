@@ -58,7 +58,7 @@
     },
     {
       "path": "/api/cron/xero-payments",
-      "schedule": "40 * * * *"
+      "schedule": "40 4 * * *"
     }
   ]
 }

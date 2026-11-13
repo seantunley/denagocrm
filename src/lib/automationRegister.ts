@@ -345,7 +345,7 @@ export const AUTOMATIONS: Automation[] = [
     label: "Xero payments check",
     does: "Checks open invoices in Xero and brings new payments back to the CRM, as Refresh does. Only while payments come from Xero. Sends nothing.",
     reaches: "nobody",
-    when: "Every hour",
+    when: "Once a day, 06:40",
     managedAt: { label: "Integrations → Xero", href: "/settings/integrations" },
     cron: "/api/cron/xero-payments",
   },

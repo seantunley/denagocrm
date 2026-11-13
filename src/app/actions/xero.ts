@@ -454,14 +454,14 @@ export async function setXeroPaymentsSource(formData: FormData): Promise<ActionR
         summary: fromXero ? "Payments now come from Xero — recorded there, brought back by Refresh" : "Payments are recorded in the CRM again (not brought back from Xero)",
         user,
       });
-      // The hourly check's box shows only while payments come from Xero — absent, leave it as it was.
+      // The daily check's box shows only while payments come from Xero — absent, leave it as it was.
       if (formData.get("autoCheckShown") === "1") {
         const autoCheck = formData.get("autoCheck") === "on";
         if (((await getWorkspaceSetting(tenantId, XERO_AUTO_CHECK_KEY)) !== "off") !== autoCheck) {
           await putWorkspaceSetting(tenantId, XERO_AUTO_CHECK_KEY, autoCheck ? "on" : "off");
           await logAudit({
             action: "xero.auto_check",
-            summary: autoCheck ? "Xero is checked for payments automatically every hour" : "The hourly automatic Xero payments check is switched off",
+            summary: autoCheck ? "Xero is checked for payments automatically once a day" : "The daily automatic Xero payments check is switched off",
             user,
           });
         }

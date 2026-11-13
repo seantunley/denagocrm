@@ -284,7 +284,7 @@ export default async function IntegrationsPage({ searchParams }: { searchParams?
                               </span>
                             </span>
                           </label>
-                          {/* The hourly automatic check (2026-11-11) — only relevant while payments come from Xero. */}
+                          {/* The daily automatic check (2026-11-11; once a day since 2026-11-13) — only relevant while payments come from Xero. */}
                           {paymentsFromXero && (
                             <label className="flex items-start gap-2 text-sm">
                               <input type="hidden" name="autoCheckShown" value="1" />
@@ -292,7 +292,7 @@ export default async function IntegrationsPage({ searchParams }: { searchParams?
                               <span>
                                 Check Xero for payments automatically
                                 <span className="block text-[11px] text-muted-foreground">
-                                  Every hour the CRM checks your open invoices in Xero and brings back new payments, as Refresh does — no need to press it.
+                                  Once a day, early in the morning, the CRM checks your open invoices in Xero and brings back new payments, as Refresh does. For anything sooner, press Refresh.
                                   {xeroAutoCheck && (xeroAutoCheckedAt ? ` Last checked ${formatDateTime(xeroAutoCheckedAt, regional)}.` : " Not run yet.")}
                                 </span>
                               </span>

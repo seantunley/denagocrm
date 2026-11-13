@@ -323,9 +323,10 @@ test("Refresh all from Xero: this person's own open invoices in THIS workspace, 
   assert.match(lib, /const REFRESH_ALL_SKIPS = \["PAID", "VOIDED", "DELETED", "SENDING", XERO_UNCONFIRMED\];/, "never refreshes over a send still to settle");
 });
 
-test("the hourly automatic Xero check: Refresh's own routine, per workspace, visible and switchable, never files a PDF", () => {
+test("the daily automatic Xero check: Refresh's own routine, per workspace, visible and switchable, never files a PDF", () => {
   // Sean, 2026-11-11: "An automatic background check of Xero for payments. Today it happens when someone presses Refresh."
-  assert.match(src("vercel.json"), /"path": "\/api\/cron\/xero-payments",\s*"schedule": "40 \* \* \* \*"/);
+  // 2026-11-13: "once a day, not once an hour" — 04:40 UTC, 06:40 in South Africa, before the working day.
+  assert.match(src("vercel.json"), /"path": "\/api\/cron\/xero-payments",\s*"schedule": "40 4 \* \* \*"/);
   const route = src("src/app/api/cron/xero-payments/route.ts");
   assert.match(route, /if \(!isAuthorizedCron\(req\)\) return/);
   assert.match(route, /runCronPerTenant\(/, "each workspace in its own scope");
@@ -333,7 +334,7 @@ test("the hourly automatic Xero check: Refresh's own routine, per workspace, vis
   const order = [
     "if (!(await paymentsComeFromXero(tenantId))) return { skipped:",
     "if ((await getWorkspaceSetting(tenantId, XERO_AUTO_CHECK_KEY)) === \"off\") return { skipped: \"switched-off\" };",
-    "where: openXeroInvoicesWhere(tenantId, null, new Date(Date.now() - XERO_PAID_REVISIT_MS))",
+    "where: openXeroInvoicesWhere(tenantId, null, {",
     "nextXeroRefreshBatch(open, REFRESH_ALL_CAP)",
     "data: { xeroCheckedAt: new Date() }",
     "await refreshOneFromXero(client, tenantId, quote.id, null);",
@@ -356,10 +357,15 @@ test("the hourly automatic Xero check: Refresh's own routine, per workspace, vis
 });
 
 test("review of #1073: a PAID invoice whose payment is reversed in Xero is looked at again, and comes back unpaid", () => {
-  // The hourly check revisits PAID invoices about once a day each, inside the same capped batch.
+  // The daily check looks again at PAID invoices each run, inside the same capped batch — but only for their first
+  // 30 days in Xero (Sean, 2026-11-13: "checked everytime until the rest of time?" — no).
   const where = lib.slice(lib.indexOf("export function openXeroInvoicesWhere("), lib.indexOf("export async function refreshOneFromXero("));
-  assert.match(where, /\.\.\.\(paidCheckedBefore \? \[\{ xeroStatus: "PAID", OR: \[\{ xeroCheckedAt: null \}, \{ xeroCheckedAt: \{ lt: paidCheckedBefore \} \}\] \}\] : \[\]\),/);
-  assert.match(lib, /export const XERO_PAID_REVISIT_MS = 24 \* 60 \* 60 \* 1000;/);
+  assert.match(where, /\[\{ xeroStatus: "PAID", xeroSentAt: \{ gte: paid\.sentAfter \}, OR: \[\{ xeroCheckedAt: null \}, \{ xeroCheckedAt: \{ lt: paid\.checkedBefore \} \}\] \}\]/);
+  assert.match(lib, /export const XERO_PAID_RECHECK_DAYS = 30;/);
+  const run = lib.slice(lib.indexOf("export async function runAutomaticXeroCheck("), lib.indexOf("export function openXeroInvoicesWhere("));
+  assert.match(run, /checkedBefore: new Date\(Date\.now\(\) - XERO_PAID_REVISIT_MS\),\s*sentAfter: new Date\(Date\.now\(\) - XERO_PAID_RECHECK_DAYS \* 24 \* 60 \* 60 \* 1000\),/);
+  // A little under a day, so a run that starts a few minutes earlier than yesterday's still includes them.
+  assert.match(lib, /export const XERO_PAID_REVISIT_MS = 20 \* 60 \* 60 \* 1000;/);
   assert.match(refreshAll, /where: openXeroInvoicesWhere\(tenantId, accessible\),/, "a person's Refresh all is unchanged");
   // A paid invoice checked yesterday is picked before open ones checked an hour ago — it's the longest-ago tried.
   const now = Date.parse("2026-11-12T12:00:00Z");
