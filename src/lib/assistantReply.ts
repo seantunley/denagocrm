@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { learnBlock, scanEntry, splitLearn, type LearnBlock } from "./assistantMemory";
-import { MAX_ACTIONS, parseActionList, parseChoiceList, splitActions, splitChoices, type ProposedAction } from "./assistantActions";
+import { MAX_ACTIONS, invalidActionReasons, parseActionList, parseChoiceList, splitActions, splitChoices, type ProposedAction } from "./assistantActions";
 import { parseTaskUpdate, type TaskUpdate } from "./assistantTaskRules";
 import { parsePlan, type PlanProposal } from "./assistantPlanRules";
 
@@ -84,7 +84,7 @@ export function parseState(raw: unknown): ConversationState | null {
 /** `task`: what it wrote about a job sheet (assistantTaskRules) — the caller keeps only CRM ids and applies it. */
 /** `plan`: a multi-step plan (assistantPlanRules) — its steps are tasks like `actions`, run by one Confirm. */
 /** `spoken`: the version to SAY, written by the model when the answer goes out as a voice note (SPOKEN_RULE). */
-export type ParsedReply = { answer: string; learn: LearnBlock | null; actions: ProposedAction[]; attempted: number; choices: string[]; state: ConversationState | null; task: TaskUpdate | null; plan: PlanProposal | null; spoken: string | null };
+export type ParsedReply = { answer: string; learn: LearnBlock | null; actions: ProposedAction[]; attempted: number; /** Why each refused proposal was refused (invalidActionReasons). */ invalid: string[]; choices: string[]; state: ConversationState | null; task: TaskUpdate | null; plan: PlanProposal | null; spoken: string | null };
 
 /** How long a spoken script may be — about a minute of speech; the voice note itself is cut shorter (SPOKEN_CHARS). */
 export const SPOKEN_SCRIPT_CHARS = 900;
@@ -119,6 +119,7 @@ export function splitReply(reply: string): ParsedReply {
     learn: learn?.success ? learn.data : before.learn,
     actions: actions.length ? actions : before.actions,
     attempted: Math.max(tried, before.attempted),
+    invalid: block ? invalidActionReasons(block.actions) : [],
     choices: choices.length ? choices : before.choices,
     state: block && "state" in block ? parseState(block.state) : null,
     task: block && "task" in block ? parseTaskUpdate(block.task) : null,
@@ -131,7 +132,7 @@ function legacy(reply: string): ParsedReply {
   const learnSplit = splitLearn(reply);
   const choiceSplit = splitChoices(learnSplit.answer);
   const { answer, actions } = splitActions(choiceSplit.answer);
-  return { answer, learn: learnSplit.learn, actions, attempted: actions.length, choices: choiceSplit.choices, state: null, task: null, plan: null, spoken: null };
+  return { answer, learn: learnSplit.learn, actions, attempted: actions.length, invalid: [], choices: choiceSplit.choices, state: null, task: null, plan: null, spoken: null };
 }
 
 /** The block's JSON object (a code fence around it tolerated), or null. */

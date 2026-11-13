@@ -2537,7 +2537,8 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       })
     : null;
   // Where nothing can confirm it, a stray ACTIONS line is removed from the answer and dropped.
-  const problems: string[] = [];
+  // A proposal refused by its shape says why, rather than "couldn't be set up from what I wrote" (invalidActionReasons).
+  const problems: string[] = proposes ? [...reply.invalid] : [];
   const actions = !proposes ? [] : await resolveActions(user, proposals, problems, taskWrite?.ok ? taskWrite.sheet : null, cardUpload).catch(async (error: unknown) => {
     await logError("crm-assistant", "task proposals failed", error instanceof Error ? error.name : "unknown");
     return [];
