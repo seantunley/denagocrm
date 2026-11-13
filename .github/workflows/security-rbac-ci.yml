@@ -729,6 +729,11 @@ jobs:
       - name: Assistant -- editing a question withdraws only what that answer offered
         run: npm run test:assistant-edit
 
+      # DAX report PDFs (review of #1093): with tenant enforcement OFF, the same person's answer from another
+      # workspace is "not found" — never printed under this workspace's name and logo.
+      - name: Assistant -- a report PDF only from an answer in this workspace
+        run: npm run test:assistant-report-tenant
+
       # "Why did this happen?": a record's history with the cause of each event,
       # to the people who may open the record — journeys only with Marketing on
       # and journeys.manage, the chatbot only with Automation on and inbox

@@ -2,7 +2,7 @@
 
 import { useEffect, useReducer, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowUpRight, Loader2, Mic, Paperclip, Pencil, Smile, Square, ThumbsDown, ThumbsUp, Volume2, X } from "lucide-react";
+import { ArrowUpRight, FileText, Loader2, Mic, Paperclip, Pencil, Smile, Square, ThumbsDown, ThumbsUp, Volume2, X } from "lucide-react";
 import { rateAssistantAnswer } from "@/app/actions/assistant";
 import { speakAssistantAnswer } from "@/app/actions/assistantVoice";
 import type { Evidence } from "@/lib/assistantReply";
@@ -17,6 +17,7 @@ import { audioForm, useVoiceRecorder } from "@/components/useVoiceRecorder";
 import type { ActionCard } from "@/lib/assistantActions";
 import AssistantActionCard from "@/components/AssistantActionCard";
 import AssistantPlanCard from "@/components/AssistantPlanCard";
+import { wantsReport } from "@/lib/assistantReport";
 import AnswerMarkup from "@/components/AnswerMarkup";
 
 type Turn = {
@@ -80,6 +81,27 @@ function Feedback({ turnId }: { turnId: string }) {
         <ThumbsDown className="size-3.5" />
       </button>
     </div>
+  );
+}
+
+/**
+ * 📄 PDF — shown only when the question asked for a report or a PDF. This answer as a formatted report, with the business's name and logo
+ * in its header (app/api/pdf/assistant-report). A plain link, opened in a new
+ * tab: the server checks the answer is this person's own, and nothing is looked
+ * up again to make it.
+ */
+function ReportLink({ turnId }: { turnId: string }) {
+  return (
+    <a
+      href={`/api/pdf/assistant-report/${encodeURIComponent(turnId)}`}
+      target="_blank"
+      rel="noopener"
+      className="inline-flex items-center gap-1 rounded p-1 text-xs text-muted-foreground hover:text-foreground"
+      title="Download this answer as a PDF report"
+    >
+      <FileText className="size-3.5" aria-hidden />
+      PDF
+    </a>
   );
 }
 
@@ -413,6 +435,8 @@ export default function AssistantChat({
         </div>
       )}
       {turn.turnId && <Feedback turnId={turn.turnId} />}
+      {/* Only under an answer to "a report on…" / "a PDF of…": never on every reply. */}
+      {turn.turnId && turn.answer && !turn.stopped && wantsReport(turn.question) && <ReportLink turnId={turn.turnId} />}
       {listen && turn.turnId && <Listen turnId={turn.turnId} />}
       {Boolean(turn.learned) && (
         <p className="text-[11px] text-muted-foreground">
