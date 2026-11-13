@@ -247,7 +247,39 @@ export function FeedbackBanner({
   );
 }
 
-export function PageSkeleton({ variant = "dashboard" }: { variant?: "dashboard" | "list" | "form" | "builder" }) {
+export function PageSkeleton({ variant = "dashboard" }: { variant?: "dashboard" | "list" | "form" | "builder" | "calendar" | "board" }) {
+  if (variant === "calendar") {
+    // A week: the header, the view switcher, then seven day columns — the shape the calendar draws into.
+    return (
+      <div data-slot="page-skeleton" data-variant="calendar" className="space-y-3" aria-label="Loading calendar" aria-busy="true" role="status">
+        <Skeleton className="h-16 rounded-xl border border-border bg-card" />
+        <Skeleton className="h-10 rounded-xl border border-border bg-card/70" />
+        <div className="grid min-h-[60vh] grid-cols-7 gap-px overflow-hidden rounded-xl border border-border bg-border">
+          {[0, 1, 2, 3, 4, 5, 6].map((day) => <Skeleton key={day} className="rounded-none bg-card" />)}
+        </div>
+        <span className="sr-only">Loading calendar</span>
+      </div>
+    );
+  }
+
+  if (variant === "board") {
+    // Columns of cards — the deliveries board.
+    return (
+      <div data-slot="page-skeleton" data-variant="board" className="space-y-3" aria-label="Loading board" aria-busy="true" role="status">
+        <Skeleton className="h-20 rounded-xl border border-border bg-card" />
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {[0, 1, 2, 3].map((column) => (
+            <div key={column} className="space-y-2 rounded-xl border border-border bg-card/60 p-2">
+              <Skeleton className="h-6 w-1/2 bg-muted/40" />
+              {[0, 1, 2].map((card) => <Skeleton key={card} className="h-20 rounded-lg bg-muted/20" />)}
+            </div>
+          ))}
+        </div>
+        <span className="sr-only">Loading board</span>
+      </div>
+    );
+  }
+
   if (variant === "builder") {
     return (
       <div data-slot="page-skeleton" data-variant="builder" className="space-y-3" aria-label="Loading builder" aria-busy="true" role="status">
