@@ -244,13 +244,17 @@ async function scheduleActivityBody(formData: FormData) {
           assignedToId,
           createdById: user.id,
           tenantId,
-          // Stamped explicitly with the schedule's workspace: the row is only
-          // visible under that tenant's policy.
-          ...(attendees.length
-            ? { attendees: { create: attendees.map((person) => ({ userId: person.id, tenantId: scheduleTenant })) } }
-            : {}),
         },
       });
+      // The colleagues at it, as their OWN write in the same transaction — never nested in the create above: the
+      // tenant guard refuses a nested relation write, and a meeting with Donovan failed at Confirm on live
+      // (2026-11-13, HYT9W5). Stamped with the schedule's workspace: the row is only visible under that tenant's
+      // policy. The edit path (updateActivity) already writes attendees this way.
+      if (attendees.length) {
+        await tx.activityAttendee.createMany({
+          data: attendees.map((person) => ({ activityId: created.id, userId: person.id, tenantId: scheduleTenant })),
+        });
+      }
       return { created } as const;
     });
     if ("conflict" in activity && activity.conflict) {
