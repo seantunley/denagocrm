@@ -5,7 +5,9 @@ import { normaliseHref, type StatCard } from "@/lib/dashboard/config";
 import { sourceById, type PeriodId } from "@/lib/dashboard/sources";
 import { pctDelta } from "@/lib/dashboard/data";
 import { runMetricQuery, scopeContext } from "@/lib/dashboard/compile";
+import { deltaTone, scaleBands, toneFor } from "@/lib/dashboard/tone";
 import { formatMetric, isMoneyField, metricField } from "./values";
+import { TONE_TEXT, TonePill } from "./tone";
 import type { RenderContext, RenderedCard } from "./shell";
 
 /**
@@ -109,6 +111,9 @@ export async function renderStat(card: StatCard, ctx: RenderContext): Promise<Re
 
   const delta = previous === null ? null : pctDelta(value, previous);
   const href = card.href ? normaliseHref(card.href) : null;
+  // Thresholds are stored in rands for a money metric; the value arrives in cents.
+  const tone = toneFor(value, scaleBands(card.bands, asMoney), card.better);
+  const change = delta === null ? null : deltaTone(delta, card.better);
 
   const body = (
     <>
@@ -116,22 +121,29 @@ export async function renderStat(card: StatCard, ctx: RenderContext): Promise<Re
         <p className="truncate text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
           {card.title ?? source?.label ?? "Total"}
         </p>
+        {tone && <TonePill tone={tone} className="ml-auto" />}
         {href && (
           <ArrowRight className="size-3.5 shrink-0 text-primary/70 transition-transform group-hover:translate-x-0.5" />
         )}
       </div>
       <div className="mt-1.5 flex items-baseline gap-2">
-        <p className="truncate text-2xl font-semibold tabular-nums text-foreground">
+        <p className={cn("truncate text-2xl font-semibold tabular-nums", tone ? TONE_TEXT[tone] : "text-foreground")}>
           {formatMetric(value, asMoney, ctx.money)}
         </p>
         {delta !== null && (
+          /*
+           * The arrow says which way the number moved; the colour says whether
+           * that is good news, which depends on the card (see lib/dashboard/tone.ts).
+           * Up in red is right for overdue activities.
+           */
           <span
             className={cn(
               "flex shrink-0 items-center gap-0.5 text-xs font-medium tabular-nums",
-              delta >= 0 ? "text-emerald-400" : "text-red-400",
+              change === "good" ? "text-emerald-400" : change === "bad" ? "text-red-400" : "text-muted-foreground",
             )}
           >
-            {delta >= 0 ? <TrendingUp className="size-3" /> : <TrendingDown className="size-3" />}
+            {delta >= 0 ? <TrendingUp className="size-3" aria-hidden /> : <TrendingDown className="size-3" aria-hidden />}
+            <span className="sr-only">{delta >= 0 ? "Up" : "Down"}</span>
             {Math.abs(delta)}%
           </span>
         )}

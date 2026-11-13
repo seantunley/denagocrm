@@ -49,6 +49,7 @@ import {
   type Condition,
 } from "./conditions";
 import { DASHBOARD_CARD_IDS } from "./registry";
+import type { Bands, Better } from "./tone";
 import { PERIODS, SOURCES } from "./sources";
 
 /* ── caps ─────────────────────────────────────────────────────────── */
@@ -251,6 +252,18 @@ const SPAN = z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]);
 const ROWS = z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]);
 const TITLE = z.string().max(LIMITS.titleLength).optional();
 
+/*
+ * Which way is good news, and the thresholds that colour a stat or gauge — see
+ * lib/dashboard/tone.ts. Both optional and never defaulted, for the reason ROWS
+ * gives: a card saved before these fields existed must keep drawing exactly as it
+ * did, and a default would write a choice nobody made into every card on the next
+ * save. Bounded so a hand-edited config cannot carry a number no aggregate could
+ * ever reach.
+ */
+const BETTER = z.enum(["higher", "lower"]);
+const BAND_VALUE = z.number().min(-1_000_000_000_000).max(1_000_000_000_000);
+const BANDS = z.object({ good: BAND_VALUE, bad: BAND_VALUE });
+
 const BASE_CARD = {
   id: z.string().min(1).max(40),
   title: TITLE,
@@ -282,6 +295,8 @@ function cardSchema(depth: number): z.ZodType<CardConfig> {
       /** Show the change against the preceding period of the same length. */
       compare: z.boolean().default(false),
       href: z.string().max(200).optional(),
+      better: BETTER.optional(),
+      bands: BANDS.optional(),
     }),
     z.object({
       ...BASE_CARD,
@@ -304,6 +319,8 @@ function cardSchema(depth: number): z.ZodType<CardConfig> {
       metric: METRIC.default({ fn: "count" }),
       target: z.number().min(1).max(1_000_000_000),
       unit: z.string().max(12).optional(),
+      better: BETTER.optional(),
+      bands: BANDS.optional(),
     }),
     z.object({
       ...BASE_CARD,
@@ -381,10 +398,13 @@ type CardBase = {
 };
 
 export type BuiltinCard = CardBase & { type: "builtin"; card: (typeof DASHBOARD_CARD_IDS)[number] };
-export type StatCard = CardBase & { type: "stat"; query: CardQuery; metric: CardMetric; compare: boolean; href?: string };
+/** Thresholds and direction for a stat or gauge — see lib/dashboard/tone.ts. */
+type ToneSettings = { better?: Better; bands?: Bands };
+
+export type StatCard = CardBase & ToneSettings & { type: "stat"; query: CardQuery; metric: CardMetric; compare: boolean; href?: string };
 export type ListCard = CardBase & { type: "list"; query: CardQuery; columns: string[] };
 export type ChartCard = CardBase & { type: "chart"; query: CardQuery; groupBy: string; metric: CardMetric; style: "bar" | "donut" };
-export type GaugeCard = CardBase & { type: "gauge"; query: CardQuery; metric: CardMetric; target: number; unit?: string };
+export type GaugeCard = CardBase & ToneSettings & { type: "gauge"; query: CardQuery; metric: CardMetric; target: number; unit?: string };
 export type MarkdownCard = CardBase & { type: "markdown"; content: string };
 export type HeadingCard = CardBase & { type: "heading" };
 export type ButtonCard = CardBase & { type: "button"; href: string; icon?: string };

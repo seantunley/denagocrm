@@ -27,7 +27,7 @@ import {
   useSortable,
   type SortingStrategy,
 } from "@dnd-kit/sortable";
-import { Eye, GripVertical, Plus, Settings2, Trash2, X } from "lucide-react";
+import { Eye, GripVertical, MoveDiagonal2, Plus, Settings2, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   dropPreview,
@@ -41,6 +41,15 @@ import type { CardConfig, SectionConfig, ViewConfig } from "@/lib/dashboard/conf
 import { isContainerCard } from "@/lib/dashboard/cardTree";
 import { useEditor, newId } from "./EditorProvider";
 import { CARD_MIN_HEIGHT } from "../cards/placement";
+import {
+  RESIZE_DEAD_ZONE_PX,
+  ROW_UNIT_REM,
+  sizeLabel,
+  snapRows,
+  snapSpan,
+  stepSize,
+  type Size,
+} from "@/lib/dashboard/resize";
 import ContainerContents, { cardLabel } from "./ContainerContents";
 
 /**
@@ -171,6 +180,13 @@ export default function DashboardCanvas({
    * undo the whole gesture.
    */
   const lastOverId = useRef<string | null>(null);
+  /*
+   * The card that has just been dropped or resized, so it can ease into place
+   * instead of snapping (`dashboard-card-settle` in globals.css, switched off for
+   * anyone who asks their device to reduce motion). Cleared by the card itself
+   * when the animation ends.
+   */
+  const [settledId, setSettledId] = useState<string | null>(null);
 
   /*
    * THE DRAG LABEL HAS TO ESCAPE THE PAGE WRAPPER.
@@ -331,6 +347,8 @@ export default function DashboardCanvas({
      */
     setActiveHeight(event.active.rect.current.initial?.height ?? null);
     setActiveId(String(event.active.id));
+    // A new drag starts clean, so the drop that ends it can settle again.
+    setSettledId(null);
   }
 
   function endDrag() {
@@ -352,6 +370,7 @@ export default function DashboardCanvas({
     const overId = event.over ? String(event.over.id) : lastOverId.current;
     const gesture = dragGesture.current ?? undefined;
     endDrag();
+    setSettledId(activeCardId);
     if (!overId || overId === activeCardId) return;
     updateView(view.id, (current) => moveCardInView(current, activeCardId, overId), gesture);
   }
@@ -411,6 +430,8 @@ export default function DashboardCanvas({
             activeCard={activeCard}
             activeHeight={activeHeight}
             dropAt={preview && preview.sectionId === section.id ? preview.index : null}
+            settledId={settledId}
+            onSettle={setSettledId}
             onConfigure={onConfigure}
             onAddCard={onAddCard}
           />
@@ -484,6 +505,8 @@ function SectionBlock({
   activeCard,
   activeHeight,
   dropAt,
+  settledId,
+  onSettle,
   onConfigure,
   onAddCard,
 }: {
@@ -501,6 +524,9 @@ function SectionBlock({
    * dragged one — or null when the card would not land here.
    */
   dropAt: number | null;
+  /** The card easing into place after a drop or a resize, if any. */
+  settledId: string | null;
+  onSettle: (cardId: string | null) => void;
   onConfigure: (cardId: string) => void;
   onAddCard: (sectionId: string) => void;
 }) {
@@ -578,6 +604,8 @@ function SectionBlock({
         key={entry.id}
         card={byId.get(entry.id)!}
         node={slots[entry.id]}
+        settling={settledId === entry.id}
+        onSettle={onSettle}
         onConfigure={onConfigure}
       />
     ),
@@ -779,13 +807,33 @@ const CARD_SPAN: Record<1 | 2 | 3 | 4, string> = {
 function SortableCard({
   card,
   node,
+  settling,
+  onSettle,
   onConfigure,
 }: {
   card: CardConfig;
   node: React.ReactNode;
+  settling: boolean;
+  onSettle: (cardId: string | null) => void;
   onConfigure: (cardId: string) => void;
 }) {
-  const { editing, removeCard, moveCard, liftCard } = useEditor();
+  const { editing, removeCard, moveCard, liftCard, updateCard } = useEditor();
+  /*
+   * The size being pulled to, while the corner handle is held. Drawn straight
+   * away, saved once on release — one change, one save and one undo step, the
+   * same rule a drag follows. Span and rows are placement, so renderSignature
+   * leaves them out and a resize never makes the server redraw the card.
+   */
+  const [draft, setDraft] = useState<{ span: Size; rows: Size | undefined } | null>(null);
+  const frame = useRef<HTMLDivElement | null>(null);
+  const span = draft?.span ?? card.span;
+  const rows = draft ? draft.rows : card.rows;
+
+  function commitSize(next: { span: Size; rows: Size | undefined }) {
+    if (next.span === card.span && next.rows === card.rows) return;
+    updateCard(card.id, (current) => ({ ...current, span: next.span, rows: next.rows }));
+    onSettle(card.id);
+  }
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, isDragging } = useSortable({
     id: card.id,
     disabled: !editing,
@@ -838,14 +886,21 @@ function SortableCard({
 
   return (
     <div
-      ref={setNodeRef}
+      ref={(element) => {
+        setNodeRef(element);
+        frame.current = element;
+      }}
+      onAnimationEnd={(event) => {
+        // Only this card's own settle; a skeleton pulsing inside it bubbles here too.
+        if (settling && event.target === event.currentTarget) onSettle(null);
+      }}
       className={cn(
         "relative min-w-0",
         // A card that resolved to nothing must not hold a grid cell open. Only
         // outside edit mode: while editing, an empty card is still something to
         // select and configure, so it keeps its placeholder.
         !editing && "empty:hidden",
-        CARD_SPAN[card.span],
+        CARD_SPAN[span],
         /*
          * Height, and ONLY when the panel is this box's direct child.
          *
@@ -861,8 +916,10 @@ function SortableCard({
          * would stretch the chrome, which is absolutely positioned over the card:
          * a 22rem invisible overlay swallowing clicks meant for the card.
          */
-        !editing && CARD_MIN_HEIGHT[card.rows ?? 1],
+        !editing && CARD_MIN_HEIGHT[rows ?? 1],
         editing && "rounded-xl ring-1 ring-dashed ring-border",
+        draft && "ring-2 ring-primary/60",
+        settling && "dashboard-card-settle",
         /*
          * OUT OF THE FLOW WHILE IT IS BEING DRAGGED, so the marker can take its
          * cell and the cell count stays the same for the whole gesture.
@@ -959,11 +1016,33 @@ function SortableCard({
           to fill, so a flex-1 child would stretch to nothing. CARD_MIN_HEIGHT
           replaces it. */}
       {editing ? (
-        <div className={cn("pointer-events-none select-none", CARD_MIN_HEIGHT[card.rows ?? 1])}>
+        <div className={cn("pointer-events-none select-none", CARD_MIN_HEIGHT[rows ?? 1])}>
           {node ?? <CardPlaceholder card={card} />}
         </div>
       ) : (
         node
+      )}
+
+      {editing && (
+        <ResizeHandle
+          label={cardLabel(card)}
+          span={span}
+          rows={rows}
+          pulling={draft !== null}
+          frame={frame}
+          onPull={setDraft}
+          onRelease={(next) => {
+            setDraft(null);
+            if (next) commitSize(next);
+          }}
+          onStep={(axis, by) =>
+            commitSize(
+              axis === "span"
+                ? { span: stepSize(card.span, by), rows: card.rows }
+                : { span: card.span, rows: snapRows(stepSize(card.rows ?? 1, by), 1) },
+            )
+          }
+        />
       )}
     </div>
   );
@@ -998,4 +1077,134 @@ function CardPlaceholder({ card }: { card: CardConfig }) {
 
 function hasDrawn(section: SectionConfig, slots: CardSlots): boolean {
   return section.cards.some((card) => slots[card.id] !== undefined);
+}
+
+/**
+ * The corner handle that resizes a card.
+ *
+ * Pull it with a mouse, pen or finger and the card snaps to whole columns and
+ * rows as it goes; let go and the size is saved. Escape while pulling puts it
+ * back. With the keyboard, the arrow keys step the width (left and right) and
+ * the height (up and down) one size at a time.
+ *
+ * Hidden on phone widths, where every card is one column wide and a width
+ * cannot be shown, let alone chosen. The size buttons in the card's settings
+ * still work everywhere.
+ *
+ * Not a dnd-kit sensor and not inside one: the move handle is the drag
+ * activator, and this handle's pointer events never reach it. Nothing here
+ * re-measures during the pull — see lib/dashboard/resize.ts — so the reflow a
+ * new size causes cannot feed back into the size, the loop that once made
+ * dragging swap two cards forever.
+ */
+function ResizeHandle({
+  label,
+  span,
+  rows,
+  pulling,
+  frame,
+  onPull,
+  onRelease,
+  onStep,
+}: {
+  label: string;
+  span: Size;
+  rows: Size | undefined;
+  pulling: boolean;
+  frame: React.RefObject<HTMLDivElement | null>;
+  onPull: (size: { span: Size; rows: Size | undefined }) => void;
+  /** The final size, or null when the pull was cancelled. */
+  onRelease: (size: { span: Size; rows: Size | undefined } | null) => void;
+  onStep: (axis: "span" | "rows", by: -1 | 1) => void;
+}) {
+  function start(event: React.PointerEvent<HTMLButtonElement>) {
+    if (event.button !== 0) return;
+    const card = frame.current;
+    const grid = card?.parentElement;
+    if (!card || !grid) return;
+    event.preventDefault();
+    const handle = event.currentTarget;
+    handle.setPointerCapture(event.pointerId);
+
+    // Measured once, here.
+    const rect = card.getBoundingClientRect();
+    const style = getComputedStyle(grid);
+    const columns = style.gridTemplateColumns.split(" ").filter(Boolean).length || 1;
+    const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+    const measure = {
+      startLeft: rect.left,
+      gridWidth: grid.getBoundingClientRect().width,
+      gap: parseFloat(style.columnGap) || 0,
+      columns,
+    };
+    const startX = event.clientX;
+    const startY = event.clientY;
+    let current = { span, rows };
+    onPull(current);
+
+    const move = (moved: PointerEvent) => {
+      const dx = moved.clientX - startX;
+      const dy = moved.clientY - startY;
+      const next = {
+        span: Math.abs(dx) >= RESIZE_DEAD_ZONE_PX ? snapSpan(moved.clientX, measure, span) : span,
+        rows: Math.abs(dy) >= RESIZE_DEAD_ZONE_PX ? snapRows(rect.height + dy, ROW_UNIT_REM * rem) : rows,
+      };
+      if (next.span !== current.span || next.rows !== current.rows) {
+        current = next;
+        onPull(current);
+      }
+    };
+    const finish = (commit: boolean) => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", up);
+      handle.removeEventListener("pointercancel", cancel);
+      window.removeEventListener("keydown", escape);
+      onRelease(commit ? current : null);
+    };
+    const up = () => finish(true);
+    const cancel = () => finish(false);
+    const escape = (key: KeyboardEvent) => {
+      if (key.key === "Escape") finish(false);
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", up);
+    handle.addEventListener("pointercancel", cancel);
+    window.addEventListener("keydown", escape);
+  }
+
+  function step(event: React.KeyboardEvent<HTMLButtonElement>) {
+    const steps: Record<string, ["span" | "rows", -1 | 1]> = {
+      ArrowRight: ["span", 1],
+      ArrowLeft: ["span", -1],
+      ArrowDown: ["rows", 1],
+      ArrowUp: ["rows", -1],
+    };
+    const found = steps[event.key];
+    if (!found) return;
+    event.preventDefault();
+    onStep(found[0], found[1]);
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        onPointerDown={start}
+        onKeyDown={step}
+        aria-label={`Resize ${label}. Now ${sizeLabel(span, rows)}, columns by rows. Arrow keys change it.`}
+        title="Drag to resize"
+        className="absolute -bottom-2 -right-2 z-20 hidden size-7 cursor-nwse-resize touch-none items-center justify-center rounded-md border border-border bg-card text-muted-foreground shadow-sm hover:text-foreground sm:flex"
+      >
+        <MoveDiagonal2 className="size-3.5" aria-hidden />
+      </button>
+      {pulling && (
+        <span className="pointer-events-none absolute bottom-7 right-0 z-20 rounded-md bg-primary px-2 py-1 text-xs font-semibold tabular-nums text-primary-foreground shadow-sm">
+          {sizeLabel(span, rows)}
+        </span>
+      )}
+      <span className="sr-only" aria-live="polite">
+        {`${label}: ${sizeLabel(span, rows)}`}
+      </span>
+    </>
+  );
 }

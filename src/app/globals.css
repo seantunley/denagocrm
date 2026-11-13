@@ -335,6 +335,30 @@
   .animate-shake { animation: none; }
 }
 
+/* Dashboard card settle — a card just dropped or resized eases into place
+   instead of snapping (components/dashboard/editor/DashboardCanvas.tsx).
+   NO fill-mode, deliberately: a transform left behind after the animation would
+   make the card the containing block for anything position:fixed inside it,
+   the fault the canvas's drag label once had. */
+@keyframes dashboard-card-settle {
+  from {
+    transform: scale(0.97);
+    opacity: 0.6;
+    box-shadow: 0 0 0 2px color-mix(in oklab, var(--primary) 55%, transparent);
+  }
+  to {
+    transform: none;
+    opacity: 1;
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+.dashboard-card-settle {
+  animation: dashboard-card-settle 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .dashboard-card-settle { animation: none; }
+}
+
 /* New-lead glow — a soft pulsing emerald halo so freshly-arrived leads stand
    out on a board full of otherwise identical cards. Attach .animate-new-lead-glow. */
 @keyframes new-lead-glow {

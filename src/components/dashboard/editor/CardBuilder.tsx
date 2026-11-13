@@ -35,6 +35,7 @@ import {
   type StackCardConfig,
   type StatCard,
 } from "@/lib/dashboard/config";
+import { bandsInOrder, type Bands, type Better } from "@/lib/dashboard/tone";
 import {
   PERIODS,
   operatorsFor,
@@ -738,6 +739,7 @@ function StatFields({
   const source = sourceById(card.query.source);
   const compareId = useId();
   const hrefId = useId();
+  const asMoney = metricIsMoney(card.metric, source ? usableFields(source, sets) : []);
 
   return (
     <>
@@ -750,6 +752,13 @@ function StatFields({
           <Label htmlFor={compareId}>Compare to the period before</Label>
           <Switch id={compareId} checked={card.compare} onCheckedChange={(compare) => patch(card, { compare })} />
         </div>
+        <ToneFields
+          better={card.better}
+          bands={card.bands}
+          asMoney={asMoney}
+          suggested={{ good: 10, bad: 0 }}
+          onChange={(change) => patch(card, change)}
+        />
         <div className="space-y-1.5">
           <Label htmlFor={hrefId}>Link (optional)</Label>
           {/* A phishing guard, same reasoning as ButtonFields below: an href a
@@ -932,8 +941,135 @@ function GaugeFields({
             className="w-32"
           />
         </div>
+        <ToneFields
+          better={card.better}
+          bands={card.bands}
+          asMoney={asMoney}
+          // Switched on, a gauge starts green at its target and red below half of it.
+          suggested={{ good: card.target, bad: Math.round(card.target / 2) }}
+          onChange={(change) => patch(card, change)}
+        />
       </section>
     </>
+  );
+}
+
+/** Whether the metric sums, averages or bounds a money field — thresholds are then typed in rands. */
+function metricIsMoney(metric: CardMetric, fields: ReturnType<typeof usableFields>): boolean {
+  if (metric.fn === "count") return false;
+  return fields.find((field) => field.key === metric.field)?.type === "money";
+}
+
+/**
+ * Which way is good news, and the thresholds that colour the number — shared by
+ * the stat and gauge cards. See lib/dashboard/tone.ts.
+ *
+ * Thresholds are collected in rands for a money metric, exactly as the gauge
+ * target is: the renderer turns them into cents in one place (`scaleBands`), and
+ * this form never multiplies.
+ */
+function ToneFields({
+  better,
+  bands,
+  asMoney,
+  suggested,
+  onChange,
+}: {
+  better: Better | undefined;
+  bands: Bands | undefined;
+  asMoney: boolean;
+  /** The pair the switch fills in when it is turned on, for "higher is better". */
+  suggested: Bands;
+  onChange: (change: { better?: Better; bands?: Bands }) => void;
+}) {
+  const betterId = useId();
+  const bandsId = useId();
+  const goodId = useId();
+  const badId = useId();
+  const direction = better ?? "higher";
+  const unit = asMoney ? " (rands)" : "";
+  const swapped = (pair: Bands): Bands => ({ good: pair.bad, bad: pair.good });
+
+  return (
+    <div className="space-y-3 rounded-lg border border-border p-3">
+      <div className="space-y-1.5">
+        <Label htmlFor={betterId}>A higher number is</Label>
+        <Select
+          value={direction}
+          onValueChange={(value) => {
+            const next = value as Better;
+            // Flipping the direction keeps the thresholds meaningful by swapping them.
+            const nextBands = bands && !bandsInOrder(bands, next) ? swapped(bands) : bands;
+            onChange({ better: next === "higher" ? undefined : next, bands: nextBands });
+          }}
+        >
+          <SelectTrigger id={betterId} className="w-48">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="higher">Good news</SelectItem>
+            <SelectItem value="lower">Bad news</SelectItem>
+          </SelectContent>
+        </Select>
+        <p className="text-xs text-muted-foreground">
+          Sets the colour of the change arrow{bands ? " and of the thresholds below" : ""}.
+        </p>
+      </div>
+      <div className="flex items-center justify-between gap-2">
+        <Label htmlFor={bandsId}>Colour by threshold</Label>
+        <Switch
+          id={bandsId}
+          checked={bands !== undefined}
+          onCheckedChange={(on) =>
+            onChange({ bands: on ? (direction === "higher" ? suggested : swapped(suggested)) : undefined })
+          }
+        />
+      </div>
+      {bands && (
+        <>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label htmlFor={goodId}>
+                {direction === "higher" ? "Green at or above" : "Green at or below"}
+                {unit}
+              </Label>
+              <Input
+                id={goodId}
+                type="number"
+                value={bands.good}
+                onChange={(e) => {
+                  const good = Number(e.target.value);
+                  if (Number.isFinite(good)) onChange({ bands: { ...bands, good } });
+                }}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor={badId}>
+                {direction === "higher" ? "Red at or below" : "Red at or above"}
+                {unit}
+              </Label>
+              <Input
+                id={badId}
+                type="number"
+                value={bands.bad}
+                onChange={(e) => {
+                  const bad = Number(e.target.value);
+                  if (Number.isFinite(bad)) onChange({ bands: { ...bands, bad } });
+                }}
+              />
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground">Amber in between. The card also says On track, Watch or Off track in words.</p>
+          {!bandsInOrder(bands, direction) && (
+            <ProblemText>
+              {direction === "higher"
+                ? "Green should start above where red starts."
+                : "Green should start below where red starts."}
+            </ProblemText>
+          )}
+        </>
+      )}
+    </div>
   );
 }
 
