@@ -193,6 +193,12 @@ export const stuckArgs = z.object({ lead: z.string().trim().min(1).max(120) }).s
 export const catchUpArgs = z.object({ since: isoDay.optional() }).strict();
 /** Lost deals that came back to life: `mine` narrows to theirs or nobody's (the morning brief's). */
 export const lostAliveArgs = z.object({ mine: z.boolean().optional() }).strict();
+/** The areas DAX could not see (assistantAreaLookups): help desk, campaigns, forecast, surveys, referrals. */
+export const ticketsArgs = z.object({ mine: z.boolean().optional(), limit: limit.optional() }).strict();
+export const campaignsArgs = z.object({ from: isoDay.optional(), to: isoDay.optional(), name: name.optional(), limit: limit.optional() }).strict();
+export const forecastArgs = z.object({ period: z.string().trim().regex(/^\d{4}-\d{2}$/).optional() }).strict();
+export const surveysArgs = z.object({ from: isoDay.optional(), to: isoDay.optional(), survey: name.optional() }).strict();
+export const referralsArgs = z.object({ from: isoDay.optional(), to: isoDay.optional(), status: z.enum(["pending", "earned", "redeemed"]).optional() }).strict();
 /** Notes ADDED on a day or a period, across everything the person may open, with who added each (assistantNotesLookup). */
 export const notesArgs = z.object({ from: isoDay, to: isoDay.optional(), by: name.optional(), limit: z.number().int().min(1).max(40).optional() }).strict();
 /** What the business knows: products, prices, approved answers, competitors. */
@@ -233,6 +239,11 @@ export const assistantStep = z.discriminatedUnion("tool", [
   z.object({ tool: z.literal("stuck"), args: stuckArgs }),
   z.object({ tool: z.literal("catch_up"), args: catchUpArgs.default({}) }),
   z.object({ tool: z.literal("lost_alive"), args: lostAliveArgs.default({}) }),
+  z.object({ tool: z.literal("tickets"), args: ticketsArgs.default({}) }),
+  z.object({ tool: z.literal("campaigns"), args: campaignsArgs.default({}) }),
+  z.object({ tool: z.literal("forecast"), args: forecastArgs.default({}) }),
+  z.object({ tool: z.literal("surveys"), args: surveysArgs.default({}) }),
+  z.object({ tool: z.literal("referrals"), args: referralsArgs.default({}) }),
   z.object({ tool: z.literal("notes"), args: notesArgs }),
   z.object({ tool: z.literal("stuck_deals"), args: z.object({}).strict().default({}) }),
   z.object({ tool: z.literal("knowledge"), args: knowledgeArgs }),
@@ -300,6 +311,11 @@ export function planInstructions(ctx: PlanContext): string {
     '- stuck: {"lead":"<customer name, lead title or id>" (required)} — why ONE deal is stuck, with evidence: its blockers RANKED, each with its date and a link to the record it comes from (the customer waiting on us, an overdue follow-up, the quote unopened / declined / expiring, the deposit, time in the stage against its limit, no next step, the customer gone quiet), plus the facts behind them. Run it for every "why is X stuck / stalled / not moving / gone quiet / not closing"; it usually answers on its own ("then":"answer"). For "which of my deals are stuck", use stuck_deals.',
     '- catch_up: {"since":"YYYY-MM-DD" (only when they name a day)} — what changed on THEIR OWN deals since their last question to you (at most 7 days back): new customer messages, quotes opened / opened again / signed, stage moves by someone else, new leads for them, and their overdue and due-today tasks. Run it for "catch me up", "what\'s changed", "what did I miss", "anything new (since…)"; it answers on its own ("then":"answer").',
     '- notes: {"from":"YYYY-MM-DD" (required),"to":"YYYY-MM-DD","by":"<colleague who added them>"} — every NOTE ADDED on that day (or from–to), on all the deals and customers they may open, each with when it was added, which customer and deal it is on, WHO added it, and its words. Run it for "which notes were added yesterday", "what notes did Donovan add this week", "summarise yesterday\'s notes" — search_messages is one customer at a time and find_activities is the calendar, neither lists notes across the CRM.',
+    '- tickets: {"mine":true (only those assigned to them)} — the HELP DESK (customer cases): how many are open, waiting on our reply, overdue (a customer waiting 24 hours or more — tickets have no deadline of their own), urgent/high and unassigned, then the tickets, overdue first, each with customer, status, priority, who has it, how long the customer has waited and a link. Run it for "which tickets are overdue", "what\'s waiting in the help desk", "my open cases".',
+    '- campaigns: {"from":"YYYY-MM-DD","to":"YYYY-MM-DD","name":"<words of a campaign name>"} — MARKETING CAMPAIGNS sent in that period (default the last 30 days), or the one named: channel, when sent, audience, recipients, delivered, failed, opens and clicks with their rates, and a link. Run it for "how did last week\'s campaign do", "which campaign got the most clicks".',
+    '- forecast: {"period":"YYYY-MM" (default this month)} — the SALES FORECAST for deals expected to close that month: open, weighted, commit, best case and pipeline totals in rands, and the biggest deals with probability, category, close date, stage and owner. Run it for "what\'s the forecast for this month", "what are we committing for December".',
+    '- surveys: {"from":"YYYY-MM-DD","to":"YYYY-MM-DD","survey":"<words of a survey title>"} — CUSTOMER SURVEYS sent in that period (default the last 30 days): per survey, sent, answered, response rate, NPS or average score, and the unhappy answers with what the customer said. Run it for "how are our NPS scores", "any unhappy customers in the surveys".',
+    '- referrals: {"from":"YYYY-MM-DD","to":"YYYY-MM-DD","status":"pending|earned|redeemed"} — REFERRALS in that period (default the last 90 days): totals pending / earned-not-redeemed / redeemed, the top referrers, and the latest referrals. Run it for "how many referrals this quarter", "who refers the most", "which rewards are still owed".',
     '- lost_alive: {"mine":true (only their own deals and unassigned ones)} — deals marked LOST in the last 90 days for a went-quiet or timing reason ("gone cold", "stopped responding", "buying later") where the customer has since messaged or opened a quote: each with when and why it was lost and what the customer did since. Run it for "which lost deals are still alive", "any lost deals worth another look", "lost but not really lost"; it answers on its own ("then":"answer"), offering a nurture or reopen card for each.',
     '- stuck_deals: {} — THEIR most-stuck open deals (the three furthest past their stage\'s time limit), each with its top reason from the stuck check and its link — and, for someone who sees a team\'s deals, the team\'s worst five. Run it for "which of my deals are stuck", "my stuck deals", and the Monday brief; it answers on its own ("then":"answer").',
     '- knowledge: {"topic":"<what to look up>" (required)} — the business\'s own knowledge: products and prices (each with its productId), approved answers (finance, warranty, policies…), company details, competitor intelligence. ALWAYS run this when the person asks for a quote or names a product to quote — a quote can only be built from products found here.',
@@ -426,6 +442,11 @@ const LOOKUP_STATUS: Record<string, string> = {
   stuck: "Working out what's holding it up",
   catch_up: "Catching you up",
   lost_alive: "Checking lost deals for signs of life",
+  tickets: "Checking the help desk",
+  campaigns: "Checking campaigns",
+  forecast: "Working out the forecast",
+  surveys: "Reading the survey results",
+  referrals: "Checking referrals",
   notes: "Reading the notes added",
   stuck_deals: "Finding your most-stuck deals",
   find_activities: "Checking activities",
