@@ -1039,7 +1039,7 @@ function SortableCard({
             commitSize(
               axis === "span"
                 ? { span: stepSize(card.span, by), rows: card.rows }
-                : { span: card.span, rows: snapRows(stepSize(card.rows ?? 1, by), 1) },
+                : { span: card.span, rows: snapRows(stepSize(card.rows ?? 1, by), 0, 1) },
             )
           }
         />
@@ -1147,7 +1147,8 @@ function ResizeHandle({
       const dy = moved.clientY - startY;
       const next = {
         span: Math.abs(dx) >= RESIZE_DEAD_ZONE_PX ? snapSpan(moved.clientX, measure, span) : span,
-        rows: Math.abs(dy) >= RESIZE_DEAD_ZONE_PX ? snapRows(rect.height + dy, ROW_UNIT_REM * rem) : rows,
+        // From the configured rows, not the drawn height: content can make a one-row card tall (lib/dashboard/resize.ts).
+        rows: Math.abs(dy) >= RESIZE_DEAD_ZONE_PX ? snapRows(rows, dy, ROW_UNIT_REM * rem) : rows,
       };
       if (next.span !== current.span || next.rows !== current.rows) {
         current = next;

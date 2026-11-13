@@ -58,15 +58,20 @@ export function snapSpan(pointerX: number, measure: GridMeasure, current: Size):
 }
 
 /**
- * The rows for a card whose bottom edge is being pulled to `height` px tall.
+ * The rows for a card whose bottom edge has been pulled `dy` px from where it started.
+ *
+ * From the card's CONFIGURED rows plus the pull — never from its drawn height. A
+ * one-row list card can be drawn 26rem tall by its own content; sized from that,
+ * a 25px pull UP came out as two rows, the opposite of the gesture (review of
+ * #1087). From the configured size, up can only shrink and down can only grow.
  *
  * One row is stored as ABSENT, not as 1: absent is "as tall as its content",
  * which is what one row draws as anyway, and config.ts keeps `rows` out of a
  * card nobody has deliberately made taller.
  */
-export function snapRows(height: number, rowUnitPx: number): Size | undefined {
-  if (rowUnitPx <= 0) return undefined;
-  const rows = clampSize(height / rowUnitPx);
+export function snapRows(startRows: Size | undefined, dy: number, rowUnitPx: number): Size | undefined {
+  if (rowUnitPx <= 0) return startRows;
+  const rows = clampSize((startRows ?? 1) + dy / rowUnitPx);
   return rows === 1 ? undefined : rows;
 }
 

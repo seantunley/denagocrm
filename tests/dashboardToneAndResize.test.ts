@@ -200,12 +200,32 @@ test("the size depends on the pointer alone, so a reflow cannot feed back into i
 
 test("pulling the bottom edge snaps to rows, and one row is stored as no rows at all", () => {
   const unit = ROW_UNIT_REM * 16;
-  assert.equal(snapRows(unit * 0.8, unit), undefined);
-  assert.equal(snapRows(unit * 1.4, unit), undefined);
-  assert.equal(snapRows(unit * 1.6, unit), 2);
-  assert.equal(snapRows(unit * 3, unit), 3);
-  assert.equal(snapRows(unit * 9, unit), 4);
-  assert.equal(snapRows(500, 0), undefined);
+  assert.equal(snapRows(undefined, -unit * 0.2, unit), undefined);
+  assert.equal(snapRows(undefined, unit * 0.4, unit), undefined, "less than half a row down: still one");
+  assert.equal(snapRows(undefined, unit * 0.6, unit), 2);
+  assert.equal(snapRows(undefined, unit * 2, unit), 3);
+  assert.equal(snapRows(undefined, unit * 8, unit), 4, "held to 4");
+  assert.equal(snapRows(3, -unit * 9, unit), undefined, "held to 1 — stored as none");
+  assert.equal(snapRows(2, 500, 0), 2, "no unit to measure by: unchanged");
+  assert.equal(snapRows(stepSize(2, -1), 0, 1), undefined, "the keyboard's one row is stored as none too");
+});
+
+/**
+ * Review of #1087: rows came from the card's DRAWN height. A one-row list card that its content draws 26rem tall
+ * started the pull "at" two-and-a-bit rows, so a 25px pull UP saved two rows — the opposite of the gesture.
+ */
+test("a card its content draws tall resizes from its configured rows, never from its drawn height", () => {
+  const unit = ROW_UNIT_REM * 16;
+  // One configured row, drawn 26rem tall: the drawn height plays no part.
+  assert.equal(snapRows(undefined, -25, unit), undefined, "a small pull up on a tall one-row card stays one row");
+  assert.equal(snapRows(undefined, -unit * 3, unit), undefined, "a big pull up cannot go below one");
+  assert.equal(snapRows(undefined, unit * 0.6, unit), 2, "down grows it by one");
+  // Content taller than its configured minimum (2 rows set, drawn as 3+): up shrinks, down grows — never the other way.
+  for (const dy of [-25, -unit * 0.6, -unit * 1.6]) assert.ok((snapRows(2, dy, unit) ?? 1) <= 2, `up ${dy}px never grows a 2-row card`);
+  for (const dy of [25, unit * 0.6, unit * 1.6]) assert.ok((snapRows(2, dy, unit) ?? 1) >= 2, `down ${dy}px never shrinks a 2-row card`);
+  const canvas = code("src/components/dashboard/editor/DashboardCanvas.tsx");
+  assert.match(canvas, /snapRows\(rows, dy, ROW_UNIT_REM \* rem\)/, "the pull passes the configured rows and the pointer's travel");
+  assert.doesNotMatch(canvas, /snapRows\(rect\.height/, "never the drawn height");
 });
 
 test("a row is the same height the card heights are drawn with", () => {
