@@ -1159,6 +1159,9 @@ model AssistantTurn {
   tags       String[]  @default([])
   /// The job sheet (AssistantTask) this answer started or updated, if any.
   taskId     String?
+  /// The conversation it belongs to (AssistantConversation). Null: asked before conversations existed (shown as
+  /// "Earlier"), or a scheduled answer, watch or alert, which stands on its own.
+  conversationId String?
   /// The cards this answer offered — [{ kind, leadId?, contactId? }], ids only, never names
   /// (assistantOutcomeRules.proposedCards) — counted beside what was confirmed in Settings → Assistant.
   /// Null: not an askCrm answer, or one from before 2026-11-02.
@@ -1167,6 +1170,31 @@ model AssistantTurn {
 
   @@index([tenantId, userId, createdAt])
   @@index([createdAt])
+  @@index([conversationId, createdAt])
+}
+
+/// One DAX conversation — a thread of questions that can be picked up again (Sean, 2026-11-13: "Named conversations,
+/// such as one per customer or deal"). Private to the person, in one workspace. Asking on a deal's or customer's
+/// page continues THEIR conversation. `summary` keeps what has fallen out of the last six exchanges (longer memory:
+/// assistantConversation.foldOlderTurns), so a long thread keeps its thread.
+model AssistantConversation {
+  id        String   @id @default(cuid())
+  tenantId  String
+  userId    String
+  title     String
+  /// The deal or the customer it is about, when it was started on their page.
+  leadId    String?
+  contactId String?
+  /// What the exchanges older than the last six said — who, what was decided, what is still open.
+  summary   String?
+  /// The newest exchange already folded into `summary`.
+  summarizedUntil DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  @@index([tenantId, userId, updatedAt])
+  @@index([tenantId, userId, leadId])
+  @@index([tenantId, userId, contactId])
 }
 
 /// A job sheet DAX keeps for one piece of work ("quote for Anna: Rover XL,

@@ -7,7 +7,9 @@ import { isCodexConnected } from "@/lib/codex";
 import { getSetting } from "@/lib/settings";
 import { isTenantOwner } from "@/lib/auth";
 import { ASSISTANT_PROFILE_KEY, parseProfile } from "@/lib/assistantSoul";
-import { assistantHistory } from "@/lib/crmAssistant";
+import { conversationHistory, defaultConversation, recentConversations, updatesHistory } from "@/lib/assistantConversation";
+import { ownedWriteTenantId } from "@/lib/tenantWrite";
+import { formatDistanceToNowStrict } from "date-fns";
 import { markScheduledTurnsSeen } from "@/lib/assistantScheduleRun";
 import { describeSchedule } from "@/lib/assistantSchedule";
 import { isExpired } from "@/lib/assistantMemory";
@@ -45,6 +47,31 @@ export const metadata = { title: "Ask the CRM" };
  * connected (the page above has already checked the person may use the
  * assistant). Null hides it. The person's own link, read by (workspace, person).
  */
+/**
+ * The person's conversations (Sean, 2026-11-13: "yesterday's thread can't be resumed"): a new one, the recent ones
+ * by what they are about, DAX's own updates, and what was asked before conversations existed. Links, so each is a
+ * page of its own that the browser's back button returns to.
+ */
+function ConversationPicker({ conversations, picked }: { conversations: { id: string; title: string; updatedAt: Date }[]; picked: string }) {
+  const chip = (active: boolean) =>
+    `inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-full border px-3 text-xs pointer-fine:min-h-8 ${active ? "border-primary bg-primary/10 font-medium text-foreground" : "border-border text-muted-foreground hover:border-primary hover:text-foreground"}`;
+  return (
+    <nav aria-label="Conversations" className="space-y-2">
+      <div className="flex gap-2 overflow-x-auto pb-1">
+        <Link href="/assistant?c=new" className={chip(picked === "new")} aria-current={picked === "new" ? "page" : undefined}>＋ New conversation</Link>
+        {conversations.map((conv) => (
+          <Link key={conv.id} href={`/assistant?c=${conv.id}`} className={chip(picked === conv.id)} aria-current={picked === conv.id ? "page" : undefined} title={conv.title}>
+            <span className="max-w-[14rem] truncate">{conv.title}</span>
+            <span className="text-[11px] text-muted-foreground">{formatDistanceToNowStrict(conv.updatedAt, { addSuffix: true })}</span>
+          </Link>
+        ))}
+        <Link href="/assistant?c=updates" className={chip(picked === "updates")} aria-current={picked === "updates" ? "page" : undefined}>⏰ Updates</Link>
+        <Link href="/assistant?c=earlier" className={chip(picked === "earlier")} aria-current={picked === "earlier" ? "page" : undefined}>Earlier</Link>
+      </div>
+    </nav>
+  );
+}
+
 async function whatsappCard(userId: string): Promise<{ linked: string | null; refused: string | null; updates: boolean } | null> {
   if (!(await assistantWhatsAppOn()) || !(await isWhatsAppConfigured())) return null;
   const tenantId = await actingOwnerTenantId().catch(() => null);
@@ -56,18 +83,30 @@ async function whatsappCard(userId: string): Promise<{ linked: string | null; re
   return { linked: link?.waId && link.verifiedAt ? maskWaId(link.waId) : null, refused: linkRefusalText(link?.refusedReason), updates: link?.updatesOnWhatsApp ?? true };
 }
 
-export default async function AssistantPage() {
+export default async function AssistantPage({ searchParams }: { searchParams: Promise<{ c?: string }> }) {
   const user = await requireAnyPermission(
     "leads.view_all", "leads.view_owned",
     "quotes.view_all", "quotes.view_owned",
     "activities.view", "activities.manage",
   );
   if (!(await isModuleEnabled("automation"))) notFound();
+  // WHICH CONVERSATION (assistantConversation): ?c=<id> one of the person's, ?c=new a fresh one, ?c=updates DAX's
+  // scheduled answers and alerts, ?c=earlier what was asked before conversations. Default: the one that moved in
+  // the last three hours, else a new one.
+  const who = { tenantId: ownedWriteTenantId(), userId: user.id };
+  const { c } = await searchParams;
+  const conversations = await recentConversations(who);
+  const picked = c === "new" || c === "updates" || c === "earlier"
+    ? c
+    : conversations.find((conv) => conv.id === c)?.id ?? defaultConversation(conversations);
+  const historyFor = picked === "new" ? Promise.resolve([])
+    : picked === "updates" ? updatesHistory(who)
+      : conversationHistory(who, picked === "earlier" ? null : picked);
   const [listen, connected, profile, history, aboutMe, schedules, whatsapp, watches, saved, tasks] = await Promise.all([
     assistantVoiceRepliesOn().catch(() => false),
     isCodexConnected(),
     getSetting(ASSISTANT_PROFILE_KEY).then(parseProfile),
-    assistantHistory(user.id),
+    historyFor,
     prisma.assistantNote.findMany({ where: { kind: "profile", userId: user.id }, orderBy: { createdAt: "asc" }, select: { id: true, content: true, status: true, validUntil: true } }),
     // This person's own schedules only.
     prisma.assistantSchedule.findMany({
@@ -140,8 +179,16 @@ export default async function AssistantPage() {
           list this visit started with, and shows nothing when that was empty. */}
       <SavedAssistantCards name={profile.name} cards={savedCards} />
       <AssistantPlans plans={plans} />
+      {connected && <ConversationPicker conversations={conversations} picked={picked} />}
       {connected ? (
-        <AssistantChat name={profile.name} history={history.map(({ question, answer, source }) => ({ question, answer, source }))} listen={listen} />
+        <AssistantChat
+          key={picked}
+          name={profile.name}
+          history={history.map(({ question, answer, source }) => ({ question, answer, source }))}
+          listen={listen}
+          // Asking from "Updates" or "Earlier" carries on in the current conversation, as the default rule picks.
+          conversation={picked === "updates" || picked === "earlier" ? null : picked}
+        />
       ) : (
         <p className="card p-5 text-sm text-muted-foreground">
           This runs on your workspace&apos;s AI connection, which isn&apos;t set up yet.{" "}

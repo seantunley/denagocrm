@@ -120,6 +120,14 @@ export const typedYes = (text: string) =>
 export const asTypedReply = (text: string) => text.normalize("NFKC").replace(/[,.!?…;:]+/g, " ").replace(/\s+/g, " ").trim();
 
 /**
+ * "New topic: …", "new conversation", "start a new chat" — typed or spoken — starts a fresh DAX conversation on
+ * WhatsApp (assistantConversation, Sean 2026-11-13: "topics blur together"). Only at the START of the message.
+ */
+export function startsNewConversation(text: string): boolean {
+  return /^(?:new (?:topic|conversation|chat|subject)|start (?:a )?new (?:topic|conversation|chat)|change of (?:topic|subject))\b/i.test(asTypedReply(text));
+}
+
+/**
  * YES — typed or spoken: a typed yes, or a short run of yes-words ("Yeah, go ahead.", "Yes please, do it.") and
  * NOTHING else. Thanks is not a yes: "okay, thanks" acknowledges an answer, and must never confirm a task with it.
  * "Yes, but make it white" is not a yes either — it goes to DAX as the change it is.
