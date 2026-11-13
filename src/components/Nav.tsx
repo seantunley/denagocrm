@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactElement } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactElement } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ChevronRight } from "lucide-react";
@@ -272,6 +272,16 @@ function FootButton({ link, active, rail = false }: { link: NavLink; active: boo
     if (active || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     if (toggleDax()) event.preventDefault();
   };
+  // IT OPENS SOMETHING, SO IT IS A BUTTON (review of #1090): role, aria-expanded, and Space as well as Enter — Space
+  // does nothing on a link. Still an <a href> underneath, so a new-tab click opens the full page. On the Ask page
+  // itself it is the link to where you are.
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLAnchorElement>) => {
+    if (event.key !== " ") return;
+    event.preventDefault(); // not a page scroll
+    // No panel (DAX off for this person): the same as clicking — the link goes to the Ask page.
+    if (!toggleDax()) event.currentTarget.click();
+  };
+  const asButton = active ? { "aria-current": "page" as const } : { role: "button", "aria-expanded": open, onKeyDown };
   const label = dot ? `${link.label} — new scheduled answer` : link.label;
   const marker = dot ? <span className="absolute right-1.5 top-1.5 size-2.5 rounded-full border-2 border-sidebar bg-destructive" aria-hidden /> : null;
   if (rail) {
@@ -282,8 +292,7 @@ function FootButton({ link, active, rail = false }: { link: NavLink; active: boo
           href={link.href}
           onClick={onClick}
           aria-label={label}
-          aria-expanded={active ? undefined : open}
-          aria-current={active ? "page" : undefined}
+          {...asButton}
           className={cn(RAIL_BUTTON, "depth-raised mt-2 text-primary hover:brightness-110", open && "ring-1 ring-primary/50")}
         >
           <link.icon className="size-5" aria-hidden />
@@ -297,8 +306,7 @@ function FootButton({ link, active, rail = false }: { link: NavLink; active: boo
       href={link.href}
       onClick={onClick}
       aria-label={dot ? label : undefined}
-      aria-expanded={active ? undefined : open}
-      aria-current={active ? "page" : undefined}
+      {...asButton}
       className={cn(ROW, "depth-raised relative flex items-center gap-3 px-3 text-sm font-semibold text-sidebar-accent-foreground hover:brightness-110", open && "ring-1 ring-primary/50")}
     >
       <link.icon className="size-[18px] shrink-0 text-primary" aria-hidden />

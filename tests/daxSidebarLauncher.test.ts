@@ -31,6 +31,10 @@ test("the floating button is gone; the panel and the sidebar button share open a
   // A new-tab click, the Ask page itself, and no panel all let the link go to /assistant.
   assert.match(nav, /if \(active \|\| event\.button !== 0 \|\| event\.metaKey \|\| event\.ctrlKey \|\| event\.shiftKey \|\| event\.altKey\) return;\s*if \(toggleDax\(\)\) event\.preventDefault\(\);/);
   assert.match(nav, /const dot = unread && !open;/, "the red dot moved to the sidebar button");
+  // Review of #1090: it opens something, so it is a BUTTON to the keyboard — Space works as well as Enter.
+  assert.match(nav, /const asButton = active \? \{ "aria-current": "page" as const \} : \{ role: "button", "aria-expanded": open, onKeyDown \};/);
+  assert.match(nav, /if \(event\.key !== " "\) return;\s*event\.preventDefault\(\);[\s\S]*if \(!toggleDax\(\)\) event\.currentTarget\.click\(\);/);
+  assert.equal((nav.match(/\{\.\.\.asButton\}/g) ?? []).length, 2, "open sidebar and rail");
   assert.equal((nav.match(/<FootButton /g) ?? []).length, 2, "open sidebar and collapsed rail");
 
   // Still not on a phone: the panel is desktop-only, and the foot link is taken out after the phone filter.
