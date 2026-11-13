@@ -129,7 +129,7 @@ export async function POST(req: NextRequest) {
       const timings: Record<string, number> = {};
       const result = await askAsPerson(
         user,
-        { question: form.get("question"), page: form.get("page"), image: form.get("image") },
+        { question: form.get("question"), page: form.get("page"), image: form.get("image"), conversation: form.get("conversation") },
         {
           onAnswerText: (visible) => {
             send({ t: "text", v: visible });

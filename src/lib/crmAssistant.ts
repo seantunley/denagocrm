@@ -21,6 +21,8 @@ import { getCompanyProfile } from "./companyProfile";
 import { searchBotKnowledge } from "./botKnowledge";
 import { getEnabledModuleIds, isModuleEnabled } from "./modules/enabled";
 import { ownedWriteTenantId } from "./tenantWrite";
+import { afterAnswer, conversationTurns, pickConversation } from "./assistantConversation";
+import { runAfterResponse } from "./afterResponse";
 import { isCustomerSigner } from "./signing/quoteMirror";
 import { firstCustomerView, memoCustomer } from "./signing/customerView";
 import { accessibleTestDriveWhere } from "./testDriveAccess";
@@ -162,6 +164,8 @@ export type AssistantResult =
   | {
       ok: true; answer: string; cited?: string; evidence?: Evidence[]; rows: AssistantRow[]; tools: string[];
       learned: number; actions: ActionCard[]; choices: string[]; saved: boolean; turnId?: string;
+      /** The conversation this answer is in (assistantConversation) — the chat keeps asking in it. */
+      conversationId?: string;
       /** The version to SAY, when asked for one (opts.spoken) and it still matches the answer. */
       spoken?: string;
       /** Waiting tasks to withdraw, by their number in opts.waiting (1-based) — the caller withdraws them. */
@@ -1778,8 +1782,12 @@ async function recentTurns(userId: string): Promise<PriorTurn[]> {
     // it was saved); conversationBlock leads with the latest one.
     select: { question: true, answer: true, state: true },
   });
-  // The records each answer listed travel apart from its working memory (assistantListedRules).
-  return turns.reverse().map((t) => {
+  return withListed(turns.reverse());
+}
+
+/** The records each answer listed travel apart from its working memory (assistantListedRules). */
+function withListed(turns: { question: string; answer: string; state: unknown }[]): PriorTurn[] {
+  return turns.map((t) => {
     const { listed, rest } = splitListed(t.state);
     return { ...t, state: rest as PriorTurn["state"], listed };
   });
@@ -1992,6 +2000,8 @@ export type AskSource = "chat" | "schedule" | "whatsapp";
  */
 export type AskOptions = {
   source?: AskSource;
+  /** The conversation this question continues — an id the person picked, or "new" to start one (assistantConversation). */
+  conversation?: string | null;
   scheduleId?: string;
   images?: string[];
   /** A file sent with the question (WhatsApp): held like a photo (assistantUpload); a PDF's text is read for the answer. */
@@ -2182,12 +2192,26 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       // A closed stream or a failed run write must not cost the answer.
     }
   };
+  // THE CONVERSATION (assistantConversation): in the chat and on WhatsApp, a question belongs to one — picked, new, the
+  // deal's or customer's when asked on their page, or the one that moved in the last three hours. Its last six
+  // exchanges and its summary are DAX's memory of it. A scheduled answer, watch or alert stands on its own.
+  const who = { tenantId: ownedWriteTenantId(), userId: user.id };
+  const target = pageTarget(page);
+  const thread = tasksOn
+    ? await pickConversation(who, {
+        requested: opts.conversation ?? null,
+        record: target && "id" in target ? (target.kind === "lead" ? { leadId: target.id } : target.kind === "contact" ? { contactId: target.id } : null) : null,
+      }).catch(async (error: unknown) => {
+        await logError("crm-assistant", "conversation pick failed", error instanceof Error ? error.name : "unknown");
+        return null;
+      })
+    : null;
   // The connection check rides with the context reads — one round trip, not two.
   const [connected, whereTheyAre, context, history, learnedNow, person, profileRaw, company, modules, tasks] = await Promise.all([
     isCodexConnected(),
     pageContext(user, page),
     planContext(user),
-    recentTurns(user.id),
+    thread ? conversationTurns(who, thread.id).then(withListed) : recentTurns(user.id),
     loadLearned(user.id),
     personContext(user).catch(() => ""),
     getSetting(ASSISTANT_PROFILE_KEY),
@@ -2236,7 +2260,10 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   const webOn = profile.webSearch && source !== "schedule";
   // Earlier answers can quote customer text, so the earlier turns are fenced as
   // data too — an instruction quoted in one answer doesn't come back as one.
-  const conversation = history.length ? resultsBlock("Earlier turns (context only):", stripInvisible(conversationBlock(history))) : "";
+  // LONGER MEMORY: what fell out of the last six exchanges, kept as the conversation's summary — fenced as data, as
+  // the turns are (it summarises answers that quote customers).
+  const earlier = thread?.summary ? resultsBlock("Earlier in this conversation (a summary, context only):", stripInvisible(thread.summary)) : "";
+  const conversation = [earlier, history.length ? resultsBlock("Earlier turns (context only):", stripInvisible(conversationBlock(history))) : ""].filter(Boolean).join("\n\n");
   // Open job sheets lead the conversation — fenced as data too: they carry what the model wrote from customer text.
   const jobSheets = tasks.length ? resultsBlock("Open job sheets (context only):", stripInvisible(taskBlock(tasks))) : "";
   // "The fourth one": the latest list an answer here showed, each record checked against what this person may open
@@ -2638,6 +2665,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
         tools: observations.map((o) => ({ tool: o.tool, args: o.args })) as object,
         source,
         scheduleId: source === "schedule" ? opts.scheduleId ?? null : null,
+        ...(thread ? { conversationId: thread.id } : {}),
         // Working memory (already cleaned by parseState) and the records this
         // answer looked at — what the next question and recall read back.
         ...(reply.state || shownHere.length
@@ -2665,6 +2693,12 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       await logError("crm-assistant", "upload link failed", error instanceof Error ? error.name : "unknown");
     });
   }
+  // The conversation moved: a new one gets its title from what this answer was about, and anything that has now
+  // fallen out of the last six exchanges is folded into its summary — after the answer is on the screen.
+  if (saved && thread) {
+    const asked = question;
+    await runAfterResponse(() => afterAnswer(who, thread.id, asked, reply.state));
+  }
   return {
     ok: true, answer, rows, tools, learned: learnedCount, actions, choices, saved: saved !== null,
     ...(dropWaiting.length ? { dropWaiting } : {}),
@@ -2673,6 +2707,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     ...(opts.spoken && reply.spoken && settled === null && !note ? { spoken: reply.spoken } : {}),
     ...(source === "chat" && evidence.length && !settled ? { cited, evidence } : {}),
     ...(saved ? { turnId: saved } : {}),
+    ...(thread ? { conversationId: thread.id } : {}),
   };
 }
 
