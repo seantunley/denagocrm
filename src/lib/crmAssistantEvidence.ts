@@ -76,7 +76,7 @@ const SEARCH_STOP = new Set(["the", "and", "what", "did", "about", "with", "for"
  * also matched by its stem as a substring. At most 8; letters and digits only,
  * so a stem is always safe inside an ILIKE pattern.
  */
-export function searchStems(words: string): string[] {
+export function searchStems(words: string, max = 8): string[] {
   const stems = words
     .toLowerCase()
     .split(/[^\p{L}\p{N}]+/u)
@@ -85,7 +85,7 @@ export function searchStems(words: string): string[] {
       const stem = w.replace(/(ies|ied|ing|ery|ers|ed|es|er|ry|s|y|e)$/u, "");
       return stem.length >= 4 ? stem : w;
     });
-  return [...new Set(stems)].slice(0, 8);
+  return [...new Set(stems)].slice(0, max);
 }
 
 /** About SNIPPET_CHARS of `text` around the first stem found (the start when none is). */
@@ -227,12 +227,13 @@ export async function searchMessages(user: User, raw: z.infer<typeof messageSear
   const args = messageSearchArgs.parse(raw);
   const scope = await messageScope(user, args.customer);
   if (!("leadIds" in scope)) return scope;
-  const stems = args.words ? searchStems(args.words) : [];
+  // The words AND the other wordings DAX gave for them (search by meaning, part 1 — as `recall` does).
+  const stems = searchStems([args.words, ...(args.alternatives ?? [])].filter(Boolean).join(" "), args.alternatives?.length ? 16 : 8);
   const search = stems.join(" or ");
   const take = args.limit ?? 10;
   const tenantId = ownedWriteTenantId();
   // The workspace is written into the statement itself (below), where the tenant-access sweep can read it.
-  const conditions = [
+  const filters = [
     scope.contactId
       ? Prisma.sql`(("contactId" = ${scope.contactId} AND "leadId" IS NULL) OR "leadId" = ANY(${scope.leadIds}::text[]))`
       : Prisma.sql`"leadId" = ANY(${scope.leadIds}::text[])`,
@@ -241,6 +242,9 @@ export async function searchMessages(user: User, raw: z.infer<typeof messageSear
     // Calendar days in South Africa: `to` includes the whole of that day.
     ...(args.from ? [Prisma.sql`"occurredAt" >= ${new Date(`${args.from}T00:00:00+02:00`)}`] : []),
     ...(args.to ? [Prisma.sql`"occurredAt" < ${new Date(new Date(`${args.to}T00:00:00+02:00`).getTime() + 86_400_000)}`] : []),
+  ];
+  const conditions = [
+    ...filters,
     // Full-text (stems: "promised" finds "promise"), the stem as a substring
     // ("deliv" finds delivery AND delivered), or a close spelling (pg_trgm).
     ...(stems.length
@@ -269,14 +273,48 @@ export async function searchMessages(user: User, raw: z.infer<typeof messageSear
     ? [...found].sort((a, b) => hits(b) - hits(a) || b.rank - a.rank || b.occurredAt.getTime() - a.occurredAt.getTime())
     : found;
   const page = ranked.slice(0, take);
+  // SEARCH BY MEANING, part 2 (Sean, 2026-11-13: "find where she complained about delivery" missed "still waiting for
+  // my bike"). When the words find little, DAX also gets this customer's latest messages, short, to read for meaning
+  // itself. No embeddings: nothing new is sent anywhere, and nothing has to be indexed first.
+  const toRead = stems.length && page.length < MEANING_MIN_HITS
+    ? await prisma.$queryRaw<SearchRow[]>`
+        SELECT "id", "occurredAt", "direction", "type", "subject", "body", "leadId", "userId",
+               "openToken", "messageId", "seenAt", "openCount", "bouncedAt", "bounceReason", "deliveredAt", 0::float8 AS "rank"
+          FROM "Communication"
+         WHERE "tenantId" = ${tenantId}
+           AND ${Prisma.join(filters, " AND ")}
+           ${page.length ? Prisma.sql`AND "id" <> ALL(${page.map((r) => r.id)}::text[])` : Prisma.empty}
+         ORDER BY "occurredAt" DESC
+         LIMIT ${MEANING_READ}`
+    : [];
   const [standIn, authors, deals] = await Promise.all([
     resolveTenantActor().catch(() => null),
-    page.length ? prisma.user.findMany({ where: { id: { in: [...new Set(page.map((r) => r.userId))] } }, select: { id: true, name: true } }) : [],
+    page.length || toRead.length ? prisma.user.findMany({ where: { id: { in: [...new Set([...page, ...toRead].map((r) => r.userId))] } }, select: { id: true, name: true } }) : [],
     scope.leadIds.length ? prisma.lead.findMany({ where: { id: { in: scope.leadIds } }, select: { id: true, title: true } }) : [],
   ]);
   const author = new Map(authors.map((u) => [u.id, u]));
   const dealTitle = new Map(deals.map((d) => [d.id, d.title]));
-  if (!page.length) {
+  const shown = (r: SearchRow, excerpt: string) => {
+    const { from, loggedBy } = messageAuthor({ ...r, user: author.get(r.userId) ?? null }, standIn?.id ?? null);
+    return {
+      id: r.id,
+      when: dateKey(r.occurredAt),
+      channel: r.type,
+      from,
+      ...(loggedBy ? { loggedBy } : {}),
+      ...(r.leadId && dealTitle.get(r.leadId) ? { deal: dealTitle.get(r.leadId) } : {}),
+      ...(r.subject ? { subject: clip(r.subject, 140) } : {}),
+      excerpt,
+      ...messageFacts(r),
+    };
+  };
+  const readForMeaning = toRead.length
+    ? {
+        readForMeaning: toRead.map((r) => shown(r, clip(r.body.replace(/\s+/g, " ").trim(), MEANING_EXCERPT))),
+        meaningNote: `The words matched little, so here are ${scope.label}'s latest messages to READ FOR MEANING: the same thing is often said in other words ("still waiting for my bike" is a delivery complaint). Use one only if it says what was asked; quote it and give its date. open_message reads one in full.`,
+      }
+    : {};
+  if (!page.length && !toRead.length) {
     return note(`No message${stems.length ? ` with ${stems.map((s) => `"${s}…"`).join(" or ")}` : ""} to or from ${scope.label} matches. (Words are matched by stem and close spelling, not by meaning — try other words before saying it was never said.)`, { customer: scope.label, link: scope.link });
   }
   return {
@@ -287,24 +325,21 @@ export async function searchMessages(user: User, raw: z.infer<typeof messageSear
       found: found.length === SEARCH_CANDIDATES ? `at least ${SEARCH_CANDIDATES}` : found.length,
       note: "Excerpts only — open_message reads one in full. An older message can be out of date: check what was said against today's record (the quote, the deal) before relying on it, and say when it was said and by whom.",
       who: WHO_LEGEND,
-      messages: page.map((r) => {
-        const { from, loggedBy } = messageAuthor({ ...r, user: author.get(r.userId) ?? null }, standIn?.id ?? null);
-        return {
-          id: r.id,
-          when: dateKey(r.occurredAt),
-          channel: r.type,
-          from,
-          ...(loggedBy ? { loggedBy } : {}),
-          ...(r.leadId && dealTitle.get(r.leadId) ? { deal: dealTitle.get(r.leadId) } : {}),
-          ...(r.subject ? { subject: clip(r.subject, 140) } : {}),
-          excerpt: snippetAround(r.body, stems),
-          ...messageFacts(r),
-        };
-      }),
+      messages: page.map((r) => shown(r, snippetAround(r.body, stems))),
+      ...readForMeaning,
     }],
     rows: [{ label: `${scope.label} — messages`, detail: `${found.length} found`, href: scope.link }],
   };
 }
+
+/** Fewer word matches than this, and the customer's latest messages come along to be read for meaning. */
+export const MEANING_MIN_HITS = 3;
+/**
+ * How many of the latest messages, and how much of each — sized to sit inside search_messages' observation budget
+ * (12 000 characters in crmAssistant) with the dates, ids and facts around them, so the cut never lands mid-list.
+ */
+export const MEANING_READ = 20;
+const MEANING_EXCERPT = 200;
 
 /* ── open_message ───────────────────────────────────────────────────────── */
 
