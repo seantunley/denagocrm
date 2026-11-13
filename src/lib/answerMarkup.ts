@@ -21,11 +21,42 @@ export type Block =
 
 const INLINE = /\*\*([^*\n]+?)\*\*|\[\[(\d+)\]\]|\[([^\]\n]+)\]\(([^)\s]+)\)/g;
 
-/** Where a link may go: a path inside the app, or a web address. Anything else (javascript:, data:, //host) is text. */
+const HOME = "https://crm.invalid";
+
+/**
+ * A path INSIDE the app, normalised — or null. Review of #1091: "/\evil.example/path" starts with one "/", yet a
+ * browser reads it as a link to evil.example (a backslash counts as a slash). So: no backslash, no whitespace or
+ * control character, no encoded slash or backslash, nothing after "/" that starts another host, and the parsed URL
+ * must still be on this site. What goes into the link is the PARSED path, never the text as written.
+ */
+export function internalPath(href: string): string | null {
+  if (!/^\/(?![/\\])/.test(href)) return null;
+  if (/[\\\s\u0000-\u001f\u007f]|%(?:2f|5c|0[0-9a-f]|1[0-9a-f]|7f)/i.test(href)) return null;
+  try {
+    const url = new URL(href, HOME);
+    return url.origin === HOME ? `${url.pathname}${url.search}${url.hash}` : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A web address: http or https only, as parsed. */
+function webAddress(href: string): string | null {
+  if (!/^https?:\/\//i.test(href) || /[\\\s\u0000-\u001f\u007f]/.test(href)) return null;
+  try {
+    const url = new URL(href);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Where a link may go: a path inside the app, or a web address. Anything else (javascript:, data:, //host, /\host) is text. */
 function safeHref(href: string): { href: string; external: boolean } | null {
-  if (href.startsWith("/") && !href.startsWith("//")) return { href, external: false };
-  if (/^https?:\/\/[^\s]+$/i.test(href)) return { href, external: true };
-  return null;
+  const inside = internalPath(href);
+  if (inside) return { href: inside, external: false };
+  const web = webAddress(href);
+  return web ? { href: web, external: true } : null;
 }
 
 export function parseInline(text: string): Inline[] {

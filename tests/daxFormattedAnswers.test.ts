@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
-import { answerForWhatsApp, parseAnswer, parseInline } from "../src/lib/answerMarkup";
+import { answerForWhatsApp, internalPath, parseAnswer, parseInline } from "../src/lib/answerMarkup";
 import { forWhatsApp, planWhatsAppReply } from "../src/lib/assistantWhatsAppRules";
 import { speakableText } from "../src/lib/spokenText";
 
@@ -43,6 +43,16 @@ test("bold, lists, a small table, links and citations come out as their own piec
 test("nothing from the text becomes markup it shouldn't — no script links, no HTML", () => {
   assert.deepEqual(parseInline("[click](javascript:alert(1))"), [{ t: "text", v: "click" }, { t: "text", v: ")" }]);
   assert.deepEqual(parseInline("[x](//evil.example)"), [{ t: "text", v: "x" }]);
+  // Review of #1091: paths a browser reads as ANOTHER site never pass as internal.
+  for (const sneaky of ["/\\evil.example/path", "/\\\\evil.example", "/%2fevil.example", "/%5cevil.example", "/%2Fevil.example", "/ /evil.example", "/\tevil.example", "/x\\y"]) {
+    assert.equal(internalPath(sneaky), null, sneaky);
+    assert.equal(parseInline(`[x](${sneaky})`).some((p) => p.t === "link"), false, `never a link: ${sneaky}`);
+  }
+  // Real CRM paths still pass, normalised to the parsed path.
+  assert.equal(internalPath("/leads/cm1abc"), "/leads/cm1abc");
+  assert.equal(internalPath("/quotes?edit=cm1#top"), "/quotes?edit=cm1#top");
+  assert.equal(internalPath("/a/../leads/cm1"), "/leads/cm1", "dot segments resolved, still on this site");
+  assert.deepEqual(parseInline("[Quote](/quotes/cm1)"), [{ t: "link", label: "Quote", href: "/quotes/cm1", external: false }]);
   assert.deepEqual(parseInline("<img src=x onerror=alert(1)>"), [{ t: "text", v: "<img src=x onerror=alert(1)>" }], "stays text");
   assert.deepEqual(parseInline("[Tannery](https://tannerycars.co.za/x)"), [{ t: "link", label: "Tannery", href: "https://tannerycars.co.za/x", external: true }]);
   const renderer = src("src/components/AnswerMarkup.tsx");
