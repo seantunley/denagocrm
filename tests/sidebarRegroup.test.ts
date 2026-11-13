@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { allNavLinks, buildNav } from "../src/components/nav-config";
 
 /**
@@ -67,4 +68,15 @@ test("no group ever renders empty, whatever the role or the workspace's packs", 
       for (const group of buildNav(persona.admin, persona.perms, enabled).groups) assert.ok(group.links.length > 0, group.key);
     }
   }
+});
+
+test("Ask the CRM is the button at the foot of the sidebar — drawn there, still in its group for search and permissions", () => {
+  const foot = allNavLinks(buildNav(true, [])).filter((link) => link.foot);
+  assert.deepEqual(foot.map((link) => link.href), ["/assistant"]);
+  const nav = readFileSync("src/components/Nav.tsx", "utf8");
+  // Taken out of its group AFTER the phone filter, so the phone menu never gains it.
+  assert.match(nav, /const footLinks = scoped\.flatMap\(\(group\) => group\.links\.filter\(\(link\) => link\.foot\)\);/);
+  assert.match(nav, /links: group\.links\.filter\(\(link\) => !link\.foot\)/);
+  // Outside the scrolling list, so it stays put however long the menu is.
+  assert.match(nav, /<\/div>\s*\{\/\* The foot of the sidebar/);
 });

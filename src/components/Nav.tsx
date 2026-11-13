@@ -110,13 +110,17 @@ export default function Nav({
     navLabelOverrides(useRecordLabels()),
   );
   const topLinks = phone ? built.topLinks.filter((link) => linkOnPhone(link.href)) : built.topLinks;
-  const groups = phone
+  const scoped = phone
     ? built.groups.map((group) => ({ ...group, links: group.links.filter((link) => linkOnPhone(link.href)) })).filter((group) => group.links.length > 0)
     : built.groups;
+  // A `foot` link (Ask the CRM) leaves its group for the raised button at the
+  // foot of the sidebar — after the phone filter, so the phone still has none.
+  const footLinks = scoped.flatMap((group) => group.links.filter((link) => link.foot));
+  const groups = scoped.map((group) => ({ ...group, links: group.links.filter((link) => !link.foot) })).filter((group) => group.links.length > 0);
   const pathname = usePathname();
 
   // The most specific match wins: /jobcards/insights is Insights, not Job Cards.
-  const allHrefs = [...topLinks, ...groups.flatMap((group) => group.links)].map((link) => link.href);
+  const allHrefs = [...topLinks, ...groups.flatMap((group) => group.links), ...footLinks].map((link) => link.href);
   const matches = (href: string) => (href === "/" ? pathname === "/" : pathname === href || pathname.startsWith(`${href}/`));
   const current = allHrefs.filter(matches).sort((a, b) => b.length - a.length)[0] ?? null;
   const isActive = (href: string) => href === current;
@@ -137,7 +141,8 @@ export default function Nav({
   if (rail) {
     return (
       <MotionConfig reducedMotion="user">
-      <nav aria-label="Main" className="flex min-h-0 w-full flex-1 flex-col items-center gap-1 overflow-y-auto pb-2">
+      <nav aria-label="Main" className="flex min-h-0 w-full flex-1 flex-col items-center">
+        <div className="flex min-h-0 w-full flex-1 flex-col items-center gap-1 overflow-y-auto pb-2">
         {topLinks.map((link) => {
           const active = isActive(link.href);
           const n = badges[link.href] ?? 0;
@@ -159,6 +164,19 @@ export default function Nav({
         {groups.map((group) => (
           <RailGroup key={group.key} group={group} active={group.key === activeGroup} isActive={isActive} badges={badges} total={groupTotal(group)} />
         ))}
+        </div>
+        {footLinks.map((link) => (
+          <RailTip key={link.href} label={link.label}>
+            <Link
+              href={link.href}
+              aria-label={link.label}
+              aria-current={isActive(link.href) ? "page" : undefined}
+              className={cn(RAIL_BUTTON, "depth-raised mt-2 text-primary hover:brightness-110")}
+            >
+              <link.icon className="size-5" aria-hidden />
+            </Link>
+          </RailTip>
+        ))}
       </nav>
       </MotionConfig>
     );
@@ -167,7 +185,9 @@ export default function Nav({
   return (
     <MotionConfig reducedMotion="user">
     <LayoutGroup id={phone ? "nav-drawer" : "nav-desktop"}>
-    <nav aria-label="Main" onScroll={(event) => setScrolled(event.currentTarget.scrollTop > 0)} className="-mx-1 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-1 pb-2">
+    <nav aria-label="Main" className="-mx-1 flex min-h-0 flex-1 flex-col">
+      {/* The menu scrolls on its own; the foot button below it stays put. */}
+      <div onScroll={(event) => setScrolled(event.currentTarget.scrollTop > 0)} className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-1 pb-2">
       <div aria-hidden className={cn("pointer-events-none sticky top-0 z-20 -mx-1 -mb-3 h-3 shrink-0 bg-gradient-to-b from-black/45 to-transparent transition-opacity duration-150 motion-reduce:transition-none", scrolled ? "opacity-100" : "opacity-0")} />
       {topLinks.map((link) => {
         const active = isActive(link.href);
@@ -231,6 +251,20 @@ export default function Nav({
           </div>
         );
       })}
+      </div>
+      {/* The foot of the sidebar: Ask the CRM, always in reach — raised like the current page, its mark in the accent. */}
+      {footLinks.map((link) => (
+        <div key={link.href} className="shrink-0 px-1 pt-2">
+          <Link
+            href={link.href}
+            aria-current={isActive(link.href) ? "page" : undefined}
+            className={cn(ROW, "depth-raised flex items-center gap-3 px-3 text-sm font-semibold text-sidebar-accent-foreground hover:brightness-110")}
+          >
+            <link.icon className="size-[18px] shrink-0 text-primary" aria-hidden />
+            <span className="min-w-0 flex-1 truncate">{link.label}</span>
+          </Link>
+        </div>
+      ))}
     </nav>
     </LayoutGroup>
     </MotionConfig>
