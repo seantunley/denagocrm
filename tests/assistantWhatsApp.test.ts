@@ -1056,7 +1056,8 @@ test("the staff path never writes a customer record or runs the bot", () => {
     assert.doesNotMatch(call, /record/, call);
   }
   // (Round 2, 2026-11-02: what waits for Confirm is passed too — see the change-by-voice test.)
-  assert.match(lib, /askCrm\(user, q, null, \{\s*source: "whatsapp", images, \.\.\.\(file \? \{ file \} : \{\}\), \.\.\.\(voiceBack \? \{ spoken: true \} : \{\}\),\s*\.\.\.\(waitingNow\.length \? \{ waiting: [^\n]*\n\s*proposeTasks: \(await confirmingOnWhatsAppOn\(\)\) \? true : "saved",\s*\}\)/);
+  // `conversation: "new"` only when the message starts a new topic (assistantConversation) — nothing else changed.
+  assert.match(lib, /askCrm\(user, q, null, \{\s*source: "whatsapp", images, \.\.\.\(startsNewConversation\(q\) \? \{ conversation: "new" \} : \{\}\), \.\.\.\(file \? \{ file \} : \{\}\), \.\.\.\(voiceBack \? \{ spoken: true \} : \{\}\),\s*\.\.\.\(waitingNow\.length \? \{ waiting: [^\n]*\n\s*proposeTasks: \(await confirmingOnWhatsAppOn\(\)\) \? true : "saved",\s*\}\)/);
   // Every lookup names the workspace the route entered for the business number.
   assert.match(lib, /const scope = currentTenantScope\(\);\s*if \(!scope \|\| scope\.system \|\| !scope\.tenantId\) return false;\s*const tenantId = scope\.tenantId;/);
   // …and it is the first thing the handler does: nothing runs before it.

@@ -15,7 +15,9 @@ test("a corrected question carries the one it replaces through the queue", () =>
 
 test("only the person's own latest chat question is taken out — and only the plans IT offered are closed", () => {
   const edit = src("src/lib/assistantEdit.ts");
-  assert.match(edit, /where: \{ tenantId, userId, source: "chat" \},\s*orderBy: \{ createdAt: "desc" \},\s*take: 1,/);
+  // The latest in ITS conversation — the thread on the screen (assistantConversation).
+  assert.match(edit, /findFirst\(\{ where: \{ id: turnId, tenantId, userId, source: "chat" \}, select: \{ conversationId: true \} \}\)/);
+  assert.match(edit, /where: \{ tenantId, userId, source: "chat", conversationId: asked\.conversationId \},\s*orderBy: \{ createdAt: "desc" \},\s*take: 1,/);
   assert.match(edit, /if \(!last \|\| last\.id !== turnId\) return "not-latest";/, "anything but the latest is refused");
   assert.match(edit, /tx\.assistantTurn\.deleteMany\(\{ where: \{ id: last\.id, tenantId, userId \} \}\)/);
   // Review of #1092: by the answer's own record of its plans — never a time window (that caught WhatsApp's cards).

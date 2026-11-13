@@ -22,8 +22,11 @@ import { PLAN_KIND } from "./assistantPlan";
 export type Withdrawal = "withdrawn" | "not-latest";
 
 export async function withdrawLastQuestion(tenantId: string, userId: string, turnId: string): Promise<Withdrawal> {
+  // The latest in ITS conversation (assistantConversation) — the thread on the screen — not across all of them.
+  const asked = await prisma.assistantTurn.findFirst({ where: { id: turnId, tenantId, userId, source: "chat" }, select: { conversationId: true } });
+  if (!asked) return "not-latest";
   const [last] = await prisma.assistantTurn.findMany({
-    where: { tenantId, userId, source: "chat" },
+    where: { tenantId, userId, source: "chat", conversationId: asked.conversationId },
     orderBy: { createdAt: "desc" },
     take: 1,
     select: { id: true, proposed: true },

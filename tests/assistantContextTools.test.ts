@@ -135,10 +135,11 @@ test("in the bubble it reads like a chat: oldest first, composer at the bottom, 
   assert.match(compact, /const thread = \[\.\.\.turns\]\.reverse\(\);/);
   assert.ok(compact.indexOf("thread.map(") < compact.indexOf("{composer}"), "the composer comes after the thread");
   assert.match(chat, /const voice = useVoiceRecorder\(/, "the same mic in the bubble and the page");
-  assert.match(code("src/components/AssistantBubble.tsx"), /<AssistantChat\s+key=\{pathname\}\s+name=\{data\.name\}\s+history=\{data\.history\}\s+page=\{pathname \?\? undefined\}\s+autoAsk=\{autoAsk \?\? undefined\}\s+listen=\{data\.listen\}\s+compact\s+\/>/);
+  // Keyed by page AND conversation: "＋ New" or another page starts it afresh (assistantConversation).
+  assert.match(code("src/components/AssistantBubble.tsx"), /<AssistantChat\s+key=\{`\$\{pathname\}:\$\{data\.conversation \?\? "pick"\}`\}\s+name=\{data\.name\}\s+history=\{data\.history\}\s+page=\{pathname \?\? undefined\}\s+autoAsk=\{autoAsk \?\? undefined\}\s+listen=\{data\.listen\}\s+conversation=\{data\.conversation\}\s+compact\s+\/>/);
 });
 
-test("the bubble: same gate as the page, today's conversation only, no load until opened", () => {
+test("the bubble: same gate as the page, the page's own conversation, no load until opened", () => {
   const layout = code("src/app/(app)/layout.tsx");
   assert.match(layout, /enabledModules === null \|\| enabledModules\.has\("automation"\)/);
   // Same gate; on a phone it is hidden (lib/phoneScope.ts — there, DAX is on WhatsApp).
@@ -149,7 +150,10 @@ test("the bubble: same gate as the page, today's conversation only, no load unti
   const action = code("src/app/actions/assistant.ts");
   const open = action.slice(action.indexOf("export async function openAssistantBubble"));
   assert.match(open, /await requireAnyPermission\(\.\.\.ASSISTANT_PERMISSIONS\);\s*if \(!\(await isModuleEnabled\("automation"\)\)\) return \{ ok: false \};/);
-  assert.match(open, /assistantTurnsToday\(user\.id\)/);
+  // The conversation a question here would continue — the deal's or customer's on their page, else the one you were
+  // in — and only ITS exchanges; opening the panel never starts one.
+  assert.match(open, /const conversation = await currentConversation\(who, record\);/);
+  assert.match(open, /conversation \? conversationHistory\(who, conversation, 20\) : Promise\.resolve\(\[\]\)/);
   const bubble = code("src/components/AssistantBubble.tsx");
   assert.doesNotMatch(bubble.slice(0, bubble.indexOf("const toggle")), /openAssistantBubble\(/, "nothing fetched on page load");
 });

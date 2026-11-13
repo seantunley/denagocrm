@@ -40,7 +40,8 @@ test("the planner is told when to use each, and the person sees what it is doing
   assert.match(plan, /- search_messages: .*"customer".*\(required\).*not by meaning/);
   assert.match(plan, /what did we promise/);
   assert.match(plan, /- open_message: .*"id".*\(required\)/);
-  assert.match(plan, /- read_document: .*page numbers.*scanned PDF has no text/);
+  // A scan, a photo, or a picture a customer sent is read from the picture now (2026-11-13), and said to be fallible.
+  assert.match(plan, /- read_document: .*page numbers.*SCANNED PDF, a PHOTO or picture on file, or the picture or file a customer SENT in a message, read from the picture by the AI.*it can misread/);
   assert.match(plan, /- documents: .*documentId/);
   assert.equal(lookupStatus([{ tool: "search_messages" }, { tool: "read_document" }]), "Searching their messages and reading a document…");
 });

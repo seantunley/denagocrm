@@ -14,6 +14,7 @@ import { isModuleEnabled } from "./modules/enabled";
 import { isAutomotiveOwnedDocument } from "./modules/registry";
 import { canAccessContact, getAccessibleContactIds, getAccessibleDocumentIds, getAccessibleLeadIds, hasAnyPermission, type PermissionUser } from "./permissions";
 import { messageSearchArgs, openMessageArgs, readDocumentArgs } from "./crmAssistantPlan";
+import { declaredKind, readPictures, scanPagePictures, sniffKind, type PictureRead } from "./assistantFileReading";
 import type { AssistantRow } from "./crmAssistant";
 
 /**
@@ -76,7 +77,7 @@ const SEARCH_STOP = new Set(["the", "and", "what", "did", "about", "with", "for"
  * also matched by its stem as a substring. At most 8; letters and digits only,
  * so a stem is always safe inside an ILIKE pattern.
  */
-export function searchStems(words: string): string[] {
+export function searchStems(words: string, max = 8): string[] {
   const stems = words
     .toLowerCase()
     .split(/[^\p{L}\p{N}]+/u)
@@ -85,7 +86,7 @@ export function searchStems(words: string): string[] {
       const stem = w.replace(/(ies|ied|ing|ery|ers|ed|es|er|ry|s|y|e)$/u, "");
       return stem.length >= 4 ? stem : w;
     });
-  return [...new Set(stems)].slice(0, 8);
+  return [...new Set(stems)].slice(0, max);
 }
 
 /** About SNIPPET_CHARS of `text` around the first stem found (the start when none is). */
@@ -227,12 +228,13 @@ export async function searchMessages(user: User, raw: z.infer<typeof messageSear
   const args = messageSearchArgs.parse(raw);
   const scope = await messageScope(user, args.customer);
   if (!("leadIds" in scope)) return scope;
-  const stems = args.words ? searchStems(args.words) : [];
+  // The words AND the other wordings DAX gave for them (search by meaning, part 1 — as `recall` does).
+  const stems = searchStems([args.words, ...(args.alternatives ?? [])].filter(Boolean).join(" "), args.alternatives?.length ? 16 : 8);
   const search = stems.join(" or ");
   const take = args.limit ?? 10;
   const tenantId = ownedWriteTenantId();
   // The workspace is written into the statement itself (below), where the tenant-access sweep can read it.
-  const conditions = [
+  const filters = [
     scope.contactId
       ? Prisma.sql`(("contactId" = ${scope.contactId} AND "leadId" IS NULL) OR "leadId" = ANY(${scope.leadIds}::text[]))`
       : Prisma.sql`"leadId" = ANY(${scope.leadIds}::text[])`,
@@ -241,6 +243,9 @@ export async function searchMessages(user: User, raw: z.infer<typeof messageSear
     // Calendar days in South Africa: `to` includes the whole of that day.
     ...(args.from ? [Prisma.sql`"occurredAt" >= ${new Date(`${args.from}T00:00:00+02:00`)}`] : []),
     ...(args.to ? [Prisma.sql`"occurredAt" < ${new Date(new Date(`${args.to}T00:00:00+02:00`).getTime() + 86_400_000)}`] : []),
+  ];
+  const conditions = [
+    ...filters,
     // Full-text (stems: "promised" finds "promise"), the stem as a substring
     // ("deliv" finds delivery AND delivered), or a close spelling (pg_trgm).
     ...(stems.length
@@ -269,14 +274,48 @@ export async function searchMessages(user: User, raw: z.infer<typeof messageSear
     ? [...found].sort((a, b) => hits(b) - hits(a) || b.rank - a.rank || b.occurredAt.getTime() - a.occurredAt.getTime())
     : found;
   const page = ranked.slice(0, take);
+  // SEARCH BY MEANING, part 2 (Sean, 2026-11-13: "find where she complained about delivery" missed "still waiting for
+  // my bike"). When the words find little, DAX also gets this customer's latest messages, short, to read for meaning
+  // itself. No embeddings: nothing new is sent anywhere, and nothing has to be indexed first.
+  const toRead = stems.length && page.length < MEANING_MIN_HITS
+    ? await prisma.$queryRaw<SearchRow[]>`
+        SELECT "id", "occurredAt", "direction", "type", "subject", "body", "leadId", "userId",
+               "openToken", "messageId", "seenAt", "openCount", "bouncedAt", "bounceReason", "deliveredAt", 0::float8 AS "rank"
+          FROM "Communication"
+         WHERE "tenantId" = ${tenantId}
+           AND ${Prisma.join(filters, " AND ")}
+           ${page.length ? Prisma.sql`AND "id" <> ALL(${page.map((r) => r.id)}::text[])` : Prisma.empty}
+         ORDER BY "occurredAt" DESC
+         LIMIT ${MEANING_READ}`
+    : [];
   const [standIn, authors, deals] = await Promise.all([
     resolveTenantActor().catch(() => null),
-    page.length ? prisma.user.findMany({ where: { id: { in: [...new Set(page.map((r) => r.userId))] } }, select: { id: true, name: true } }) : [],
+    page.length || toRead.length ? prisma.user.findMany({ where: { id: { in: [...new Set([...page, ...toRead].map((r) => r.userId))] } }, select: { id: true, name: true } }) : [],
     scope.leadIds.length ? prisma.lead.findMany({ where: { id: { in: scope.leadIds } }, select: { id: true, title: true } }) : [],
   ]);
   const author = new Map(authors.map((u) => [u.id, u]));
   const dealTitle = new Map(deals.map((d) => [d.id, d.title]));
-  if (!page.length) {
+  const shown = (r: SearchRow, excerpt: string) => {
+    const { from, loggedBy } = messageAuthor({ ...r, user: author.get(r.userId) ?? null }, standIn?.id ?? null);
+    return {
+      id: r.id,
+      when: dateKey(r.occurredAt),
+      channel: r.type,
+      from,
+      ...(loggedBy ? { loggedBy } : {}),
+      ...(r.leadId && dealTitle.get(r.leadId) ? { deal: dealTitle.get(r.leadId) } : {}),
+      ...(r.subject ? { subject: clip(r.subject, 140) } : {}),
+      excerpt,
+      ...messageFacts(r),
+    };
+  };
+  const readForMeaning = toRead.length
+    ? {
+        readForMeaning: toRead.map((r) => shown(r, clip(r.body.replace(/\s+/g, " ").trim(), MEANING_EXCERPT))),
+        meaningNote: `The words matched little, so here are ${scope.label}'s latest messages to READ FOR MEANING: the same thing is often said in other words ("still waiting for my bike" is a delivery complaint). Use one only if it says what was asked; quote it and give its date. open_message reads one in full.`,
+      }
+    : {};
+  if (!page.length && !toRead.length) {
     return note(`No message${stems.length ? ` with ${stems.map((s) => `"${s}…"`).join(" or ")}` : ""} to or from ${scope.label} matches. (Words are matched by stem and close spelling, not by meaning — try other words before saying it was never said.)`, { customer: scope.label, link: scope.link });
   }
   return {
@@ -287,24 +326,21 @@ export async function searchMessages(user: User, raw: z.infer<typeof messageSear
       found: found.length === SEARCH_CANDIDATES ? `at least ${SEARCH_CANDIDATES}` : found.length,
       note: "Excerpts only — open_message reads one in full. An older message can be out of date: check what was said against today's record (the quote, the deal) before relying on it, and say when it was said and by whom.",
       who: WHO_LEGEND,
-      messages: page.map((r) => {
-        const { from, loggedBy } = messageAuthor({ ...r, user: author.get(r.userId) ?? null }, standIn?.id ?? null);
-        return {
-          id: r.id,
-          when: dateKey(r.occurredAt),
-          channel: r.type,
-          from,
-          ...(loggedBy ? { loggedBy } : {}),
-          ...(r.leadId && dealTitle.get(r.leadId) ? { deal: dealTitle.get(r.leadId) } : {}),
-          ...(r.subject ? { subject: clip(r.subject, 140) } : {}),
-          excerpt: snippetAround(r.body, stems),
-          ...messageFacts(r),
-        };
-      }),
+      messages: page.map((r) => shown(r, snippetAround(r.body, stems))),
+      ...readForMeaning,
     }],
     rows: [{ label: `${scope.label} — messages`, detail: `${found.length} found`, href: scope.link }],
   };
 }
+
+/** Fewer word matches than this, and the customer's latest messages come along to be read for meaning. */
+export const MEANING_MIN_HITS = 3;
+/**
+ * How many of the latest messages, and how much of each — sized to sit inside search_messages' observation budget
+ * (12 000 characters in crmAssistant) with the dates, ids and facts around them, so the cut never lands mid-list.
+ */
+export const MEANING_READ = 20;
+const MEANING_EXCERPT = 200;
 
 /* ── open_message ───────────────────────────────────────────────────────── */
 
@@ -425,12 +461,14 @@ export async function pdfPages(bytes: Uint8Array, from = 1): Promise<{ totalPage
 }
 
 export async function readDocument(user: User, raw: z.infer<typeof readDocumentArgs>): Promise<ToolOutput> {
-  if (!(await hasAnyPermission(user, "documents.view_all", "documents.view_owned"))) return refused("documents");
   const args = readDocumentArgs.parse(raw);
+  if (args.message) return readAttachment(user, args.message, args.fromPage ?? 1);
+  if (!(await hasAnyPermission(user, "documents.view_all", "documents.view_owned"))) return refused("documents");
   const docIds = await getAccessibleDocumentIds(user);
   if (docIds !== null && docIds.length === 0) return note("There are no documents you can open.");
   const tenantId = ownedWriteTenantId();
-  const words = args.document.split(/\s+/).filter(Boolean).slice(0, 6);
+  const asked = args.document ?? "";
+  const words = asked.split(/\s+/).filter(Boolean).slice(0, 6);
   const customerWords = args.customer?.split(/\s+/).filter(Boolean).slice(0, 4) ?? [];
   const docs = await prisma.document.findMany({
     where: {
@@ -440,8 +478,8 @@ export async function readDocument(user: User, raw: z.infer<typeof readDocumentA
       // and hand anyone any document in the workspace by its id (caught by test-assistant-evidence).
       AND: [
         ...(docIds === null ? [] : [{ id: { in: docIds } }]),
-        ...(ID.test(args.document)
-          ? [{ id: args.document }]
+        ...(ID.test(asked)
+          ? [{ id: asked }]
           : [
               { replacedById: null },
               ...words.map((w) => ({ fileName: fuzzy(w) })),
@@ -456,7 +494,7 @@ export async function readDocument(user: User, raw: z.infer<typeof readDocumentA
   // Vehicle and job-card paperwork belongs to the Automotive module: off, it isn't there (as /api/files says).
   const automotive = docs.some(isAutomotiveOwnedDocument) ? await isModuleEnabled("automotive") : true;
   const visible = docs.filter((d) => automotive || !isAutomotiveOwnedDocument(d));
-  if (!visible.length) return note(`No document you can open matches "${args.document}". The documents lookup lists what is on file for a customer, with each documentId.`);
+  if (!visible.length) return note(`No document you can open matches "${asked}". The documents lookup lists what is on file for a customer, with each documentId.`);
   if (visible.length > 1) {
     return note("Several documents match — ask which one (then read it by its documentId).", {
       candidates: visible.slice(0, 5).map((d) => ({ documentId: d.id, file: d.fileName, added: dateKey(d.createdAt) })),
@@ -465,15 +503,85 @@ export async function readDocument(user: User, raw: z.infer<typeof readDocumentA
   const doc = visible[0];
   const link = `/api/files/${doc.id}`;
   const about = { document: doc.fileName, title: doc.fileName, link, added: dateKey(doc.createdAt) };
-  const isPdf = /^application\/pdf$/i.test(doc.mimeType) || /\.pdf$/i.test(doc.fileName);
-  if (!isPdf) return note(`"${doc.fileName}" is not a PDF — only a PDF's text can be read. Open it to look at it.`, about);
+  const kind = declaredKind(doc.mimeType, doc.fileName);
+  if (kind === "other") return note(`"${doc.fileName}" is a kind of file I can't read yet (Word, Excel and the like) — only PDFs, pictures and plain text. Open it to look at it.`, about);
   if (doc.sizeBytes > PDF_MAX_BYTES) return note(`"${doc.fileName}" is too big to read here (over ${PDF_MAX_BYTES / 1024 / 1024} MB). Open it to look at it.`, about);
 
-  let read: Awaited<ReturnType<typeof pdfPages>>;
+  let bytes: Buffer;
   try {
     // Checked against the RECORD's workspace, exactly as /api/files reads it.
-    const bytes = await readFile(doc.storedName, doc.tenantId);
-    read = await pdfPages(new Uint8Array(bytes), args.fromPage ?? 1);
+    bytes = await readFile(doc.storedName, doc.tenantId);
+  } catch (error) {
+    await logError("crm-assistant", "read_document failed", error instanceof Error ? error.name : "unknown");
+    return note(`I couldn't open "${doc.fileName}" just now — say so; it may be missing from storage.`, about);
+  }
+  return readBytes(bytes, kind, doc.fileName, args.fromPage ?? 1, about);
+}
+
+/**
+ * A message's attachment — a photo or file a customer sent — read the same way as a document on file. Only a message
+ * this person may open (messageVisible, as open_message), in this workspace, and the file is read back checked
+ * against the message's own workspace.
+ */
+async function readAttachment(user: User, messageId: string, fromPage: number): Promise<ToolOutput> {
+  const tenantId = ownedWriteTenantId();
+  const canLeads = await hasAnyPermission(user, "leads.view_all", "leads.view_owned");
+  const leadIds = canLeads ? await getAccessibleLeadIds(user) : [];
+  const message = await prisma.communication.findFirst({
+    where: { id: messageId, tenantId },
+    select: { id: true, leadId: true, contactId: true, tenantId: true, attachmentUrl: true, attachmentType: true, occurredAt: true, type: true },
+  });
+  // Missing, another workspace's, or not yours to see: one answer, so an id says nothing about what exists.
+  if (!message || !(await messageVisible(user, message, leadIds))) return note("No message with that id that you can see.");
+  const about = { message: message.id, title: `${message.type} message, ${dateKey(message.occurredAt)}`, added: dateKey(message.occurredAt) };
+  if (!message.attachmentUrl) return note("That message came with no picture or file.", about);
+  if (message.attachmentType === "audio" || message.attachmentType === "video") {
+    return note(`That message came with ${message.attachmentType === "audio" ? "a voice note" : "a video"}, which I can't read — only pictures, PDFs and text.`, about);
+  }
+  let bytes: Buffer;
+  try {
+    bytes = await readFile(message.attachmentUrl, message.tenantId);
+  } catch (error) {
+    await logError("crm-assistant", "read attachment failed", error instanceof Error ? error.name : "unknown");
+    return note("I couldn't open that attachment just now — say so; it may be missing from storage.", about);
+  }
+  if (bytes.length > PDF_MAX_BYTES) return note(`That attachment is too big to read here (over ${PDF_MAX_BYTES / 1024 / 1024} MB).`, about);
+  const kind = sniffKind(bytes);
+  if (kind === "other") return note("That attachment is a kind of file I can't read yet — only pictures, PDFs and plain text.", about);
+  return readBytes(bytes, kind, "the attachment", fromPage, about);
+}
+
+/** What a picture says, as a result — read just now by the workspace's AI, which can misread. */
+function pictureResult(read: PictureRead, about: Record<string, unknown> & { title: string; link?: string }, label: string, pages?: number[]): ToolOutput {
+  if (!read.ok) return note(`I couldn't read ${label}: ${read.why}. Say so; it can be opened to look at.`, about);
+  return {
+    truncated: false,
+    data: [{
+      ...about,
+      ...(pages ? { pagesRead: pages.join(", ") } : {}),
+      note: "Read from the picture by the AI just now: text transcribed as written, then what it shows. It can misread — say so for any figure, ID or amount that matters, and offer to check the original.",
+      text: clip(read.text, EVIDENCE_CHARS),
+    }],
+    rows: about.link ? [{ label: about.title, detail: pages ? `scan · read pages ${pages.join(", ")}` : "picture", href: about.link }] : [],
+  };
+}
+
+/** A file's bytes, read by what they are: a PDF's text (or, a scan, its page pictures), a picture, or plain text. */
+async function readBytes(bytes: Buffer, kind: "pdf" | "picture" | "text", fileName: string, fromPage: number, about: Record<string, unknown> & { title: string; link?: string }): Promise<ToolOutput> {
+  const shown = fileName === "the attachment" ? fileName : `"${fileName}"`;
+  if (kind === "picture") return pictureResult(await readPictures([bytes], `this picture (${shown})`), about, shown);
+  if (kind === "text") {
+    return {
+      truncated: bytes.length > EVIDENCE_CHARS,
+      data: [{ ...about, note: "The file's text, as filed.", text: clip(bytes.toString("utf8"), EVIDENCE_CHARS) }],
+      rows: about.link ? [{ label: about.title, detail: "text", href: about.link }] : [],
+    };
+  }
+  const doc = { fileName: fileName === "the attachment" ? "the attachment" : fileName };
+  const link = typeof about.link === "string" ? about.link : "";
+  let read: Awaited<ReturnType<typeof pdfPages>>;
+  try {
+    read = await pdfPages(new Uint8Array(bytes), fromPage);
   } catch (error) {
     await logError("crm-assistant", "read_document failed", error instanceof Error ? error.name : "unknown");
     if (error instanceof PdfUnreadable) {
@@ -482,10 +590,25 @@ export async function readDocument(user: User, raw: z.infer<typeof readDocumentA
     }
     return note(`I couldn't open "${doc.fileName}" just now — say so; it may be missing from storage.`, about);
   }
-  if (!read.pages.length) return note(`"${doc.fileName}" has ${read.totalPages} page${read.totalPages === 1 ? "" : "s"}; there is no page ${args.fromPage}.`, about);
+  if (!read.pages.length) return note(`"${doc.fileName}" has ${read.totalPages} page${read.totalPages === 1 ? "" : "s"}; there is no page ${fromPage}.`, about);
   const textChars = read.pages.reduce((n, p) => n + p.text.replace(/\s/g, "").length, 0);
   if (textChars < SCAN_TEXT_CHARS) {
-    return note(`"${doc.fileName}" is a scan (pictures of pages, no text in it), so I can't read it. Say exactly that, and that it can be opened to look at.`, about);
+    // A SCAN: pictures of pages, no text layer. Its page pictures are taken out and read (first MAX_PICTURES pages).
+    let scan: Awaited<ReturnType<typeof scanPagePictures>>;
+    try {
+      scan = await scanPagePictures(new Uint8Array(bytes), fromPage);
+    } catch (error) {
+      await logError("crm-assistant", "scan pictures failed", error instanceof Error ? error.name : "unknown");
+      return note(`"${doc.fileName}" is a scan and I couldn't take its pages out to read. Say so; it can be opened to look at.`, about);
+    }
+    if (!scan.images.length) return note(`"${doc.fileName}" has no text and no page pictures I can read. Say so; it can be opened to look at.`, about);
+    const result = pictureResult(await readPictures(scan.images, `the scanned pages of "${doc.fileName}"`), about, `"${doc.fileName}"`, scan.pages);
+    const last = scan.pages.at(-1)!;
+    if (last < read.totalPages && result.data.length) {
+      (result.data[0] as Record<string, unknown>).more = `A scan of ${read.totalPages} pages; pages ${last + 1}–${read.totalPages} not read: read_document with fromPage ${last + 1}.`;
+      result.truncated = true;
+    }
+    return result;
   }
   // Pages in order until the budget is spent; the rest are named, not dropped silently.
   const pages: { page: number; text: string }[] = [];
@@ -509,6 +632,6 @@ export async function readDocument(user: User, raw: z.infer<typeof readDocumentA
       text: pages,
       ...(more ? { more } : {}),
     }],
-    rows: [{ label: doc.fileName, detail: `PDF · ${read.totalPages} page${read.totalPages === 1 ? "" : "s"}`, href: link }],
+    rows: link ? [{ label: doc.fileName, detail: `PDF · ${read.totalPages} page${read.totalPages === 1 ? "" : "s"}`, href: link }] : [],
   };
 }

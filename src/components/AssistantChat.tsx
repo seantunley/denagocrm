@@ -17,6 +17,7 @@ import { audioForm, useVoiceRecorder } from "@/components/useVoiceRecorder";
 import type { ActionCard } from "@/lib/assistantActions";
 import AssistantActionCard from "@/components/AssistantActionCard";
 import AssistantPlanCard from "@/components/AssistantPlanCard";
+import AnswerMarkup from "@/components/AnswerMarkup";
 
 type Turn = {
   question: string; answer?: string; cited?: string; evidence?: Evidence[]; turnId?: string;
@@ -36,34 +37,14 @@ const scheduledLabel = (turn: Turn) =>
               : null;
 
 /**
- * The answer, with its evidence: each [[n]] the server numbered becomes a small
- * chip that opens the record the fact came from. Only links the server kept —
- * ones its own lookups returned — ever reach here.
+ * The answer, formatted (bold, lists, small tables, links — AnswerMarkup), with its evidence: each [[n]] the server
+ * numbered becomes a small chip that opens the record the fact came from. Only links the server kept — ones its own
+ * lookups returned — ever become chips.
  */
 function AnswerText({ turn }: { turn: Turn }) {
   if (turn.stopped) return <p className="text-sm text-muted-foreground">⏹ {ASK_STOPPED}</p>;
-  if (!turn.cited || !turn.evidence?.length) return <p className="whitespace-pre-line text-sm leading-relaxed">{turn.answer}</p>;
-  const parts = turn.cited.split(/\[\[(\d+)\]\]/);
-  return (
-    <p className="whitespace-pre-line text-sm leading-relaxed">
-      {parts.map((part, i) => {
-        if (i % 2 === 0) return part;
-        const source = turn.evidence![Number(part) - 1];
-        if (!source) return null;
-        return (
-          <Link
-            key={i}
-            href={source.href}
-            title={`Open ${source.label}`}
-            className="mx-0.5 inline-flex max-w-[12rem] items-center gap-0.5 truncate rounded-full border border-primary/30 bg-primary/5 px-1.5 align-baseline text-[11px] font-medium text-primary hover:bg-primary/10"
-          >
-            {source.label}
-            <ArrowUpRight className="size-3 shrink-0" />
-          </Link>
-        );
-      })}
-    </p>
-  );
+  if (!turn.cited || !turn.evidence?.length) return <AnswerMarkup text={turn.answer ?? ""} />;
+  return <AnswerMarkup text={turn.cited} evidence={turn.evidence} />;
 }
 
 const AUTO_ASKED = new Set<number>();
@@ -154,9 +135,12 @@ export default function AssistantChat({
   compact = false,
   autoAsk,
   listen = false,
+  conversation = null,
 }: {
   name: string;
   history?: { id?: string; question: string; answer: string; source?: string }[];
+  /** The conversation it asks in (assistantConversation): an id, "new", or null to let the server pick. */
+  conversation?: string | null;
   /** The page it was opened on (the bubble), so "this lead" means something. */
   page?: string;
   /** The bubble: no example prompts — there isn't room, and you're mid-task. */
@@ -170,6 +154,9 @@ export default function AssistantChat({
   const [turns, setTurns] = useState<Turn[]>(() => history.map(({ id, ...t }) => ({ ...t, turnId: id, rows: [] })));
   // EDIT AND RE-ASK: the last question, back in the box. Sent, it replaces that exchange (lib/assistantEdit).
   const [editing, setEditing] = useState<string | null>(null);
+  // Which conversation the next question goes to: once the first answer of a new one comes back, its id — so
+  // the rest of this thread stays in it.
+  const askIn = useRef<string | null>(conversation);
   // One answer at a time; anything asked meanwhile waits its turn, and can be edited or removed (chatQueue).
   const [chat, dispatch] = useReducer(chatQueue<Blob>, undefined, emptyChatQueue<Blob>);
   const pending = chat.running !== null;
@@ -281,6 +268,7 @@ export default function AssistantChat({
     // Edit and re-ask: the server takes the old exchange out first. It leaves the screen only once that worked —
     // refused, it stays, and the corrected question isn't asked (lib/assistantEdit).
     if (item.replaces) form.set("replaces", item.replaces);
+    if (askIn.current) form.set("conversation", askIn.current);
     const key = newRunKey();
     const stopper = new AbortController();
     flight.current = { key, stopper, item };
@@ -291,6 +279,7 @@ export default function AssistantChat({
       { key, signal: stopper.signal },
     );
     flight.current = null;
+    if (result.ok && result.conversationId) askIn.current = result.conversationId;
     setLive(null);
     // Stopped: kept on screen as stopped, with nothing from it (the server kept nothing either) — never a card.
     const stopped = stopper.signal.aborted;
@@ -617,7 +606,7 @@ export default function AssistantChat({
             </p>
             <div className="max-w-[92%] space-y-2 rounded-2xl rounded-bl-sm bg-muted/50 px-3 py-2">
               {live.text ? (
-                <p className="whitespace-pre-line text-sm leading-relaxed">{live.text}</p>
+                <AnswerMarkup text={live.text} />
               ) : (
                 <p className="animate-pulse text-sm text-muted-foreground">{live.status ?? `${name} is looking into it…`}</p>
               )}
@@ -658,7 +647,7 @@ export default function AssistantChat({
             {stopButton}
           </div>
           {live?.text ? (
-            <p className="whitespace-pre-line text-sm leading-relaxed">{live.text}</p>
+            <AnswerMarkup text={live.text} />
           ) : (
             <p className="animate-pulse text-sm text-muted-foreground">{live?.status ?? `${name} is looking into it…`}</p>
           )}

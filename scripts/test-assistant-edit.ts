@@ -35,7 +35,7 @@ const T = DEFAULT_TENANT_ID;
 const T2 = `t_edit_${SFX}`;
 const me = { id: `ed-me-${SFX}`, name: "Ed me", email: `ed-me-${SFX}@example.invalid` };
 const colleague = { id: `ed-col-${SFX}`, name: "Ed colleague", email: `ed-col-${SFX}@example.invalid` };
-const TURN = { earlier: cid(), last: cid(), colleagues: cid(), otherWs: cid() };
+const TURN = { earlier: cid(), last: cid(), colleagues: cid(), otherWs: cid(), otherConversation: cid() };
 const PLAN = { earlier: cid(), last: cid(), colleagues: cid() };
 const SAVED = cid();
 const inT = <R>(fn: () => Promise<R>) => runInTenantScope({ tenantId: T, system: false }, fn);
@@ -54,6 +54,8 @@ async function seed() {
       { id: TURN.last, tenantId: T, userId: me.id, question: "second", answer: "a2", source: "chat", createdAt: at(10), proposed: [{ kind: "plan", planId: PLAN.last }, { kind: "note", leadId: "x" }] },
       { id: TURN.colleagues, tenantId: T, userId: colleague.id, question: "theirs", answer: "a3", source: "chat", createdAt: at(10), proposed: [{ kind: "plan", planId: PLAN.colleagues }] },
       { id: TURN.otherWs, tenantId: T2, userId: me.id, question: "elsewhere", answer: "a4", source: "chat", createdAt: at(5) },
+      // Asked AFTER my last question, but in ANOTHER conversation: editing is about the thread on the screen.
+      { id: TURN.otherConversation, tenantId: T, userId: me.id, question: "another topic", answer: "a5", source: "chat", createdAt: at(3), conversationId: `conv-${SFX}` },
     ],
   });
   // A card saved from WhatsApp for the Ask page, in the SAME seconds: the old time window would have expired it.
@@ -82,7 +84,8 @@ async function main() {
   check("…and nothing changed", (await exists(TURN.earlier)) && (await exists(TURN.last)) && (await status(PLAN.last)) === "open");
 
   console.log("\nWithdrawn: my last question");
-  check("my last question is withdrawn", (await inT(() => withdrawLastQuestion(T, me.id, TURN.last))) === "withdrawn");
+  check("my last question is withdrawn — though I asked since, in another conversation", (await inT(() => withdrawLastQuestion(T, me.id, TURN.last))) === "withdrawn");
+  check("…and that other conversation's question is untouched", await exists(TURN.otherConversation));
   check("…its exchange is gone", !(await exists(TURN.last)));
   check("…the plan IT offered is closed", (await status(PLAN.last)) === "closed");
   check("the earlier answer's plan, seconds older, is still open", (await status(PLAN.earlier)) === "open");
