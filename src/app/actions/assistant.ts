@@ -1179,7 +1179,7 @@ export async function rateAssistantAnswer(turnId: string, rating: "up" | "down",
  * are marked seen, so the unread dot goes on the next page.
  */
 export async function openAssistantBubble(): Promise<
-  { ok: true; name: string; connected: boolean; listen: boolean; history: { question: string; answer: string; source: string }[] } | { ok: false }
+  { ok: true; name: string; connected: boolean; listen: boolean; history: { id: string; question: string; answer: string; source: string }[] } | { ok: false }
 > {
   return withActingStaffScope(async () => {
     const user = await requireAnyPermission(...ASSISTANT_PERMISSIONS);

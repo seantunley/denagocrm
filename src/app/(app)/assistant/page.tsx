@@ -141,7 +141,7 @@ export default async function AssistantPage() {
       <SavedAssistantCards name={profile.name} cards={savedCards} />
       <AssistantPlans plans={plans} />
       {connected ? (
-        <AssistantChat name={profile.name} history={history.map(({ question, answer, source }) => ({ question, answer, source }))} listen={listen} />
+        <AssistantChat name={profile.name} history={history.map(({ id, question, answer, source }) => ({ id, question, answer, source }))} listen={listen} />
       ) : (
         <p className="card p-5 text-sm text-muted-foreground">
           This runs on your workspace&apos;s AI connection, which isn&apos;t set up yet.{" "}

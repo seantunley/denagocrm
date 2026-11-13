@@ -1789,8 +1789,8 @@ export async function assistantTurnsToday(userId: string) {
     where: { userId, createdAt: { gte: startOfToday } },
     orderBy: { createdAt: "desc" },
     take: 20,
-    // `source`, so a scheduled answer is labelled as one in the thread.
-    select: { question: true, answer: true, source: true },
+    // `source`, so a scheduled answer is labelled as one in the thread; `id`, so the last question can be edited.
+    select: { id: true, question: true, answer: true, source: true },
   });
 }
 

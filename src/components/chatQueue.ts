@@ -6,10 +6,11 @@
  * queued one becomes `running` in the same step, so the chat never has two answers in flight and never sits idle
  * with a queue. `stopping` is the moment between pressing Stop and the server saying whether it stopped.
  */
-export type ChatItem<I = unknown> = { id: number; text: string; image: I | null };
+/** `replaces`: the saved question this one corrects (edit and re-ask) — taken out before it is asked. */
+export type ChatItem<I = unknown> = { id: number; text: string; image: I | null; replaces?: string };
 export type ChatQueue<I = unknown> = { running: ChatItem<I> | null; queue: ChatItem<I>[]; stopping: boolean; nextId: number };
 export type ChatQueueAction<I = unknown> =
-  | { type: "ask"; text: string; image?: I | null }
+  | { type: "ask"; text: string; image?: I | null; replaces?: string }
   /** The running question is over: answered, failed, or stopped. */
   | { type: "finished"; id: number }
   | { type: "stopping" }
@@ -25,7 +26,7 @@ export function chatQueue<I>(state: ChatQueue<I>, action: ChatQueueAction<I>): C
     case "ask": {
       const text = action.text.trim();
       if (!text && !action.image) return state;
-      const item = { id: state.nextId, text, image: action.image ?? null };
+      const item = { id: state.nextId, text, image: action.image ?? null, ...(action.replaces ? { replaces: action.replaces } : {}) };
       return state.running
         ? { ...state, queue: [...state.queue, item], nextId: state.nextId + 1 }
         : { ...state, running: item, nextId: state.nextId + 1 };

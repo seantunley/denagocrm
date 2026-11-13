@@ -9,6 +9,7 @@ import type { AskStreamEvent } from "@/lib/assistantStream";
 import { isSameOrigin } from "@/lib/sameOrigin";
 import { RUN_KEY, RUN_STOPPED, claimRun, readRun, runRecorder, stopRun } from "@/lib/assistantRun";
 import { inheritedTenantId } from "@/lib/tenantWrite";
+import { withdrawLastQuestion } from "@/lib/assistantEdit";
 import type { AssistantResult } from "@/lib/crmAssistant";
 
 /**
@@ -125,6 +126,14 @@ export async function POST(req: NextRequest) {
     if (key && claimed && !claimed.created) return ndjson((send) => follow(tenantId, user.id, key, send));
 
     const recorder = claimed ? runRecorder(claimed.id, tenantId, user.id) : null;
+    // Edit and re-ask: the question it corrects goes first, so DAX never reads it (lib/assistantEdit). Only on a NEW
+    // run — a retry under the same key above already did this.
+    const replaces = form.get("replaces");
+    if (typeof replaces === "string" && /^[a-z0-9]{20,40}$/i.test(replaces)) {
+      await withdrawLastQuestion(tenantId, user.id, replaces).catch(async (error: unknown) => {
+        await logError("crm-assistant", "couldn't withdraw the edited question", error instanceof Error ? error.name : "unknown");
+      });
+    }
     return ndjson(async (send) => {
       const timings: Record<string, number> = {};
       const result = await askAsPerson(

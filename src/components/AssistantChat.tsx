@@ -2,7 +2,7 @@
 
 import { useEffect, useReducer, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowUpRight, Loader2, Mic, Paperclip, Smile, Square, ThumbsDown, ThumbsUp, Volume2, X } from "lucide-react";
+import { ArrowUpRight, Loader2, Mic, Paperclip, Pencil, Smile, Square, ThumbsDown, ThumbsUp, Volume2, X } from "lucide-react";
 import { rateAssistantAnswer } from "@/app/actions/assistant";
 import { speakAssistantAnswer } from "@/app/actions/assistantVoice";
 import type { Evidence } from "@/lib/assistantReply";
@@ -156,7 +156,7 @@ export default function AssistantChat({
   listen = false,
 }: {
   name: string;
-  history?: { question: string; answer: string; source?: string }[];
+  history?: { id?: string; question: string; answer: string; source?: string }[];
   /** The page it was opened on (the bubble), so "this lead" means something. */
   page?: string;
   /** The bubble: no example prompts — there isn't room, and you're mid-task. */
@@ -167,7 +167,9 @@ export default function AssistantChat({
   listen?: boolean;
 }) {
   const [question, setQuestion] = useState("");
-  const [turns, setTurns] = useState<Turn[]>(() => history.map((t) => ({ ...t, rows: [] })));
+  const [turns, setTurns] = useState<Turn[]>(() => history.map(({ id, ...t }) => ({ ...t, turnId: id, rows: [] })));
+  // EDIT AND RE-ASK: the last question, back in the box. Sent, it replaces that exchange (lib/assistantEdit).
+  const [editing, setEditing] = useState<string | null>(null);
   // One answer at a time; anything asked meanwhile waits its turn, and can be edited or removed (chatQueue).
   const [chat, dispatch] = useReducer(chatQueue<Blob>, undefined, emptyChatQueue<Blob>);
   const pending = chat.running !== null;
@@ -226,10 +228,42 @@ export default function AssistantChat({
     const q = text.trim();
     if (!q && !image) return;
     setNotice(pending ? `Queued — it goes as soon as ${name} is done.` : null);
-    dispatch({ type: "ask", text: q, image: image?.blob ?? null });
+    // An edit replaces the last exchange only when nothing has been asked since (the pencil is hidden otherwise).
+    const replaces = editing && !pending ? editing : undefined;
+    dispatch({ type: "ask", text: q, image: image?.blob ?? null, replaces });
+    setEditing(null);
     setQuestion("");
     clearImage();
   };
+
+  // The pencil on the last question: back into the box to correct. Sending then replaces that exchange.
+  const editLast = (turn: Turn) => {
+    if (!turn.turnId) return;
+    setEditing(turn.turnId);
+    setQuestion(turn.question.replace(/^📎\s*/, ""));
+    setNotice(null);
+    requestAnimationFrame(() => input.current?.focus());
+  };
+  const cancelEdit = () => {
+    setEditing(null);
+    setQuestion("");
+    setNotice(null);
+  };
+  // The newest exchange, when it can be edited: one you asked here (not a scheduled answer), answered, and nothing
+  // asked or answering since.
+  const editable = (turn: Turn, index: number) =>
+    index === 0 && !pending && chat.queue.length === 0 && Boolean(turn.turnId) && !turn.stopped && (turn.source ?? "chat") === "chat";
+  const editPencil = (turn: Turn) => (
+    <button
+      type="button"
+      onClick={() => editLast(turn)}
+      aria-label="Edit your question and ask again"
+      title="Edit and ask again"
+      className="grid size-11 shrink-0 place-items-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground pointer-fine:size-7"
+    >
+      <Pencil className="size-3.5" />
+    </button>
+  );
 
   const run = async (item: ChatItem<Blob>) => {
     const q = item.text;
@@ -244,6 +278,11 @@ export default function AssistantChat({
     // editor, that is what says which record "this" is.
     if (page) form.set("page", `${page}${typeof window === "undefined" ? "" : window.location.search}`);
     if (sent) form.set("image", new File([sent], "image.jpg", { type: "image/jpeg" }));
+    // Edit and re-ask: the server takes the old exchange out first; it goes from the screen too.
+    if (item.replaces) {
+      form.set("replaces", item.replaces);
+      setTurns((prev) => prev.filter((turn) => turn.turnId !== item.replaces));
+    }
     const key = newRunKey();
     const stopper = new AbortController();
     flight.current = { key, stopper, item };
@@ -518,6 +557,13 @@ export default function AssistantChat({
           ))}
         </ol>
       )}
+      {editing && (
+        <p className="flex items-center gap-2 text-xs text-muted-foreground" role="status">
+          <Pencil className="size-3.5 shrink-0" aria-hidden />
+          Editing your last question — send it to ask again; the old answer goes.
+          <button type="button" onClick={cancelEdit} className="ml-auto font-medium text-foreground hover:text-primary">Cancel</button>
+        </p>
+      )}
       <p aria-live="polite" className={notice ? "text-xs text-muted-foreground" : "sr-only"}>{notice}</p>
       {image && (
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -549,9 +595,12 @@ export default function AssistantChat({
         {thread.map((turn, index) => (
           <div key={index} className="space-y-2">
             {scheduledLabel(turn)}
-            <p className="ml-auto max-w-[85%] whitespace-pre-line rounded-2xl rounded-br-sm bg-primary px-3 py-2 text-sm text-primary-foreground">
-              {turn.question}
-            </p>
+            <div className="flex items-start justify-end gap-1">
+              {editable(turn, turns.indexOf(turn)) && editPencil(turn)}
+              <p className="max-w-[85%] whitespace-pre-line rounded-2xl rounded-br-sm bg-primary px-3 py-2 text-sm text-primary-foreground">
+                {turn.question}
+              </p>
+            </div>
             <div className="max-w-[92%] space-y-2 rounded-2xl rounded-bl-sm bg-muted/50 px-3 py-2">
               {turn.error ? (
                 <p className="text-sm text-destructive">{turn.error}</p>
@@ -620,7 +669,10 @@ export default function AssistantChat({
       {turns.map((turn, index) => (
         <div key={turns.length - index} className="card space-y-3 p-5">
           {scheduledLabel(turn)}
-          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{turn.question}</p>
+          <div className="flex items-start gap-2">
+            <p className="min-w-0 flex-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{turn.question}</p>
+            {editable(turn, index) && editPencil(turn)}
+          </div>
           {turn.error ? (
             <p className="text-sm text-destructive">{turn.error}</p>
           ) : (
