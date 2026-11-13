@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ConversationState } from "./assistantReply";
+import { REPORT_RULE, wantsReport } from "./assistantReport";
 import type { ListedRecord } from "./assistantListedRules";
 
 /**
@@ -478,6 +479,8 @@ export function isSmallTalk(question: string): boolean {
 export function isComplexQuestion(question: string): boolean {
   const q = question.trim().toLowerCase();
   if (!q) return false;
+  // A document somebody will keep or pass on is researched properly, never answered in passing.
+  if (wantsReport(q)) return true;
   // Strong multi-hop signals — short questions count ("why no sales?").
   if (/\b(why|compare|versus|vs\.?|difference between|who should|what should|recommend|analyse|analyze|break down|dig into|look closer|root cause|what\'s going on|what is going on|help me understand|how come)\b/.test(q)) return true;
   // Asks for data and a next action, or an explicit follow-up investigation.
@@ -569,5 +572,7 @@ export const ANSWER_RULES = [
   "When several records matched a name and the results picked one, say which one you mean in a few words, and name the others only if it could have been them.",
   "Asked about a team (\"how's my team doing\", \"who needs help\") with per-salesperson figures in the results: coach, person by person, those who need it most first — what is slipping for them, with their figures, then one concrete next step for the manager as \"My read:\". One line for what's going well. Nobody the results don't list.",
   "Plain text only (short paragraphs or simple '-' lists), no markdown tables or headings.",
+  // A report is still plain text — a shape the PDF can lay out (lib/assistantReport.ts).
+  REPORT_RULE,
   "Emojis where they genuinely help someone scan or feel the point — ✅ done, ⚠️ risk, 📞 call, 💬 waiting on a reply, 🔥 hot deal, 📅 booked, 🚗 test drive — one or two, never a string of them, and none when the news is bad for a customer.",
 ].join("\n");

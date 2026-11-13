@@ -2,7 +2,7 @@
 
 import { useEffect, useReducer, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowUpRight, Loader2, Mic, Paperclip, Smile, Square, ThumbsDown, ThumbsUp, Volume2, X } from "lucide-react";
+import { ArrowUpRight, FileText, Loader2, Mic, Paperclip, Smile, Square, ThumbsDown, ThumbsUp, Volume2, X } from "lucide-react";
 import { rateAssistantAnswer } from "@/app/actions/assistant";
 import { speakAssistantAnswer } from "@/app/actions/assistantVoice";
 import type { Evidence } from "@/lib/assistantReply";
@@ -99,6 +99,27 @@ function Feedback({ turnId }: { turnId: string }) {
         <ThumbsDown className="size-3.5" />
       </button>
     </div>
+  );
+}
+
+/**
+ * 📄 PDF — this answer as a formatted report, with the business's name and logo
+ * in its header (app/api/pdf/assistant-report). A plain link, opened in a new
+ * tab: the server checks the answer is this person's own, and nothing is looked
+ * up again to make it.
+ */
+function ReportLink({ turnId }: { turnId: string }) {
+  return (
+    <a
+      href={`/api/pdf/assistant-report/${encodeURIComponent(turnId)}`}
+      target="_blank"
+      rel="noopener"
+      className="inline-flex items-center gap-1 rounded p-1 text-xs text-muted-foreground hover:text-foreground"
+      title="Download this answer as a PDF report"
+    >
+      <FileText className="size-3.5" aria-hidden />
+      PDF
+    </a>
   );
 }
 
@@ -386,6 +407,7 @@ export default function AssistantChat({
         </div>
       )}
       {turn.turnId && <Feedback turnId={turn.turnId} />}
+      {turn.turnId && turn.answer && !turn.stopped && <ReportLink turnId={turn.turnId} />}
       {listen && turn.turnId && <Listen turnId={turn.turnId} />}
       {Boolean(turn.learned) && (
         <p className="text-[11px] text-muted-foreground">

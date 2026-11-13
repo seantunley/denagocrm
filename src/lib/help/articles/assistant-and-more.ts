@@ -24,6 +24,7 @@ export const assistantAndMoreArticles: HelpArticle[] = [
         "To show it a photo or a screenshot, press the paperclip or paste the picture into the question box. It is used for that one question and is not kept.",
         "Read the answer. Small labelled chips inside the answer open the record a fact came from, and a list of matching records may appear underneath.",
         "Mark the answer with the thumbs-up or thumbs-down. If it was wrong, pick why. This helps your owner see how well it is doing.",
+        "Need it as a document? Press **PDF** under any answer to download it as a formatted report with your business's name and logo at the top, the date its figures were true and who it was prepared for. Ask for \"a report on…\" and the assistant writes the answer as one — a title, a summary, sections and tables. The PDF holds exactly what the answer did, and only you can download your own.",
       ] },
       { type: "h", text: "What it can look up" },
       { type: "list", items: [
