@@ -184,7 +184,8 @@ export default async function AssistantPage({ searchParams }: { searchParams: Pr
         <AssistantChat
           key={picked}
           name={profile.name}
-          history={history.map(({ question, answer, source }) => ({ question, answer, source }))}
+          // `id`, so the last question can be edited (lib/assistantEdit).
+          history={history.map(({ id, question, answer, source }) => ({ id, question, answer, source }))}
           listen={listen}
           // Asking from "Updates" or "Earlier" carries on in the current conversation, as the default rule picks.
           conversation={picked === "updates" || picked === "earlier" ? null : picked}

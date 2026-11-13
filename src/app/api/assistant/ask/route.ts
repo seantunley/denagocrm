@@ -9,6 +9,7 @@ import type { AskStreamEvent } from "@/lib/assistantStream";
 import { isSameOrigin } from "@/lib/sameOrigin";
 import { RUN_KEY, RUN_STOPPED, claimRun, readRun, runRecorder, stopRun } from "@/lib/assistantRun";
 import { inheritedTenantId } from "@/lib/tenantWrite";
+import { withdrawLastQuestion } from "@/lib/assistantEdit";
 import type { AssistantResult } from "@/lib/crmAssistant";
 
 /**
@@ -125,6 +126,31 @@ export async function POST(req: NextRequest) {
     if (key && claimed && !claimed.created) return ndjson((send) => follow(tenantId, user.id, key, send));
 
     const recorder = claimed ? runRecorder(claimed.id, tenantId, user.id) : null;
+    // Edit and re-ask: the question it corrects goes first, so DAX never reads it (lib/assistantEdit). Only on a NEW
+    // run — a retry under the same key above already did this. If it can't be taken out, NOTHING is asked
+    // (review of #1092): the corrected question would be answered with the wrong one still in DAX's memory.
+    const replaces = form.get("replaces");
+    if (typeof replaces === "string") {
+      const withdrawn = /^[a-z0-9]{20,40}$/i.test(replaces)
+        ? await withdrawLastQuestion(tenantId, user.id, replaces).catch(async (error: unknown) => {
+            await logError("crm-assistant", "couldn't withdraw the edited question", error instanceof Error ? error.name : "unknown");
+            return "failed" as const;
+          })
+        : ("not-latest" as const);
+      if (withdrawn !== "withdrawn") {
+        const refused: AssistantResult = {
+          ok: false,
+          kept: true,
+          error: withdrawn === "failed"
+            ? "I couldn't replace your last question just now, so I didn't ask the new one. Try again in a moment."
+            : "That's no longer your last question, so I didn't replace it. Ask the corrected one as a new question.",
+        };
+        return ndjson(async (send) => {
+          await recorder?.finish(refused, {});
+          send({ t: "done", r: refused });
+        });
+      }
+    }
     return ndjson(async (send) => {
       const timings: Record<string, number> = {};
       const result = await askAsPerson(

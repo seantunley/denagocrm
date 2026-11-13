@@ -85,6 +85,7 @@
     "test:assistant-customers": "tsx --tsconfig tsconfig.scripts.json scripts/test-assistant-customers.ts",
     "test:dax-calendar": "tsx --tsconfig tsconfig.harness.json scripts/test-dax-calendar.ts",
     "test:assistant-evidence": "tsx --tsconfig tsconfig.scripts.json scripts/test-assistant-evidence.ts",
+    "test:assistant-edit": "tsx --tsconfig tsconfig.scripts.json scripts/test-assistant-edit.ts",
     "test:assistant-report-tenant": "tsx --tsconfig tsconfig.scripts.json scripts/test-assistant-report-tenant.ts",
     "eval:evidence": "tsx --tsconfig tsconfig.scripts.json evals/runEvidenceEval.ts",
     "eval:follows-references": "tsx --tsconfig tsconfig.harness.json evals/runFollowsReferencesEval.ts",

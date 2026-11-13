@@ -171,7 +171,8 @@ export type AssistantResult =
       /** Waiting tasks to withdraw, by their number in opts.waiting (1-based) — the caller withdraws them. */
       dropWaiting?: number[];
     }
-  | { ok: false; error: string };
+  /** kept: an edit's old question could NOT be replaced, so it is still there and nothing was asked (assistantEdit). */
+  | { ok: false; error: string; kept?: true };
 
 type ToolOutput = { rows: AssistantRow[]; data: unknown[]; truncated: boolean };
 type User = PermissionUser;
@@ -1803,8 +1804,8 @@ export async function assistantTurnsToday(userId: string) {
     where: { userId, createdAt: { gte: startOfToday } },
     orderBy: { createdAt: "desc" },
     take: 20,
-    // `source`, so a scheduled answer is labelled as one in the thread.
-    select: { question: true, answer: true, source: true },
+    // `source`, so a scheduled answer is labelled as one in the thread; `id`, so the last question can be edited.
+    select: { id: true, question: true, answer: true, source: true },
   });
 }
 
@@ -2674,7 +2675,9 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
         refs: turnRefs(observations.map((o) => o.output.data)),
         ...(taskWrite?.ok ? { taskId: taskWrite.id } : {}),
         // The cards it offered — kind, and the deal or customer by id — counted in Settings → Assistant (assistantOutcomes).
-        proposed: proposedCards(actions) as object,
+        // …and each PLAN by its id: the one thing an answer leaves stored for Confirm, so editing this question
+        // can close exactly the plans it offered (assistantEdit) — never anyone else's.
+        proposed: proposedCards(actions).map((p, i) => (actions[i].kind === "plan" ? { ...p, planId: actions[i].id.replace(/^plan-/, "") } : p)) as object,
       },
       select: { id: true },
     })

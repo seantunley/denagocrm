@@ -724,6 +724,11 @@ jobs:
       - name: Assistant -- evidence lookups see only what the person may see
         run: npm run test:assistant-evidence
 
+      # Edit and re-ask (review of #1092): taking back your last question closes exactly the plans IT offered —
+      # never another answer's, a colleague's, or a card saved from WhatsApp in the same seconds.
+      - name: Assistant -- editing a question withdraws only what that answer offered
+        run: npm run test:assistant-edit
+
       # DAX report PDFs (review of #1093): with tenant enforcement OFF, the same person's answer from another
       # workspace is "not found" — never printed under this workspace's name and logo.
       - name: Assistant -- a report PDF only from an answer in this workspace

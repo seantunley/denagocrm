@@ -9,7 +9,7 @@ import { openAssistantBubble } from "@/app/actions/assistant";
 import AssistantChat from "@/components/AssistantChat";
 import { publishDax, registerDax } from "@/lib/daxLauncher";
 
-type Opened = { name: string; connected: boolean; listen: boolean; history: { question: string; answer: string; source: string }[]; conversation: string | null };
+type Opened = { name: string; connected: boolean; listen: boolean; history: { id: string; question: string; answer: string; source: string }[]; conversation: string | null };
 
 /**
  * The "Ask DAX" chat panel, on every page in the app — opened by the sidebar's Ask the CRM button.

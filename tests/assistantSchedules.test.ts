@@ -341,7 +341,7 @@ test("the cron is registered on the shared beat and runs per workspace", () => {
 
 test("scheduled answers are labelled, dotted until seen, and seen when opened", () => {
   const lib = code("src/lib/crmAssistant.ts");
-  assert.match(lib.slice(lib.indexOf("export async function assistantTurnsToday")).slice(0, 600), /select: \{ question: true, answer: true, source: true \}/);
+  assert.match(lib.slice(lib.indexOf("export async function assistantTurnsToday")).slice(0, 600), /select: \{ id: true, question: true, answer: true, source: true \}/); // id: edit and re-ask
   assert.match(lib.slice(lib.indexOf("export async function assistantHistory")).slice(0, 600), /source: true/);
   const seen = code("src/lib/assistantScheduleRun.ts");
   assert.match(seen, /export async function markScheduledTurnsSeen\(userId: string\) \{\s*await prisma\.assistantTurn\.updateMany\(\{\s*where: \{ userId, source: \{ in: \[\.\.\.PROACTIVE_SOURCES\] \}, seenAt: null \},\s*data: \{ seenAt: new Date\(\) \}/, "their own scheduled and watch turns only");
