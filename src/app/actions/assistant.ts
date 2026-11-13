@@ -3,7 +3,8 @@
 import { requireAnyPermission } from "@/lib/permissions";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { isModuleEnabled } from "@/lib/modules/enabled";
-import { assistantTurnsToday, customerClash, detailClash } from "@/lib/crmAssistant";
+import { customerClash, detailClash, pageTarget } from "@/lib/crmAssistant";
+import { conversationHistory, currentConversation } from "@/lib/assistantConversation";
 import { createContact, updateContact } from "@/app/actions/contacts";
 import { contactFormFor } from "@/lib/contactFormFor";
 import { completeConfirmKey, releaseConfirmKey, reserveConfirmKey } from "@/lib/assistantConfirmKey";
@@ -1178,19 +1179,25 @@ export async function rateAssistantAnswer(turnId: string, rating: "up" | "down",
  * conversation only. Opening it is seeing it: this person's scheduled answers
  * are marked seen, so the unread dot goes on the next page.
  */
-export async function openAssistantBubble(): Promise<
-  { ok: true; name: string; connected: boolean; listen: boolean; history: { question: string; answer: string; source: string }[] } | { ok: false }
+export async function openAssistantBubble(page?: string | null): Promise<
+  { ok: true; name: string; connected: boolean; listen: boolean; history: { question: string; answer: string; source: string }[]; conversation: string | null } | { ok: false }
 > {
   return withActingStaffScope(async () => {
     const user = await requireAnyPermission(...ASSISTANT_PERMISSIONS);
     if (!(await isModuleEnabled("automation"))) return { ok: false };
+    // THE CONVERSATION a question asked here continues (assistantConversation): this deal's or customer's when on
+    // their page, else the one that moved in the last three hours — never started just by opening the panel.
+    const who = { tenantId: ownedWriteTenantId(), userId: user.id };
+    const target = pageTarget(typeof page === "string" ? page.slice(0, 200) : null);
+    const record = target && "id" in target ? (target.kind === "lead" ? { leadId: target.id } : target.kind === "contact" ? { contactId: target.id } : null) : null;
+    const conversation = await currentConversation(who, record);
     const [profile, connected, history, , listen] = await Promise.all([
       getSetting(ASSISTANT_PROFILE_KEY).then(parseProfile),
       isCodexConnected(),
-      assistantTurnsToday(user.id),
+      conversation ? conversationHistory(who, conversation, 20) : Promise.resolve([]),
       markScheduledTurnsSeen(user.id),
       assistantVoiceRepliesOn().catch(() => false),
     ]);
-    return { ok: true, name: profile.name, connected, listen, history };
+    return { ok: true, name: profile.name, connected, listen, history, conversation };
   });
 }

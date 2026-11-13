@@ -135,9 +135,12 @@ export default function AssistantChat({
   compact = false,
   autoAsk,
   listen = false,
+  conversation = null,
 }: {
   name: string;
   history?: { question: string; answer: string; source?: string }[];
+  /** The conversation it asks in (assistantConversation): an id, "new", or null to let the server pick. */
+  conversation?: string | null;
   /** The page it was opened on (the bubble), so "this lead" means something. */
   page?: string;
   /** The bubble: no example prompts — there isn't room, and you're mid-task. */
@@ -149,6 +152,9 @@ export default function AssistantChat({
 }) {
   const [question, setQuestion] = useState("");
   const [turns, setTurns] = useState<Turn[]>(() => history.map((t) => ({ ...t, rows: [] })));
+  // Which conversation the next question goes to: once the first answer of a new one comes back, its id — so
+  // the rest of this thread stays in it.
+  const askIn = useRef<string | null>(conversation);
   // One answer at a time; anything asked meanwhile waits its turn, and can be edited or removed (chatQueue).
   const [chat, dispatch] = useReducer(chatQueue<Blob>, undefined, emptyChatQueue<Blob>);
   const pending = chat.running !== null;
@@ -225,6 +231,7 @@ export default function AssistantChat({
     // editor, that is what says which record "this" is.
     if (page) form.set("page", `${page}${typeof window === "undefined" ? "" : window.location.search}`);
     if (sent) form.set("image", new File([sent], "image.jpg", { type: "image/jpeg" }));
+    if (askIn.current) form.set("conversation", askIn.current);
     const key = newRunKey();
     const stopper = new AbortController();
     flight.current = { key, stopper, item };
@@ -235,6 +242,7 @@ export default function AssistantChat({
       { key, signal: stopper.signal },
     );
     flight.current = null;
+    if (result.ok && result.conversationId) askIn.current = result.conversationId;
     setLive(null);
     // Stopped: kept on screen as stopped, with nothing from it (the server kept nothing either) — never a card.
     const stopped = stopper.signal.aborted;

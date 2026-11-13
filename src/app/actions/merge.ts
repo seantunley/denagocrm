@@ -119,6 +119,8 @@ export async function mergeContacts(keepId: string, otherIdsCsv: string, formDat
         await move(tx.assistantProactiveAlert, "contactId", "held DAX alerts");
         // A DAX job sheet for this customer: "continue that quote" must reach the record that survives.
         await move(tx.assistantTask, "contactId", "DAX job sheets");
+        // A DAX conversation about this customer: asking on the surviving record's page must pick it up again.
+        await move(tx.assistantConversation, "contactId", "DAX conversations");
 
         // Referral has two contact links. Move both, then drop any self-referral
         // the merge created (referrer === referred → a customer referring itself,

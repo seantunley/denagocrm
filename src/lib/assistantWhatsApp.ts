@@ -66,6 +66,7 @@ import {
   TYPING_RENEW_MS,
   replyWindowOpen,
   splitForWhatsApp,
+  startsNewConversation,
   updateText,
   whatsappSwitchOn,
   type LinkRefusal,
@@ -444,8 +445,10 @@ export async function handleStaffWhatsApp(
       // gets a Confirm button; without it NOTHING can be changed from this phone,
       // and the task is kept as a card on the person's Ask page instead ("saved").
       // A voice note back: DAX also writes what to SAY (assistantReply.SPOKEN_RULE).
+      // "New topic …" / "new conversation" starts a fresh conversation (assistantConversation); otherwise it
+      // continues the one that moved in the last three hours.
       const result = await askCrm(user, q, null, {
-        source: "whatsapp", images, ...(file ? { file } : {}), ...(voiceBack ? { spoken: true } : {}),
+        source: "whatsapp", images, ...(startsNewConversation(q) ? { conversation: "new" } : {}), ...(file ? { file } : {}), ...(voiceBack ? { spoken: true } : {}),
         ...(waitingNow.length ? { waiting: waitingNow.map(({ title, detail }) => ({ title, ...(detail ? { detail } : {}) })) } : {}),
         proposeTasks: (await confirmingOnWhatsAppOn()) ? true : "saved",
       });
