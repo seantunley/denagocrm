@@ -1,5 +1,6 @@
 import "server-only";
 import { prisma } from "./db";
+import { PLAN_KIND } from "./assistantPlan";
 
 /**
  * EDIT AND RE-ASK (Sean, 2026-11-13: "I found no way to edit your last question and ask again").
@@ -7,37 +8,47 @@ import { prisma } from "./db";
  * Asking again with `replaces` set takes the person's LAST question out before the new one is asked:
  *  - the exchange is deleted, so DAX reads the corrected question with the context before it — never the wrong
  *    question it replaces (recent turns are its conversation memory);
- *  - anything that answer set up and is still waiting for Confirm (the stored confirm-key and plan rows) is
- *    withdrawn, so nothing can be confirmed from an answer that no longer exists.
- * Only the person's own, latest, CRM-chat question, in this workspace. Anything else is refused and the new
- * question is simply asked as a new one.
+ *  - the PLANS that answer offered are closed, so none can be confirmed from an answer that no longer exists.
+ *
+ * WHAT AN ANSWER LEAVES FOR CONFIRM, AND HOW IT IS FOUND (review of #1092). In the CRM chat a task card lives only
+ * in the answer on the screen — its stored row is made when Confirm is pressed — so it leaves with the exchange. A
+ * plan is the one thing stored at once; the answer records each plan it offered by id (AssistantTurn.proposed
+ * planId), and exactly those are closed. Nothing is matched by time: a card saved from WhatsApp, or another answer's
+ * plan, is never touched.
+ *
+ * Only the person's own, latest, CRM-chat question, in this workspace — otherwise "not-latest", and the caller asks
+ * nothing (the old exchange would still be in DAX's context).
  */
-export async function withdrawLastQuestion(tenantId: string, userId: string, turnId: string): Promise<boolean> {
-  const latest = await prisma.assistantTurn.findMany({
+export type Withdrawal = "withdrawn" | "not-latest";
+
+export async function withdrawLastQuestion(tenantId: string, userId: string, turnId: string): Promise<Withdrawal> {
+  const [last] = await prisma.assistantTurn.findMany({
     where: { tenantId, userId, source: "chat" },
     orderBy: { createdAt: "desc" },
-    take: 2,
-    select: { id: true, createdAt: true },
+    take: 1,
+    select: { id: true, proposed: true },
   });
-  const [last, before] = latest;
-  if (!last || last.id !== turnId) return false;
-  const now = new Date();
+  if (!last || last.id !== turnId) return "not-latest";
+  const planIds = offeredPlanIds(last.proposed);
   // The callback form: the scoped client refuses an array transaction.
   await prisma.$transaction(async (tx) => {
     await tx.assistantTurn.deleteMany({ where: { id: last.id, tenantId, userId } });
-    // What this answer set up: rows made after the question before it, up to when this answer was saved.
-    await tx.assistantPendingAction.updateMany({
-      where: {
-        tenantId,
-        userId,
-        confirmedAt: null,
-        completedAt: null,
-        failedAt: null,
-        expiresAt: { gt: now },
-        createdAt: { gt: before?.createdAt ?? new Date(last.createdAt.getTime() - 30 * 60_000), lte: new Date(last.createdAt.getTime() + 5_000) },
-      },
-      data: { expiresAt: now },
-    });
+    if (planIds.length) {
+      await tx.assistantTask.updateMany({
+        where: { id: { in: planIds }, tenantId, userId, kind: PLAN_KIND, status: "open" },
+        data: { status: "closed", closedAt: new Date(), nextAction: null },
+      });
+    }
   });
-  return true;
+  return "withdrawn";
+}
+
+/** The plans an answer offered, by id, from what it recorded (AssistantTurn.proposed). */
+export function offeredPlanIds(proposed: unknown): string[] {
+  if (!Array.isArray(proposed)) return [];
+  return proposed.flatMap((p) =>
+    p && typeof p === "object" && (p as { kind?: unknown }).kind === "plan" && typeof (p as { planId?: unknown }).planId === "string"
+      ? [(p as { planId: string }).planId]
+      : [],
+  );
 }

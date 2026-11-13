@@ -724,6 +724,11 @@ jobs:
       - name: Assistant -- evidence lookups see only what the person may see
         run: npm run test:assistant-evidence
 
+      # Edit and re-ask (review of #1092): taking back your last question closes exactly the plans IT offered —
+      # never another answer's, a colleague's, or a card saved from WhatsApp in the same seconds.
+      - name: Assistant -- editing a question withdraws only what that answer offered
+        run: npm run test:assistant-edit
+
       # "Why did this happen?": a record's history with the cause of each event,
       # to the people who may open the record — journeys only with Marketing on
       # and journeys.manage, the chatbot only with Automation on and inbox

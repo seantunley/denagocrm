@@ -278,11 +278,9 @@ export default function AssistantChat({
     // editor, that is what says which record "this" is.
     if (page) form.set("page", `${page}${typeof window === "undefined" ? "" : window.location.search}`);
     if (sent) form.set("image", new File([sent], "image.jpg", { type: "image/jpeg" }));
-    // Edit and re-ask: the server takes the old exchange out first; it goes from the screen too.
-    if (item.replaces) {
-      form.set("replaces", item.replaces);
-      setTurns((prev) => prev.filter((turn) => turn.turnId !== item.replaces));
-    }
+    // Edit and re-ask: the server takes the old exchange out first. It leaves the screen only once that worked —
+    // refused, it stays, and the corrected question isn't asked (lib/assistantEdit).
+    if (item.replaces) form.set("replaces", item.replaces);
     const key = newRunKey();
     const stopper = new AbortController();
     flight.current = { key, stopper, item };
@@ -305,7 +303,8 @@ export default function AssistantChat({
               rows: result.rows, learned: result.learned, actions: result.actions, choices: result.choices,
             }
           : { question: shown, error: result.error, rows: [] },
-      ...prev,
+      // The exchange it corrected is gone from the server — unless the server kept it (and asked nothing).
+      ...(item.replaces && !(!result.ok && result.kept) ? prev.filter((turn) => turn.turnId !== item.replaces) : prev),
     ]);
     dispatch({ type: "finished", id: item.id });
   };
