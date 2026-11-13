@@ -42,8 +42,13 @@ import {
 import { isPathEnabled } from "@/lib/modules/registry";
 import { DaxIcon } from "@/components/DaxIcon";
 
-/** `keywords`: other words search should find the link by (e.g. an old name). */
-export type NavLink = { href: string; label: string; icon: LucideIcon; keywords?: string[] };
+/**
+ * `keywords`: other words search should find the link by (e.g. an old name).
+ * `foot`: the sidebar shows it as the raised button at its foot instead of inside
+ * its group (Nav.tsx). Only where the sidebar DRAWS it changes — it stays in its
+ * group here, so search, the palette and every permission answer are untouched.
+ */
+export type NavLink = { href: string; label: string; icon: LucideIcon; keywords?: string[]; foot?: true };
 /** A group's heading carries its icon; the links inside it are text (sidebar redesign, 2026-11-12). */
 export type NavGroup = { key: string; label: string; icon: LucideIcon; links: NavLink[] };
 
@@ -152,7 +157,7 @@ export function buildNav(
   // Anyone who can see leads, quotes or activities: it only ever shows them
   // what their own lists already would.
   if (can("leads.view_all", "leads.view_owned", "quotes.view_all", "quotes.view_owned", "activities.view", "activities.manage")) {
-    insightLinks.push({ href: "/assistant", label: "Ask the CRM", icon: DaxIcon, keywords: ["dax", "assistant", "ai"] });
+    insightLinks.push({ href: "/assistant", label: "Ask the CRM", icon: DaxIcon, keywords: ["dax", "assistant", "ai"], foot: true });
   }
   groups.push({ key: "insights", label: "Insights", icon: ChartColumnIncreasing, links: insightLinks });
 
