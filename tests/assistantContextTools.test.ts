@@ -30,8 +30,9 @@ test("the new lookups parse — schedule, vehicles, deliveries, documents, expir
   assert.equal(parseStep('{"tool":"deliveries","args":{"stage":"awaiting_deposit"}}')?.tool, "deliveries");
   assert.equal(parseStep('{"tool":"documents","args":{"customer":"Jacobs"}}')?.tool, "documents");
   assert.deepEqual(parseStep('{"tool":"find_quotes","args":{"expiringWithinDays":2}}'), { tool: "find_quotes", args: { expiringWithinDays: 2 } });
+  // A month ahead at most — asking for more is adjusted, not thrown away (2026-11-13).
+  assert.deepEqual(parseStep('{"tool":"schedule","args":{"days":90}}'), { tool: "schedule", args: { days: 31 } });
   for (const bad of [
-    '{"tool":"schedule","args":{"days":90}}',
     '{"tool":"schedule","args":{"from":"tomorrow"}}',
     '{"tool":"vehicles","args":{}}',
     '{"tool":"vehicles","args":{"kind":"everything"}}',

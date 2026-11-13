@@ -142,19 +142,19 @@ test("the server resolves every new card itself and re-checks access", () => {
   const lib = code("src/lib/crmAssistant.ts");
   const resolve = lib.slice(lib.indexOf("async function resolveActions"));
   // Activities: only one the calendar would show this person, still planned.
-  assert.match(resolve, /const visible = await getAccessibleActivityIds\(user\);\s*if \(visible !== null && !visible\.includes\(p\.activityId\)\) continue;/);
+  assert.match(resolve, /const visible = await getAccessibleActivityIds\(user\);\s*if \(visible !== null && !visible\.includes\(p\.activityId\)\) \{ problems\.push\(ITEM_GONE\); continue; \}/);
   assert.match(resolve, /where: \{ id: p\.activityId, status: "planned" \}/);
   // Everything else: the lead first.
-  assert.match(resolve, /if \(!\(await canAccessLead\(user, p\.leadId\)\)\) continue;/);
+  assert.match(resolve, /if \(!\(await canAccessLead\(user, p\.leadId\)\)\) \{ problems\.push\(DEAL_GONE\); continue; \}/);
   // A calendar item on a deal or a customer: access to whichever it is on. On neither, it is the person's own.
   const calendar = resolve.slice(resolve.indexOf('if (p.type === "follow_up" || p.type === "meeting") {'), resolve.indexOf('if (p.type === "test_drive") {'));
-  assert.match(calendar, /if \(p\.leadId\) \{\s*if \(!\(await canAccessLead\(user, p\.leadId\)\)\) continue;/);
+  assert.match(calendar, /if \(p\.leadId\) \{\s*if \(!\(await canAccessLead\(user, p\.leadId\)\)\) \{ problems\.push\(DEAL_GONE\); continue; \}/);
   assert.match(calendar, /\} else if \(p\.contactId\) \{\s*if \(!\(await canAccessContact\(user, p\.contactId\)\)\) \{ problems\.push\(/);
   assert.match(calendar, /let leadLabel = "Your calendar";/);
   // A test drive only with the vehicle module on, for a customer they can open (on a deal, or directly) — and a
   // demo vehicle only when one is named, then one in stock (Sean, 2026-10-29: "that is not needed").
   const drive = resolve.slice(resolve.indexOf('if (p.type === "test_drive") {'));
-  assert.match(drive, /if \(!\(await isModuleEnabled\("automotive"\)\)\) continue;/);
+  assert.match(drive, /if \(!\(await isModuleEnabled\("automotive"\)\)\) \{ problems\.push\("Test drives are part of the Automotive module/);
   assert.match(drive, /if \(!lead\.contactId\) \{ problems\.push\(/);
   assert.match(drive, /if \(!\(await canAccessContact\(user, p\.contactId\)\)\) \{ problems\.push\(/);
   assert.match(drive, /if \(p\.vehicle\) \{[\s\S]*?if \(!demo\) \{ problems\.push\(/);

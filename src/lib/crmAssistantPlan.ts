@@ -32,10 +32,17 @@ export const MAX_PARALLEL = 3;
 export const MAX_LOOKUPS = 6;
 
 const name = z.string().trim().min(1).max(80);
-const days = z.number().int().min(1).max(365);
+/**
+ * A lookup asking for a little too much is ADJUSTED, not thrown away (Sean, 2026-11-13): one out-of-range detail
+ * used to make the whole lookup unusable, and DAX then answered without having looked ("research step returned
+ * no usable tool call" — the 06:00 notes question, three mornings). 100 results → the most there is; a date with
+ * a time on it → the date.
+ */
+const upTo = (max: number) => z.number().int().min(1).transform((n) => Math.min(n, max));
+const days = upTo(365);
 const rands = z.number().nonnegative().max(1_000_000_000);
-const limit = z.number().int().min(1).max(25);
-const isoDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const limit = upTo(25);
+const isoDay = z.string().trim().regex(/^\d{4}-\d{2}-\d{2}/).transform((s) => s.slice(0, 10));
 
 export const leadArgs = z
   .object({
@@ -85,8 +92,9 @@ export const quoteArgs = z
 export const scheduleArgs = z
   .object({
     person: name.optional(),
-    from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-    days: z.number().int().min(1).max(14).optional(),
+    from: isoDay.optional(),
+    // A month ahead ("what's on next month") — it was 14, and a longer ask threw the lookup away.
+    days: upTo(31).optional(),
   })
   .strict();
 
@@ -97,7 +105,7 @@ export const vehicleArgs = z
     search: name.optional(),
     status: name.optional(),
     /** workshop: a job card counts as stuck after this many days with no movement (default 5). */
-    stuckDays: z.number().int().min(1).max(90).optional(),
+    stuckDays: upTo(90).optional(),
     limit: limit.optional(),
   })
   .strict();
@@ -126,7 +134,7 @@ export const messageSearchArgs = z
     direction: z.enum(["inbound", "outbound"]).optional(),
     from: isoDay.optional(),
     to: isoDay.optional(),
-    limit: z.number().int().min(1).max(20).optional(),
+    limit: upTo(20).optional(),
   })
   .strict();
 export const openMessageArgs = z.object({ id: z.string().trim().regex(/^[\w-]{1,64}$/), thread: z.boolean().optional() }).strict();
@@ -141,7 +149,8 @@ export const readDocumentArgs = z
 
 export const activityArgs = z
   .object({
-    when: z.enum(["overdue", "today", "today_and_overdue", "this_week", "upcoming", "past"]),
+    // Optional: given dates (from/to) replace its window, and a search by date alone used to be thrown away for lacking it.
+    when: z.enum(["overdue", "today", "today_and_overdue", "this_week", "upcoming", "past"]).default("upcoming"),
     type: name.optional(),
     assignedTo: name.optional(),
     /** Words in the activity's summary or note ("golf day", "service"). */

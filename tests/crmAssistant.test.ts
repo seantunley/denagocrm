@@ -30,15 +30,16 @@ test("anything outside the schema is refused, not guessed at", () => {
     "{not json}",
     '{"tool":"run_sql","args":{"query":"DELETE FROM \\"Lead\\""}}', // no such tool
     '{"tool":"find_leads","args":{"where":{"tenantId":"other"}}}', // unknown arg (strict)
-    '{"tool":"find_leads","args":{"limit":5000}}', // over the cap
     '{"tool":"find_leads","args":{"status":"everything"}}',
-    '{"tool":"find_activities","args":{}}', // `when` is required
     '{"tool":"find_quotes","args":{"minValue":-1}}',
     '{"tool":"lead_brief","args":{}}', // `lead` is required
     '{"tool":"recall","args":{"query":"x","userId":"someone-else"}}', // strict: no reading others' history
   ]) {
     assert.equal(parseStep(reply), null, reply);
   }
+  // A little too much is ADJUSTED, not thrown away (2026-11-13: DAX answered without looking): the cap still holds.
+  assert.deepEqual(parseStep('{"tool":"find_leads","args":{"limit":5000}}'), { tool: "find_leads", args: { limit: 25 } });
+  assert.deepEqual(parseStep('{"tool":"find_activities","args":{}}'), { tool: "find_activities", args: { when: "upcoming" } });
 });
 
 test("the research prompt names the workspace's real stages, people and today's date", () => {

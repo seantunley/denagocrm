@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { CALENDAR_ITEM_RULE, invalidActionReasons, parseActionList, settledAnswer } from "../src/lib/assistantActions";
 import { planWhatsAppReply, splitForWhatsApp, withoutCrmLinks } from "../src/lib/assistantWhatsAppRules";
 import { REPLY_MARKER, splitReply } from "../src/lib/assistantReply";
+import { parseSteps } from "../src/lib/crmAssistantPlan";
 
 /**
  * Sean, 2026-11-13: "book a calendar item on the 22nd of November for Donovan and myself to attend that show from
@@ -36,6 +37,41 @@ test("a refused task says WHY — so 'try again' can't write the same one again"
 
   const assistant = readFileSync(new URL("../src/lib/crmAssistant.ts", import.meta.url), "utf8");
   assert.match(assistant, /const problems: string\[\] = proposes \? \[\.\.\.reply\.invalid\] : \[\];/);
+});
+
+test("words only shown on a card are shortened, never a reason to refuse the task", () => {
+  const long = "x".repeat(400);
+  const [meeting] = parseActionList([{ ...show, summary: long, reason: long }]);
+  assert.ok(meeting, "a long title or why no longer sinks the booking");
+  assert.equal((meeting as { summary?: string }).summary?.length, 120);
+  assert.equal((meeting as { reason?: string }).reason?.length, 160);
+  assert.equal(parseActionList([{ ...show, with: Array.from({ length: 12 }, (_, i) => `Person ${i}`) }]).length, 1, "a team meeting of 12");
+  assert.match(invalidActionReasons([{ type: "note", leadId: "cmwatj10v0004ku08qygiessp", text: "y".repeat(2500) }])[0], /note's text was too long — the most is 2000 characters/);
+});
+
+test("EVERY task that becomes no card says why — no silent drop left in resolveActions", () => {
+  const assistant = readFileSync(new URL("../src/lib/crmAssistant.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const start = assistant.indexOf("export async function resolveActions(");
+  const body = assistant.slice(start, assistant.indexOf("\n}\n", start));
+  const silent = body.split("\n").filter((line) => /if \(.*\) continue;/.test(line) && !/problems\.push/.test(line));
+  // The two left are not refusals: check-backs are saved elsewhere, and an unchanged customer field is just skipped.
+  assert.deepEqual(silent.map((l) => l.trim()), [
+    'if (p.type === "check_back" || p.type === "drop_waiting") continue;',
+    'if (!now || (c[field] ?? "").trim() === now) continue;',
+  ]);
+  assert.match(body, /I can't find a colleague called/, "a colleague it can't match is said, not left off the meeting");
+  assert.match(body, /has already passed — say the day again/);
+});
+
+test("a lookup asking for a little too much is adjusted, not thrown away", () => {
+  const one = (s: string) => parseSteps(s)?.[0] as { tool: string; args: Record<string, unknown> } | undefined;
+  // The shapes that came back null before (2026-11-13 probe).
+  assert.deepEqual(one('{"tool":"find_activities","args":{"from":"2026-11-12","to":"2026-11-12","type":"note"}}')?.args, { when: "upcoming", type: "note", from: "2026-11-12", to: "2026-11-12" }, "dates without when");
+  assert.equal(one('{"tool":"find_activities","args":{"when":"past","from":"2026-11-12","limit":200}}')?.args.limit, 25, "too many results → the most");
+  assert.equal(one('{"tool":"catch_up","args":{"since":"2026-11-12T00:00"}}')?.args.since, "2026-11-12", "a date with a time → the date");
+  assert.equal(one('{"tool":"schedule","args":{"person":"Sean","from":"2026-12-01","days":31}}')?.args.days, 31, "a month ahead");
+  assert.equal(one('{"tool":"schedule","args":{"days":90}}')?.args.days, 31);
+  assert.equal(one('{"tool":"find_leads","args":{"limit":100}}')?.args.limit, 25);
 });
 
 test("WhatsApp gets the words, not the CRM link", () => {

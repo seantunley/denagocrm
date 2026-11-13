@@ -70,7 +70,7 @@ test("LEARN and ACTIONS lines can both trail an answer, in either order", () => 
 test("proposals are checked against what this person may touch, names resolved, nothing run", () => {
   const lib = code("src/lib/crmAssistant.ts");
   const resolve = lib.slice(lib.indexOf("async function resolveActions"), lib.indexOf("function dedupeRows"));
-  assert.match(resolve, /if \(!\(await canAccessLead\(user, p\.leadId\)\)\) continue;/);
+  assert.match(resolve, /if \(!\(await canAccessLead\(user, p\.leadId\)\)\) \{ problems\.push\(DEAL_GONE\); continue; \}/);
   assert.match(resolve, /staff\.find\(/, "a person must be in this workspace");
   assert.match(resolve, /where: \{ pipelineId: lead\.stage\.pipelineId \}/, "a stage must be in that lead's pipeline");
   assert.doesNotMatch(resolve, /scheduleFollowUp|assignLead|moveLead|addCommunication|\.create\(|\.update\(/, "resolving runs nothing");
@@ -93,7 +93,7 @@ test("a note can go on a CUSTOMER with no lead, and be pinned — proposed, chec
   const resolve = lib.slice(lib.indexOf("async function resolveActions"), lib.indexOf("function dedupeRows"));
   // (Up to the next customer-level branch — a quote for a customer — which comes before the lead checks.)
   const branch = resolve.slice(resolve.indexOf('if (p.type === "customer_note")'), resolve.indexOf('if (p.type === "quote_build")'));
-  assert.match(branch, /if \(!\(await canAccessContact\(user, p\.contactId\)\)\) continue;/);
+  assert.match(branch, /if \(!\(await canAccessContact\(user, p\.contactId\)\)\) \{ problems\.push\(CUSTOMER_GONE\); continue; \}/);
   assert.match(branch, /where: \{ id: p\.contactId, deletedAt: null \}/);
   assert.match(branch, /kind: "customer_note", contactId: p\.contactId, leadId: null/);
   assert.match(branch, /continue;\s*\}\s*$/, "a customer note never falls through to the lead checks");
@@ -151,8 +151,8 @@ test("a PERSONAL calendar item can be proposed: time blocked on the asker's own 
   const resolve = lib.slice(lib.indexOf("async function resolveActions"), lib.indexOf("function dedupeRows"));
   const branch = resolve.slice(resolve.indexOf('if (p.type === "block_time")'), resolve.indexOf('if (p.type === "watch")'));
   assert.match(branch, /kind: "block_time" as const, leadId: null, leadLabel: "Your calendar"/);
-  assert.match(branch, /start\.getTime\(\) < Date\.now\(\) - 60 \* 60 \* 1000\) continue;/);
-  assert.match(branch, /if \(p\.when < johannesburgDateKey\(new Date\(\)\)\) continue;/);
+  assert.match(branch, /start\.getTime\(\) < Date\.now\(\) - 60 \* 60 \* 1000\) \{ problems\.push\(passed\(when\(start\)\)\); continue; \}/);
+  assert.match(branch, /if \(p\.when < johannesburgDateKey\(new Date\(\)\)\) \{ problems\.push\(passed\(p\.when\)\); continue; \}/);
   assert.match(branch, /\(p\.minutes \?\? 60\) \* 60 \* 1000/, "an hour when no length is given");
   assert.doesNotMatch(branch, /assignedTo|userId|canAccessLead/, "whose calendar is never taken from the proposal");
 

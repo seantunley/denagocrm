@@ -25,7 +25,12 @@ const at = z.string().trim().regex(/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?$/);
 const atTime = z.string().trim().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/);
 const minutes = z.number().int().min(15).max(480);
 const MEETING_MAX_MINUTES = 720;
-const reason = z.string().trim().min(3).max(160).optional();
+/**
+ * Words only SHOWN on a card (its "why", a calendar item's title) are shortened, never a reason to refuse the task:
+ * one long sentence used to sink the whole booking (Sean, 2026-11-13).
+ */
+const shown = (max: number) => z.string().trim().min(1).transform((s) => (s.length > max ? `${s.slice(0, max - 1).trimEnd()}…` : s));
+const reason = shown(160).optional();
 /** The most lines the assistant may put on a quote it builds. A longer quote is built in the editor. */
 export const QUOTE_BUILD_MAX_LINES = 10;
 /** Fees the assistant may add to a draft in one go, and the most one may be (rands). More than that is the editor's. */
@@ -43,7 +48,7 @@ export const proposedAction = z.discriminatedUnion("type", [
     contactId: leadId.optional(),
     when: at,
     activity: z.enum(["call", "whatsapp", "email", "meeting", "todo"]).default("call"),
-    summary: text.max(120).optional(),
+    summary: shown(120).optional(),
     reason,
   }).strict(),
   // pin: keeps the note at the top of the timeline — only when the person asks for it pinned.
@@ -148,8 +153,8 @@ export const proposedAction = z.discriminatedUnion("type", [
     // Up to a working day, as block_time: a show or an event runs 07:00–16:00 (Sean, 2026-11-13 — the shared
     // 8-hour cap refused it, and DAX looped on "try again").
     minutes: z.number().int().min(15).max(MEETING_MAX_MINUTES).optional(),
-    with: z.array(text.max(80)).max(5).optional(),
-    summary: text.max(120).optional(),
+    with: z.array(text.max(80)).max(20).optional(),
+    summary: shown(120).optional(),
     reason,
   }).strict(),
   // A TEST DRIVE with a customer — on their deal (leadId) or on them directly (contactId). In a demo vehicle from
@@ -186,7 +191,7 @@ export const proposedAction = z.discriminatedUnion("type", [
     when: at,
     minutes: z.number().int().min(15).max(720).optional(),
     until: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-    summary: text.max(120).optional(),
+    summary: shown(120).optional(),
     note: text.max(300),
     reason,
   }).strict(),
@@ -618,6 +623,10 @@ export function invalidActionReasons(raw: unknown): string[] {
     const field = issue?.path.join(".") ?? "";
     if (issue?.code === "too_big" && field === "minutes") return [`${what} was too long — the most is ${Number(issue.maximum) / 60} hours.`];
     if (issue?.code === "too_small" && field === "minutes") return [`${what} was too short — the least is ${Number(issue.minimum)} minutes.`];
+    if (issue?.code === "too_big") {
+      const unit = issue.origin === "string" ? " characters" : "";
+      return [`${what}'s ${field} was too ${issue.origin === "array" ? "many" : issue.origin === "string" ? "long" : "big"} — the most is ${Number(issue.maximum)}${unit}.`];
+    }
     if (issue?.code === "unrecognized_keys") return [`${what} had details it doesn't take (${issue.keys.join(", ")}).`];
     if (field) return [`${what} had a problem with its ${field}.`];
     return [`${what} isn't something I can set up.`];
