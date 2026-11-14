@@ -77,22 +77,28 @@ async function main() {
   ] });
   const nextMonth = new Date(YEAR, MONTH, 2, 12);
   const lastMonth = new Date(YEAR, MONTH - 2, 20, 12);
-  const lead = async (name: string, status: string, valueCents: number, currency: string | null, at: { created?: Date; won?: Date; updated?: Date; deleted?: Date } = {}) => {
+  // won: a date, or null for a LEGACY row with no wonAt. The Lead_sync_pipeline_forecast trigger stamps wonAt on
+  // insert (and on a status/stage change), so a legacy row is made by clearing it afterwards — an UPDATE of other
+  // columns does not fire the trigger.
+  const lead = async (name: string, status: string, valueCents: number, currency: string | null, at: { created?: Date; won: Date | null; updated?: Date; deleted?: Date }) => {
     const row = await basePrisma.lead.create({
-      data: { tenantId: A, stageId: a.rows.stageId, status, name: `${name} ${SFX}`, title: "Rover XL", valueCents, currency, createdById: a.ownerUserId, createdAt: at.created ?? inMonth(5), wonAt: at.won ?? null, deletedAt: at.deleted ?? null },
+      data: { tenantId: A, stageId: a.rows.stageId, status, name: `${name} ${SFX}`, title: "Rover XL", valueCents, currency, createdById: a.ownerUserId, createdAt: at.created ?? inMonth(5), wonAt: at.won ?? undefined, deletedAt: at.deleted ?? null },
       select: { id: true },
     });
     // @updatedAt is set by Prisma on every write: put where the case needs it, directly.
     await basePrisma.$executeRaw`UPDATE "Lead" SET "updatedAt" = ${at.updated ?? inMonth(20)} WHERE "id" = ${row.id}`;
+    if (at.won === null) await basePrisma.$executeRaw`UPDATE "Lead" SET "wonAt" = NULL WHERE "id" = ${row.id}`;
   };
   // Legacy rows with no wonAt: counted by their last update (in the month).
-  await lead("Won rand", "won", 60_000, null);
-  await lead("Won dollar", "won", 50_000, "USD");
+  await lead("Won rand", "won", 60_000, null, { won: null });
+  await lead("Won dollar", "won", 50_000, "USD", { won: null });
   // Review of #1107: WON in the month, edited the next — still this month's. Won last month, edited this one — not.
   await lead("Won in month, edited after", "won", 15_000, null, { created: lastMonth, won: inMonth(28), updated: nextMonth });
   await lead("Won last month, edited now", "won", 7_000, null, { created: lastMonth, won: lastMonth, updated: inMonth(10) });
   // Deleted: counts for nothing — not a sale, not a new lead.
   await lead("Won then deleted", "won", 9_000, null, { won: inMonth(12), deleted: inMonth(13) });
+  const legacy = await basePrisma.lead.count({ where: { tenantId: A, name: `Won rand ${SFX}`, wonAt: null } });
+  if (legacy !== 1) throw new Error("the legacy row still has a wonAt — the setup did not make one");
 
   const comp = await basePrisma.competitor.create({ data: { tenantId: A, name: `Rival Carts ${SFX}`, tier: 1, notes: "Cheaper Rover copy" }, select: { id: true } });
   const source = await basePrisma.competitorSource.create({ data: { tenantId: A, competitorId: comp.id, label: "Pricing page", url: "https://rival.example.invalid/pricing" }, select: { id: true } });
