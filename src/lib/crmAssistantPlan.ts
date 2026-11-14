@@ -206,12 +206,61 @@ export const stuckArgs = z.object({ lead: z.string().trim().min(1).max(120) }).s
 export const catchUpArgs = z.object({ since: isoDay.optional() }).strict();
 /** Lost deals that came back to life: `mine` narrows to theirs or nobody's (the morning brief's). */
 export const lostAliveArgs = z.object({ mine: z.boolean().optional() }).strict();
+/** TEST DRIVES past and upcoming (assistantTestDrivesLookup) — held to the /test-drives page's own rule. */
+export const testDrivesArgs = z
+  .object({
+    from: isoDay.optional(),
+    to: isoDay.optional(),
+    customer: name.optional(),
+    vehicle: name.optional(),
+    outcome: name.optional(),
+    boughtAfter: z.boolean().optional(),
+    limit: upTo(60).optional(),
+  })
+  .strict();
 /** The areas DAX could not see (assistantAreaLookups): help desk, campaigns, forecast, surveys, referrals. */
 export const ticketsArgs = z.object({ mine: z.boolean().optional(), limit: limit.optional() }).strict();
 export const campaignsArgs = z.object({ from: isoDay.optional(), to: isoDay.optional(), name: name.optional(), limit: limit.optional() }).strict();
 export const forecastArgs = z.object({ period: z.string().trim().regex(/^\d{4}-\d{2}$/).optional() }).strict();
 export const surveysArgs = z.object({ from: isoDay.optional(), to: isoDay.optional(), survey: name.optional() }).strict();
 export const referralsArgs = z.object({ from: isoDay.optional(), to: isoDay.optional(), status: z.enum(["pending", "earned", "redeemed"]).optional() }).strict();
+/** INVOICES (assistantInvoicesLookup) — what /invoices holds, held to its own rule (Sean, 2026-11-14). */
+export const invoicesArgs = z
+  .object({
+    status: z.enum(["unpaid", "paid", "any"]).optional(),
+    customer: name.optional(),
+    number: z.string().trim().max(30).optional(),
+    from: isoDay.optional(),
+    to: isoDay.optional(),
+    olderThanDays: days.optional(),
+    xero: z.enum(["not_sent", "sent", "excluded"]).optional(),
+    limit: upTo(60).optional(),
+  })
+  .strict();
+/** Every signing request — delivery notes, contracts, documents, quotes (assistantSigningLookup). Up to 60 for a full list. */
+export const signingArgs = z
+  .object({
+    status: z.enum(["waiting", "viewed", "completed", "declined", "expired", "any"]).optional(),
+    customer: name.optional(),
+    title: name.optional(),
+    from: isoDay.optional(),
+    to: isoDay.optional(),
+    limit: upTo(60).optional(),
+  })
+  .strict();
+/** The month's business targets against actuals, and competitor intelligence (assistantTargetsLookup). */
+export const targetsArgs = z.object({ period: z.string().trim().regex(/^\d{4}-\d{2}/).transform((s) => s.slice(0, 7)).optional() }).strict();
+export const competitorsArgs = z.object({ name: name.optional() }).strict();
+/** Records of one type by one of the workspace's own CUSTOM FIELDS (assistantCustomFieldsLookup); no field: the fields there are. */
+export const customFieldsArgs = z
+  .object({
+    record: z.enum(["lead", "contact", "quote", "case", "vehicle", "jobcard"]),
+    field: name.optional(),
+    value: name.optional(),
+    limit: upTo(50).optional(),
+  })
+  .strict();
+
 /** CUSTOMERS AS A LIST (assistantCustomersLookup) — by area, fleet, tag, owner, birthday, date added (Sean, 2026-11-14). */
 export const customersArgs = z
   .object({
@@ -275,11 +324,17 @@ export const assistantStep = z.discriminatedUnion("tool", [
   z.object({ tool: z.literal("stuck"), args: stuckArgs }),
   z.object({ tool: z.literal("catch_up"), args: catchUpArgs.default({}) }),
   z.object({ tool: z.literal("lost_alive"), args: lostAliveArgs.default({}) }),
+  z.object({ tool: z.literal("test_drives"), args: testDrivesArgs.default({}) }),
   z.object({ tool: z.literal("tickets"), args: ticketsArgs.default({}) }),
   z.object({ tool: z.literal("campaigns"), args: campaignsArgs.default({}) }),
   z.object({ tool: z.literal("forecast"), args: forecastArgs.default({}) }),
   z.object({ tool: z.literal("surveys"), args: surveysArgs.default({}) }),
   z.object({ tool: z.literal("referrals"), args: referralsArgs.default({}) }),
+  z.object({ tool: z.literal("invoices"), args: invoicesArgs.default({}) }),
+  z.object({ tool: z.literal("signing"), args: signingArgs.default({}) }),
+  z.object({ tool: z.literal("targets"), args: targetsArgs.default({}) }),
+  z.object({ tool: z.literal("competitors"), args: competitorsArgs.default({}) }),
+  z.object({ tool: z.literal("custom_fields"), args: customFieldsArgs }),
   z.object({ tool: z.literal("customers"), args: customersArgs.default({}) }),
   z.object({ tool: z.literal("deal_file"), args: dealFileArgs }),
   z.object({ tool: z.literal("suppliers"), args: suppliersArgs.default({}) }),
@@ -352,11 +407,17 @@ export function planInstructions(ctx: PlanContext): string {
     '- stuck: {"lead":"<customer name, lead title or id>" (required)} — why ONE deal is stuck, with evidence: its blockers RANKED, each with its date and a link to the record it comes from (the customer waiting on us, an overdue follow-up, the quote unopened / declined / expiring, the deposit, time in the stage against its limit, no next step, the customer gone quiet), plus the facts behind them. Run it for every "why is X stuck / stalled / not moving / gone quiet / not closing"; it usually answers on its own ("then":"answer"). For "which of my deals are stuck", use stuck_deals.',
     '- catch_up: {"since":"YYYY-MM-DD" (only when they name a day)} — what changed on THEIR OWN deals since their last question to you (at most 7 days back): new customer messages, quotes opened / opened again / signed, stage moves by someone else, new leads for them, and their overdue and due-today tasks. Run it for "catch me up", "what\'s changed", "what did I miss", "anything new (since…)"; it answers on its own ("then":"answer").',
     '- notes: {"from":"YYYY-MM-DD" (required),"to":"YYYY-MM-DD","by":"<colleague who added them>"} — every NOTE ADDED on that day (or from–to), on all the deals and customers they may open, each with when it was added, which customer and deal it is on, WHO added it, and its words. Run it for "which notes were added yesterday", "what notes did Donovan add this week", "summarise yesterday\'s notes" — search_messages is one customer at a time and find_activities is the calendar, neither lists notes across the CRM.',
+    '- test_drives: {"from":"YYYY-MM-DD","to":"YYYY-MM-DD" (default the last 90 days and the next 30),"customer":"<customer name>","vehicle":"<demo vehicle, reg or model>","outcome":"follow_up|quote_created|sale_won|no_interest|undecided|completed|cancelled|no_show","boughtAfter":true|false,"limit":<1-60>} — TEST DRIVES past and upcoming: customer, vehicle, when, who ran it, status, outcome and feedback, whether a quote came of it, and whether the customer BOUGHT (a won deal after the drive, or the drive marked a sale). The TOTAL is the real count. Run it for "who test-drove last week and didn\'t buy" (boughtAfter false), "how many test drives this month", "how did Anna\'s test drive go".',
     '- tickets: {"mine":true (only those assigned to them)} — the HELP DESK (customer cases): how many are open, waiting on our reply, overdue (a customer waiting 24 hours or more — tickets have no deadline of their own), urgent/high and unassigned, then the tickets, overdue first, each with customer, status, priority, who has it, how long the customer has waited and a link. Run it for "which tickets are overdue", "what\'s waiting in the help desk", "my open cases".',
     '- campaigns: {"from":"YYYY-MM-DD","to":"YYYY-MM-DD","name":"<words of a campaign name>"} — MARKETING CAMPAIGNS sent in that period (default the last 30 days), or the one named: channel, when sent, audience, recipients, delivered, failed, opens and clicks with their rates, and a link. Run it for "how did last week\'s campaign do", "which campaign got the most clicks".',
     '- forecast: {"period":"YYYY-MM" (default this month)} — the SALES FORECAST for deals expected to close that month: open, weighted, commit, best case and pipeline totals in rands, and the biggest deals with probability, category, close date, stage and owner. Run it for "what\'s the forecast for this month", "what are we committing for December".',
     '- surveys: {"from":"YYYY-MM-DD","to":"YYYY-MM-DD","survey":"<words of a survey title>"} — CUSTOMER SURVEYS sent in that period (default the last 30 days): per survey, sent, answered, response rate, NPS or average score, and the unhappy answers with what the customer said. Run it for "how are our NPS scores", "any unhappy customers in the surveys".',
     '- referrals: {"from":"YYYY-MM-DD","to":"YYYY-MM-DD","status":"pending|earned|redeemed"} — REFERRALS in that period (default the last 90 days): totals pending / earned-not-redeemed / redeemed, the top referrers, and the latest referrals. Run it for "how many referrals this quarter", "who refers the most", "which rewards are still owed".',
+    '- invoices: {"status":"unpaid|paid|any" (default unpaid),"customer":"<customer or fleet name>","number":"<INV-000042 or a Xero number>","from":"YYYY-MM-DD","to":"YYYY-MM-DD" (by invoice date),"olderThanDays":<days since invoiced>,"xero":"not_sent|sent|excluded","limit":<1-60>} — ISSUED INVOICES as the Invoices page shows them: the TOTAL that match and what is OUTSTANDING per currency, then each with its quote, customer, invoice date, days since invoiced, total, received, owing, delivery and its Xero copy (number, status, when sent). Invoices have NO due date in the CRM: never call one "overdue" — for "what\'s overdue" use olderThanDays (say "invoiced more than N days ago and still owing"). Run it for "which invoices are unpaid", "how much is outstanding", "has Marcel\'s invoice gone to Xero".',
+    '- signing: {"status":"waiting|viewed|completed|declined|expired|any" (default waiting — sent, not yet finished; viewed = opened by someone who has not signed),"customer":"<customer or signer name>","title":"<words of the document title>","from":"YYYY-MM-DD","to":"YYYY-MM-DD" (when it was sent),"limit":<1-60>} — EVERY SIGNING REQUEST, not only quotes: delivery notes, contracts, custom documents and quotes. The TOTAL that match, then each with its title, what it is for (delivery note for Q-…, quote Q-…, job card, document), status, when sent, who has signed, who has not (and whether they opened it), the last reminder and a link. Run it for "who still has to sign their delivery note", "which contracts are waiting", "did Marcel sign".',
+    '- targets: {"period":"YYYY-MM" (default this month)} — the business\'s MONTHLY TARGETS (new leads, sales value, deliveries, services) against what was done, with the gap still needed and the percentage, as the Targets page counts them (sales = deals WON in the month). Run it for "are we on target this month", "how far are we from the sales target". Targets are for the whole business, not per person — say so if asked about one person\'s target.',
+    '- competitors: {"name":"<competitor>"} — COMPETITOR INTELLIGENCE: the competitors being watched, their tier, notes and the changes found on their websites waiting for review; with a name, its recent changes and latest research brief. Run it for "what are our competitors up to", "anything new from <competitor>". It is not linked to deals.',
+    '- custom_fields: {"record":"lead|contact|quote|case|vehicle|jobcard" (required),"field":"<the field\'s name>","value":"<words of the value>","limit":<1-50>} — the workspace\'s OWN CUSTOM FIELDS (fields it added itself, e.g. "Finance house", "Expo"). Without field: which custom fields that record type has, with their options. With field (and value): the records whose field matches, that the person may open. Leads, quotes, customers and vehicles that other lookups return already carry their filled custom fields as customFields — read those first. Run it for "which leads came from the Paarl expo", "customers financing with WesBank", "what custom fields do we have on quotes".',
     '- customers: {"area":"<suburb, city, province or estate>","fleet":"<fleet name>","tag":"<tag>","owner":"<person>","kind":"individual|business|fleet","birthdayWithinDays":<0-31, 0 = today>,"createdFrom":"YYYY-MM-DD","createdTo":"YYYY-MM-DD","openDeal":true|false,"sort":"newest|name","limit":<1-60>} — CUSTOMERS AS A LIST, only those the person may open: the TOTAL that match, then each with area, fleet, tags, owner, open deals, birthday, phone, email, whether they opted out of marketing, and a link. Run it for "customers in Constantia", "birthdays this week", "customers added last month", "who is on the Pearl Valley fleet", "customers tagged VIP with no open deal". To find ONE customer by name use search_everything or lead_brief.',
     '- deal_file: {"deal":"<customer, lead title or Q-number>" (required)} — ONE DEAL\'S FILE, as the deal page shows it: its quotes, the checklist (each item done or missing, and why), what is still MISSING, the papers on file by type, signing requests, handover photo count, and — with Suppliers on — the suppliers on the deal and which of their papers are missing. Run it for "what paperwork is missing on X\'s deal", "is X\'s deal file complete", "has the supplier invoice come in for Q-1031".',
     '- suppliers: {"supplier":"<supplier name>","missing":true (deals still missing supplier papers),"orders":true (their purchase orders)} — SUPPLIERS (workspace owner only, Suppliers module on): each supplier with kind, contact, terms and how many deals, papers and orders; with a supplier named, its purchase orders and the deals still missing its papers. Run it for "which deals are missing supplier invoices", "what have we ordered from Denago", "who are our suppliers". No bank details are ever in it.',
@@ -517,11 +578,17 @@ const LOOKUP_STATUS: Record<string, string> = {
   stuck: "Working out what's holding it up",
   catch_up: "Catching you up",
   lost_alive: "Checking lost deals for signs of life",
+  test_drives: "Checking test drives",
   tickets: "Checking the help desk",
   campaigns: "Checking campaigns",
   forecast: "Working out the forecast",
   surveys: "Reading the survey results",
   referrals: "Checking referrals",
+  invoices: "Checking invoices",
+  signing: "Checking who has signed",
+  targets: "Checking the targets",
+  competitors: "Checking competitor intelligence",
+  custom_fields: "Checking custom fields",
   customers: "Listing customers",
   deal_file: "Opening the deal file",
   suppliers: "Checking suppliers",

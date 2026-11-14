@@ -10,11 +10,11 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { isTenantOwner, requireUser } from "@/lib/auth";
-import { prisma } from "@/lib/db";
 import { currencySymbol, formatZAR } from "@/lib/format";
 import { saveTargets } from "@/app/actions/targets";
 import { getRegionalSettings } from "@/lib/settings";
-import { baseValueCents } from "@/lib/currencyRules";
+import { targetProgress } from "@/lib/targetProgress";
+import { actingTenantId } from "@/lib/actingTenant";
 import { SectionHeading, StatusPill, Surface } from "@/components/visual-system";
 import { WorkspaceHero } from "@/components/workspace-hero";
 
@@ -34,7 +34,7 @@ const METRICS: Array<{
 ];
 
 export default async function TargetsPage() {
-  const user = await requireUser();
+  await requireUser();
   const moneyFmt = await getRegionalSettings();
   // The WORKSPACE's owner sets the plan (saveTargets checks requireTenantOwner).
   const isOwner = await isTenantOwner();
@@ -42,25 +42,8 @@ export default async function TargetsPage() {
   const period = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
 
-  const [targets, leads, wonLeads, deliveries, services] = await Promise.all([
-    prisma.target.findMany({ where: { period } }),
-    prisma.lead.count({ where: { createdAt: { gte: monthStart } } }),
-    prisma.lead.findMany({
-      where: { status: "won", updatedAt: { gte: monthStart } },
-      select: { valueCents: true, currency: true },
-    }),
-    prisma.quote.count({ where: { deliveredAt: { gte: monthStart } } }),
-    prisma.serviceRecord.count({ where: { serviceDate: { gte: monthStart } } }),
-  ]);
-
-  const targetMap = new Map(targets.map((target) => [target.metric, target.value]));
-  const actuals: Record<string, number> = {
-    leads,
-    // A target is one number in the base currency; deals in other currencies don't count toward it.
-    sales_value: wonLeads.reduce((sum, lead) => sum + baseValueCents(lead), 0),
-    deliveries,
-    services,
-  };
+  // The one rule DAX reads too (lib/targetProgress): the same month, the same counts.
+  const { targetMap, actuals } = await targetProgress(await actingTenantId(), period, monthStart);
   const configured = METRICS.filter((metric) => (targetMap.get(metric.id) ?? 0) > 0);
   const achieved = configured.filter((metric) => actuals[metric.id] >= (targetMap.get(metric.id) ?? 0)).length;
   const overallProgress = configured.length
