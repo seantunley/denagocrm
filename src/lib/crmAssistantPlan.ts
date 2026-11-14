@@ -212,6 +212,23 @@ export const campaignsArgs = z.object({ from: isoDay.optional(), to: isoDay.opti
 export const forecastArgs = z.object({ period: z.string().trim().regex(/^\d{4}-\d{2}$/).optional() }).strict();
 export const surveysArgs = z.object({ from: isoDay.optional(), to: isoDay.optional(), survey: name.optional() }).strict();
 export const referralsArgs = z.object({ from: isoDay.optional(), to: isoDay.optional(), status: z.enum(["pending", "earned", "redeemed"]).optional() }).strict();
+/** CUSTOMERS AS A LIST (assistantCustomersLookup) — by area, fleet, tag, owner, birthday, date added (Sean, 2026-11-14). */
+export const customersArgs = z
+  .object({
+    area: name.optional(),
+    fleet: name.optional(),
+    tag: name.optional(),
+    owner: name.optional(),
+    kind: z.enum(["individual", "business", "fleet"]).optional(),
+    /** Birthdays from today through this many days ahead (0 = today only). */
+    birthdayWithinDays: z.number().int().min(0).transform((n) => Math.min(n, 31)).optional(),
+    createdFrom: isoDay.optional(),
+    createdTo: isoDay.optional(),
+    openDeal: z.boolean().optional(),
+    sort: z.enum(["newest", "name"]).optional(),
+    limit: upTo(60).optional(),
+  })
+  .strict();
 /** One deal's file, and the suppliers (assistantDealFileLookup) — each held to its page's own rule. */
 export const dealFileArgs = z.object({ deal: name }).strict();
 export const suppliersArgs = z.object({ supplier: name.optional(), missing: z.boolean().optional(), orders: z.boolean().optional() }).strict();
@@ -260,6 +277,7 @@ export const assistantStep = z.discriminatedUnion("tool", [
   z.object({ tool: z.literal("forecast"), args: forecastArgs.default({}) }),
   z.object({ tool: z.literal("surveys"), args: surveysArgs.default({}) }),
   z.object({ tool: z.literal("referrals"), args: referralsArgs.default({}) }),
+  z.object({ tool: z.literal("customers"), args: customersArgs.default({}) }),
   z.object({ tool: z.literal("deal_file"), args: dealFileArgs }),
   z.object({ tool: z.literal("suppliers"), args: suppliersArgs.default({}) }),
   z.object({ tool: z.literal("notes"), args: notesArgs }),
@@ -334,6 +352,7 @@ export function planInstructions(ctx: PlanContext): string {
     '- forecast: {"period":"YYYY-MM" (default this month)} — the SALES FORECAST for deals expected to close that month: open, weighted, commit, best case and pipeline totals in rands, and the biggest deals with probability, category, close date, stage and owner. Run it for "what\'s the forecast for this month", "what are we committing for December".',
     '- surveys: {"from":"YYYY-MM-DD","to":"YYYY-MM-DD","survey":"<words of a survey title>"} — CUSTOMER SURVEYS sent in that period (default the last 30 days): per survey, sent, answered, response rate, NPS or average score, and the unhappy answers with what the customer said. Run it for "how are our NPS scores", "any unhappy customers in the surveys".',
     '- referrals: {"from":"YYYY-MM-DD","to":"YYYY-MM-DD","status":"pending|earned|redeemed"} — REFERRALS in that period (default the last 90 days): totals pending / earned-not-redeemed / redeemed, the top referrers, and the latest referrals. Run it for "how many referrals this quarter", "who refers the most", "which rewards are still owed".',
+    '- customers: {"area":"<suburb, city, province or estate>","fleet":"<fleet name>","tag":"<tag>","owner":"<person>","kind":"individual|business|fleet","birthdayWithinDays":<0-31, 0 = today>,"createdFrom":"YYYY-MM-DD","createdTo":"YYYY-MM-DD","openDeal":true|false,"sort":"newest|name","limit":<1-60>} — CUSTOMERS AS A LIST, only those the person may open: the TOTAL that match, then each with area, fleet, tags, owner, open deals, birthday, phone, email, whether they opted out of marketing, and a link. Run it for "customers in Constantia", "birthdays this week", "customers added last month", "who is on the Pearl Valley fleet", "customers tagged VIP with no open deal". To find ONE customer by name use search_everything or lead_brief.',
     '- deal_file: {"deal":"<customer, lead title or Q-number>" (required)} — ONE DEAL\'S FILE, as the deal page shows it: its quotes, the checklist (each item done or missing, and why), what is still MISSING, the papers on file by type, signing requests, handover photo count, and — with Suppliers on — the suppliers on the deal and which of their papers are missing. Run it for "what paperwork is missing on X\'s deal", "is X\'s deal file complete", "has the supplier invoice come in for Q-1031".',
     '- suppliers: {"supplier":"<supplier name>","missing":true (deals still missing supplier papers),"orders":true (their purchase orders)} — SUPPLIERS (workspace owner only, Suppliers module on): each supplier with kind, contact, terms and how many deals, papers and orders; with a supplier named, its purchase orders and the deals still missing its papers. Run it for "which deals are missing supplier invoices", "what have we ordered from Denago", "who are our suppliers". No bank details are ever in it.',
     '- lost_alive: {"mine":true (only their own deals and unassigned ones)} — deals marked LOST in the last 90 days for a went-quiet or timing reason ("gone cold", "stopped responding", "buying later") where the customer has since messaged or opened a quote: each with when and why it was lost and what the customer did since. Run it for "which lost deals are still alive", "any lost deals worth another look", "lost but not really lost"; it answers on its own ("then":"answer"), offering a nurture or reopen card for each.',
@@ -496,6 +515,7 @@ const LOOKUP_STATUS: Record<string, string> = {
   forecast: "Working out the forecast",
   surveys: "Reading the survey results",
   referrals: "Checking referrals",
+  customers: "Listing customers",
   deal_file: "Opening the deal file",
   suppliers: "Checking suppliers",
   notes: "Reading the notes added",
