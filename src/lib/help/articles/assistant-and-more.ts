@@ -249,7 +249,14 @@ export const assistantAndMoreArticles: HelpArticle[] = [
       ] },
       { type: "h", text: "Hearing answers" },
       { type: "p", text: "If the owner has switched on voice replies, each answer in the CRM has a **Listen** button that reads it aloud, and a voice note sent to the assistant on WhatsApp gets a short spoken answer back instead of the text — the full answer is on your Ask page, and you get text whenever a voice note can't be made. Spoken answers work in English and Afrikaans only." },
-      { type: "callout", tone: "info", text: "Speaking a question and hearing an answer both rely on the workspace's voice service, which the owner connects under **Settings → Integrations**. Spoken answers use that service's credit each time, so the audio is made only when you press **Listen**." },
+      { type: "callout", tone: "info", text: "Speaking a question and hearing an answer both rely on the workspace's voice service, which the owner connects under **Settings → Integrations**. Spoken answers use that service's credit each time, so the audio is made only when you press **Listen** — or, in hands-free, for each answer to a question you spoke." },
+      { type: "h", text: "Hands-free (driving, the workshop)" },
+      { type: "p", text: "Where answers can be read aloud, the chat has a **headphones** button next to the microphone. Turn it on (this device remembers it), then tap the microphone once and just talk: when you pause, your question is sent, the answer is read aloud, and it listens again. A bar shows whether it is listening, thinking or speaking, with a big **Stop** button. It never listens while it is speaking." },
+      { type: "list", items: [
+        "It stops on its own when you press Stop, close the chat, switch to another app or tab, after two minutes of silence, or when it can't make out what you said three times in a row.",
+        "It keeps your screen on while it runs.",
+        "Anything that changes the CRM — a note, a task, a message to a customer — still needs a tap on its card. Saying yes doesn't confirm it.",
+      ] },
     ],
   },
   {

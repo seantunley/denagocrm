@@ -2,7 +2,7 @@
 
 import { useEffect, useReducer, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowUpRight, FileText, Loader2, Mic, Paperclip, Pencil, Smile, Square, ThumbsDown, ThumbsUp, Volume2, X } from "lucide-react";
+import { ArrowUpRight, FileText, Headphones, Loader2, Mic, Paperclip, Pencil, Smile, Square, ThumbsDown, ThumbsUp, Volume2, X } from "lucide-react";
 import { rateAssistantAnswer } from "@/app/actions/assistant";
 import { speakAssistantAnswer } from "@/app/actions/assistantVoice";
 import type { Evidence } from "@/lib/assistantReply";
@@ -14,6 +14,8 @@ import { IMAGE_MAX_SIDE, MAX_IMAGE_BYTES } from "@/lib/assistantImage";
 import { transcribeQuestion } from "@/app/actions/voice";
 import type { AssistantRow } from "@/lib/crmAssistant";
 import { audioForm, useVoiceRecorder } from "@/components/useVoiceRecorder";
+import { useHandsFree } from "@/components/useHandsFree";
+import { HANDS_FREE_LABEL, handsFreePreferred, rememberHandsFree } from "@/lib/handsFree";
 import type { ActionCard } from "@/lib/assistantActions";
 import AssistantActionCard from "@/components/AssistantActionCard";
 import AssistantPlanCard from "@/components/AssistantPlanCard";
@@ -274,6 +276,9 @@ export default function AssistantChat({
     </button>
   );
 
+  // Hands-free (below): what it hears is asked exactly as if it were typed.
+  const handsFree = useHandsFree((text) => ask(text));
+
   const run = async (item: ChatItem<Blob>) => {
     const q = item.text;
     const sent = item.image;
@@ -318,6 +323,8 @@ export default function AssistantChat({
       ...(item.replaces && !(!result.ok && result.kept) ? prev.filter((turn) => turn.turnId !== item.replaces) : prev),
     ]);
     dispatch({ type: "finished", id: item.id });
+    // Hands-free: its own question's answer is spoken, then it listens again (a failed or stopped one: straight back).
+    void handsFree.answered(q, !stopped && result.ok ? result.turnId : undefined);
   };
 
   // The next question goes as soon as there is one and nothing is being answered — once each.
@@ -387,6 +394,23 @@ export default function AssistantChat({
     if (heard.ok) ask(heard.text);
     else setVoiceError(heard.error);
   });
+
+  // HANDS-FREE (lib/handsFree): one tap, then talk — it listens, asks, speaks the answer and listens again. Offered
+  // only where answers can be spoken; the choice is remembered on this device, and the loop starts only on a tap.
+  const [preferHandsFree, setPreferHandsFree] = useState(() => typeof window !== "undefined" && handsFreePreferred());
+  const handsFreeOffered = listen && voice.supported;
+  const handsFreeRunning = handsFree.state.phase !== "off";
+  const toggleHandsFree = () => {
+    const on = !preferHandsFree;
+    setPreferHandsFree(on);
+    rememberHandsFree(on);
+    if (!on && handsFreeRunning) handsFree.stop();
+  };
+  const micPress = () => {
+    if (handsFreeRunning) return handsFree.stop();
+    if (handsFreeOffered && preferHandsFree) return void handsFree.start();
+    return voice.recording ? voice.stop() : void voice.start();
+  };
 
   // In the bubble it reads like a chat: oldest at the top, newest (and the
   // "looking into it" note) at the bottom, kept in view as the thread grows.
@@ -537,16 +561,28 @@ export default function AssistantChat({
             </div>
           )}
         </div>
+        {handsFreeOffered && (
+          <button
+            type="button"
+            onClick={toggleHandsFree}
+            aria-pressed={preferHandsFree}
+            className={`grid size-10 shrink-0 place-items-center rounded-md border ${preferHandsFree ? "border-primary text-primary" : "border-border text-muted-foreground hover:text-foreground"}`}
+            aria-label="Hands-free: the mic keeps listening and answers are spoken"
+            title={preferHandsFree ? "Hands-free is on — tap the mic to start talking" : "Hands-free: tap the mic once, then just talk"}
+          >
+            <Headphones className="size-4" />
+          </button>
+        )}
         {voice.supported && (
           <button
             type="button"
-            onClick={voice.recording ? voice.stop : voice.start}
+            onClick={micPress}
             disabled={hearing}
-            className={`grid size-10 shrink-0 place-items-center rounded-md border ${voice.recording ? "border-destructive text-destructive" : "border-border text-muted-foreground hover:text-foreground"}`}
-            aria-label={voice.recording ? "Stop and ask" : "Ask by voice"}
-            title={voice.recording ? "Stop and ask" : "Ask by voice"}
+            className={`grid size-10 shrink-0 place-items-center rounded-md border ${voice.recording || handsFreeRunning ? "border-destructive text-destructive" : "border-border text-muted-foreground hover:text-foreground"}`}
+            aria-label={handsFreeRunning ? "Stop hands-free" : voice.recording ? "Stop and ask" : handsFreeOffered && preferHandsFree ? "Start hands-free" : "Ask by voice"}
+            title={handsFreeRunning ? "Stop hands-free" : voice.recording ? "Stop and ask" : handsFreeOffered && preferHandsFree ? "Start hands-free" : "Ask by voice"}
           >
-            {hearing ? <Loader2 className="size-4 animate-spin" /> : voice.recording ? <Square className="size-4" /> : <Mic className="size-4" />}
+            {hearing ? <Loader2 className="size-4 animate-spin" /> : voice.recording || handsFreeRunning ? <Square className="size-4" /> : <Mic className="size-4" />}
           </button>
         )}
         <button type="submit" className="btn-primary h-10 px-4 text-sm" disabled={!question.trim() && !image} title={pending ? `Goes as soon as ${name} is done` : undefined}>
@@ -592,6 +628,24 @@ export default function AssistantChat({
         <p className="text-xs text-destructive">● Listening… {voice.seconds}s — tap ■ when you&apos;re done.</p>
       )}
       {(voiceError || voice.error) && <p className="text-xs text-destructive">{voiceError ?? voice.error}</p>}
+      {handsFree.state.phase !== "off" && (
+        <div role="status" aria-live="polite" className="flex items-center gap-3 rounded-xl border border-primary/40 bg-primary/5 p-3">
+          <span className={`size-3 shrink-0 rounded-full ${handsFree.state.phase === "listening" ? "animate-pulse bg-destructive" : "bg-primary"}`} aria-hidden />
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-medium">{HANDS_FREE_LABEL[handsFree.state.phase]}</span>
+            <span className="block text-[11px] text-muted-foreground">Anything that changes the CRM still needs a tap on its card.</span>
+          </span>
+          <button
+            type="button"
+            onClick={() => handsFree.stop()}
+            className="inline-flex h-12 shrink-0 items-center gap-2 rounded-full bg-destructive px-5 text-sm font-semibold text-white hover:opacity-90"
+          >
+            <Square className="size-4" /> Stop
+          </button>
+        </div>
+      )}
+      {handsFree.note && <p className="text-xs text-destructive">{handsFree.note}</p>}
+      {handsFree.state.phase === "off" && handsFree.state.stopped && <p className="text-xs text-muted-foreground">{handsFree.state.stopped}</p>}
     </>
   );
 
