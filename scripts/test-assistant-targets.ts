@@ -121,7 +121,10 @@ async function main() {
     check("by name: its recent change and latest brief", one.recentChanges?.[0]?.summary === `Dropped the XL price ${SFX}` && one.latestBrief?.headline === `Rival brief ${SFX}`, JSON.stringify(one).slice(0, 400));
     check("someone without competitors.view is refused", /can't open competitor intelligence/.test((await competitors(A, reportsOnly)).note ?? ""));
     const fromB = await competitors(b.tenantId, memberB, `Rival Carts ${SFX}`);
-    check("another workspace never sees A's competitor", !JSON.stringify(fromB).includes(SFX), JSON.stringify(fromB).slice(0, 200));
+    // The note repeats the name asked for; what matters is that nothing of A's comes back.
+    check("another workspace never sees A's competitor", /No competitor matches/.test(fromB.note ?? "") && !fromB.competitors && !JSON.stringify(fromB).includes("Cheaper Rover copy"), JSON.stringify(fromB).slice(0, 200));
+    const listB = await competitors(b.tenantId, memberB);
+    check("…nor in its full list", !(listB.competitors ?? []).some((c) => c.competitor === `Rival Carts ${SFX}`), JSON.stringify(listB).slice(0, 200));
   } finally {
     __setTenantEnforcingForTests(null);
     await basePrisma.competitor.deleteMany({ where: { tenantId: A, name: { endsWith: SFX } } }).catch(() => 0);
