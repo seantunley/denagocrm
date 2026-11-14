@@ -43,6 +43,8 @@ const upTo = (max: number) => z.number().int().min(1).transform((n) => Math.min(
 const days = upTo(365);
 const rands = z.number().nonnegative().max(1_000_000_000);
 const limit = upTo(25);
+/** find_leads lists up to this many: enough for a month's lost deals in a report. */
+export const LEAD_LIST_MAX = 60;
 const isoDay = z.string().trim().regex(/^\d{4}-\d{2}-\d{2}/).transform((s) => s.slice(0, 10));
 
 export const leadArgs = z
@@ -60,9 +62,13 @@ export const leadArgs = z
     /** Created on or after / on or before these days (South Africa) — calendar periods like "last month". */
     createdFrom: isoDay.optional(),
     createdTo: isoDay.optional(),
+    /** WON OR LOST on or after / on or before these days — the day the deal closed, not the day it came in (Sean, 2026-11-14: "lost leads in October"). */
+    closedFrom: isoDay.optional(),
+    closedTo: isoDay.optional(),
     search: name.optional(),
-    sort: z.enum(["value", "oldest_contact", "newest", "stage_age"]).optional(),
-    limit: limit.optional(),
+    sort: z.enum(["value", "oldest_contact", "newest", "stage_age", "closed"]).optional(),
+    /** Up to 60 — the higher end for a report or a full list; a chat answer keeps to a few. */
+    limit: upTo(LEAD_LIST_MAX).optional(),
   })
   .strict();
 
@@ -303,7 +309,7 @@ export function planInstructions(ctx: PlanContext): string {
     // learned — comes last, so it never breaks the cached part before it.
     "You are the research step of a sales CRM assistant. Decide the ONE next lookup that best helps answer the question, or say done. Output JSON only — no prose, no code fence.",
     "Tools (args optional unless marked):",
-    '- find_leads: {"status":"open|nurture|won|lost|any" (default open; nurture = parked for a later follow-up, NOT lost),"stage":"<stage>","assignedTo":"<person>","product":"<text>","source":"<text>","minValue":<rands>,"noContactDays":<days since the last real contact — a message either way, a call or a meeting; internal notes and to-dos do not count>,"createdWithinDays":<days>,"createdFrom":"YYYY-MM-DD","createdTo":"YYYY-MM-DD","search":"<customer or lead name>","sort":"value|oldest_contact|newest|stage_age","limit":<1-25>} — the result starts with the TOTAL that match (not just the ones listed), so use it for "how many". "How many came in" counts every lead: status "any". A calendar period ("last month", "in September") is createdFrom/createdTo — last month is the previous calendar month, not the last 30 days.',
+    '- find_leads: {"status":"open|nurture|won|lost|any" (default open; nurture = parked for a later follow-up, NOT lost),"stage":"<stage>","assignedTo":"<person>","product":"<text>","source":"<text>","minValue":<rands>,"noContactDays":<days since the last real contact — a message either way, a call or a meeting; internal notes and to-dos do not count>,"createdWithinDays":<days>,"createdFrom":"YYYY-MM-DD","createdTo":"YYYY-MM-DD","closedFrom":"YYYY-MM-DD","closedTo":"YYYY-MM-DD" (the day it was WON or LOST — "lost in October" is status lost + closedFrom/closedTo, NOT createdFrom),"search":"<customer or lead name>","sort":"value|oldest_contact|newest|stage_age|closed","limit":<1-60; up to 60 only for a report or a full list>} — the result starts with the TOTAL that match (not just the ones listed), so use it for "how many"; for lost deals it also gives the count of EVERY lost reason across all of them, and each lost or won deal its closed date (and lost reason). "How many came in" counts every lead: status "any". A calendar period ("last month", "in September") is createdFrom/createdTo — last month is the previous calendar month, not the last 30 days.',
     "- pipeline_summary: {} — open leads counted and valued per stage.",
     "- daily_brief: {} — what needs this person's attention today, already prioritised (customers waiting for a reply, today's meetings and test drives, overdue follow-ups, Nurture deals whose review day has come, deals that look close, quotes needing attention, delivery problems, stalled deals) — and, for an owner or team manager, their team's; for someone who sees the workshop, a short workshop section (overdue services, stuck job cards, warranties ending). Use it for \"what needs my attention\", \"what should I do today\", \"plan my day\", \"where does my team need help\".",
     '- sales_stats: {"period":"this_month|last_month|last_30_days|last_90_days|this_quarter|this_year" (default this_month),"assignedTo":"<person>"} — the numbers behind "how are we doing / why are sales slower / who needs help": new leads, how many reach a quote, won and lost, win rate, quotes issued/opened/signed, lead sources, lost reasons, the open pipeline per stage with what is stalled, each salesperson\'s open deals, next steps, overdue work and quiet customers — each against the period before.',
