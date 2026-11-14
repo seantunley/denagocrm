@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { unsupportedFigures, unsupportedNote } from "../src/lib/assistantVerify";
+import { RECHECK_STEPS, RECHECK_TURNS, stepsToRecheck } from "../src/lib/crmAssistantPlan";
+import { HARD_DEADLINE_MS, RECHECK_MAX_MS, RECHECK_RESERVE_MS, recheckBudgetMs } from "../src/lib/assistantDepth";
 
 // What a quotes lookup returns: formatZAR's en-ZA shape, with its odd spaces.
 const quotes = [
@@ -41,6 +43,44 @@ test("a figure DAX invented last turn can't vouch for itself this turn (#789 rev
   assert.deepEqual(unsupportedFigures("Under your R60 000 limit: Ben's.", ["And Ben's?", "Anything under R60 000?", quotes]), []);
 });
 
+test("figures restated from an earlier answer pass when its lookups, run again, still hold them (2026-11-14)", () => {
+  // "I want a table here in writing": no lookup this turn, so every amount was flagged.
+  const answer = "| Marcel | Rover XXL | R270,000 |\n| Shaun | Rover XL | R235,000 |\n\nTotal: 3 open leads in New, worth R740,000.";
+  const evidence = ["I want a table here in writing", "Can you summarize the new open leads?"];
+  assert.deepEqual(unsupportedFigures(answer, evidence), ["R270,000", "R235,000", "R740,000"]);
+  // The earlier answer's find_leads, run again now: the leads as they stand.
+  const leadsNow = [
+    { name: "Marcel", value: "R 270 000,00", link: "/leads/m" },
+    { name: "Shaun", value: "R 235 000,00", link: "/leads/s" },
+    { name: "Amien", value: "R 235 000,00", link: "/leads/a" },
+  ];
+  assert.deepEqual(unsupportedFigures(answer, [...evidence, leadsNow]), [], "the amounts, and their total");
+  // A figure the records no longer hold (or never did) is still flagged.
+  assert.deepEqual(unsupportedFigures("Marcel's is R290,000.", [...evidence, leadsNow]), ["R290,000"]);
+});
+
+test("which earlier lookups run again: plain CRM reads, each once, newest first, capped", () => {
+  const leads = { tool: "find_leads", args: { stage: "New", status: "open", limit: 25, sort: "value" } };
+  const earlier = [
+    [leads, { tool: "read_document", args: { document: "contract" } }, { tool: "web", args: {} }],
+    [leads, { tool: "pipeline_summary", args: {} }, { tool: "nonsense", args: { x: 1 } }, "junk"],
+    null,
+  ];
+  const steps = stepsToRecheck(earlier);
+  assert.deepEqual(steps.map((s) => s.tool), ["find_leads", "pipeline_summary"], "no file/picture reads, no internet, no duplicates, nothing invalid");
+  const many = [Array.from({ length: 10 }, (_, i) => ({ tool: "find_leads", args: { search: `name${i}` } }))];
+  assert.equal(stepsToRecheck(many).length, RECHECK_STEPS);
+  assert.ok(RECHECK_TURNS <= 3);
+});
+
+test("the re-check runs on a strict clock, and not at all near the deadline", () => {
+  assert.equal(recheckBudgetMs(0), RECHECK_MAX_MS, "early: its full budget");
+  const room = HARD_DEADLINE_MS - RECHECK_RESERVE_MS;
+  assert.equal(recheckBudgetMs(room - 3_000), 3_000, "late: only what is left before the reserve");
+  assert.equal(recheckBudgetMs(room - 500), 0, "too little left: not started");
+  assert.equal(recheckBudgetMs(HARD_DEADLINE_MS), 0, "past the deadline: not started");
+});
+
 test("the note names what to check, and is said once", () => {
   assert.match(unsupportedNote(["R 421 000"]), /R 421 000\. It may be worked out from them, or wrong/);
   assert.match(unsupportedNote(["a", "b", "c", "d", "e", "f"]), /a, b, c, d and 2 more\. They may/);
@@ -50,10 +90,26 @@ test("every answer goes through the check, and the note is part of what's saved 
   const src = readFileSync(new URL("../src/lib/crmAssistant.ts", import.meta.url), "utf8");
   // The person's words count as evidence; DAX's earlier answers never do (#789 review).
   // Checked with its citations (reply.answer), so a sentence citing a quote is checked against that quote.
-  assert.match(src, /const flagged = unsupportedFigures\(reply\.answer, \[question, \.\.\.history\.map\(\(t\) => t\.question\), \.\.\.observations\.map\(\(o\) => o\.output\.data\)\]\);/);
-  const call = src.slice(src.indexOf("const flagged = unsupportedFigures("), src.indexOf("\n", src.indexOf("const flagged = unsupportedFigures(")));
-  // The evidence list (from "[question") — the answer being checked is the first argument, not evidence.
-  assert.doesNotMatch(call.slice(call.indexOf("[question")), /conversation|\.answer|\.state/, "nothing DAX wrote is evidence");
+  assert.match(src, /const evidenceNow = \[question, \.\.\.history\.map\(\(t\) => t\.question\), \.\.\.observations\.map\(\(o\) => o\.output\.data\)\];\s*let flagged = unsupportedFigures\(reply\.answer, evidenceNow\);/);
+  const call = src.slice(src.indexOf("const evidenceNow = "), src.indexOf("\n", src.indexOf("const evidenceNow = ")));
+  assert.doesNotMatch(call, /conversation|\.answer|\.state/, "nothing DAX wrote is evidence");
+  // LOOKED UP AGAIN (2026-11-14): only when something is flagged; the earlier answers' LOOKUPS re-run now, as this
+  // person — their stored tools, never their answers or working memory.
+  // Only in THIS conversation (no thread: no re-check), and only with time left (review of #1100).
+  assert.match(src, /const recheckMs = recheckBudgetMs\(elapsed\(\)\);\s*if \(flagged\.length && history\.length && thread && recheckMs > 0\) \{/);
+  assert.match(src, /earlierLookupsAgain\(user, who\.tenantId, thread\.id, \(\) => timeUp\),\s*new Promise<typeof timedOut>\(\(resolve\) => \{ timer = setTimeout\(\(\) => \{ timeUp = true; resolve\(timedOut\); \}, recheckMs\); \}\),/);
+  // Ran out of time: the warning stands as it was.
+  assert.match(src, /if \(again === timedOut\) await logError\("crm-assistant", "figure re-check ran out of time"\)\.catch\(\(\) => \{\}\);\s*else if \(again\.length\) flagged = unsupportedFigures\(reply\.answer, \[\.\.\.evidenceNow, \.\.\.again\]\);/);
+  const rerun = src.slice(src.indexOf("async function earlierLookupsAgain("), src.indexOf("/** The records each answer listed travel apart"));
+  assert.match(rerun, /conversationId: string, timeUp: \(\) => boolean\)/);
+  // One at a time, and none started once the time is up: a timed-out re-check leaves at most one lookup running.
+  assert.match(rerun, /for \(const step of stepsToRecheck\(turns\.map\(\(t\) => t\.tools\)\)\) \{\s*if \(timeUp\(\)\) break;\s*const output = await runTool\(user, step\)/);
+  assert.doesNotMatch(rerun, /Promise\.all/, "never all six at once");
+  assert.match(rerun, /where: \{ tenantId, userId: user\.id, conversationId \}/);
+  assert.doesNotMatch(rerun, /CONVERSATION_WINDOW_MS|createdAt: \{ gte/, "never 'recent turns' from other conversations");
+  assert.match(rerun, /select: \{ tools: true \}/);
+  assert.doesNotMatch(rerun, /answer: true|state: true/);
+  assert.match(rerun, /runTool\(user, step\)/);
   // The note is still part of both — and when what it said about a task was replaced (settledAnswer), the note stays
   // with the rest of the answer that was kept (its figures are still there), before the task status.
   assert.match(src, /const settledText = settled === null \? null : kept \? `\$\{kept\}\$\{note\}\\n\\n\$\{settled\}` : settled;/);

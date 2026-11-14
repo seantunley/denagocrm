@@ -46,7 +46,7 @@ import {
 import { ASSISTANT_PROFILE_KEY, parseProfile, selfKnowledge, soulText } from "./assistantSoul";
 import { LEARN_INSTRUCTIONS, memoryPrompt, methodInstructions } from "./assistantMemory";
 import { researchGate } from "./assistantResearchGate";
-import { DEPTH_BUDGETS, HARD_DEADLINE_MS, MIN_CALL_MS, deepen, parseLedger, researchLeftMs, roundFits, startingDepth, type Depth } from "./assistantDepth";
+import { DEPTH_BUDGETS, HARD_DEADLINE_MS, MIN_CALL_MS, deepen, parseLedger, recheckBudgetMs, researchLeftMs, roundFits, startingDepth, type Depth } from "./assistantDepth";
 import { matchDecisions, parseDecision } from "./assistantDecisions";
 import { CITE_RULE, REPLY_FORMAT, SPOKEN_RULE, STATE_INSTRUCTIONS, citableLinks, resolveCitations, splitReply, type Evidence } from "./assistantReply";
 import { unsupportedFigures, unsupportedNote } from "./assistantVerify";
@@ -102,6 +102,8 @@ import {
   leadArgs,
   leadBriefArgs,
   parseSteps,
+  RECHECK_TURNS,
+  stepsToRecheck,
   planSaysAnswerNext,
   decisionArgs,
   lookupStatus,
@@ -1786,6 +1788,28 @@ async function recentTurns(userId: string): Promise<PriorTurn[]> {
   return withListed(turns.reverse());
 }
 
+/**
+ * The lookups the last few answers in THIS conversation ran, run again now as this person (stepsToRecheck says
+ * which), and their fresh results. The answer being written isn't saved yet, so it is never among them.
+ */
+async function earlierLookupsAgain(user: User, tenantId: string, conversationId: string, timeUp: () => boolean): Promise<unknown[]> {
+  const turns = await prisma.assistantTurn.findMany({
+    where: { tenantId, userId: user.id, conversationId },
+    orderBy: { createdAt: "desc" },
+    take: RECHECK_TURNS,
+    select: { tools: true },
+  });
+  // ONE AT A TIME, and none started once the time is up (review of #1100): a Prisma query already running can't be
+  // cancelled, so the most a timed-out re-check leaves behind is the single lookup in flight — never six.
+  const found: unknown[] = [];
+  for (const step of stepsToRecheck(turns.map((t) => t.tools))) {
+    if (timeUp()) break;
+    const output = await runTool(user, step).catch(() => null);
+    if (output) found.push(output.data);
+  }
+  return found;
+}
+
 /** The records each answer listed travel apart from its working memory (assistantListedRules). */
 function withListed(turns: { question: string; answer: string; state: unknown }[]): PriorTurn[] {
   return turns.map((t) => {
@@ -2547,7 +2571,29 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   // DAX's own earlier answers or working memory: a figure it made up last turn
   // must not vouch for itself this turn. Checked WITH its [[/link]] citations:
   // a sentence citing a quote is checked against that quote (Phase 2).
-  const flagged = unsupportedFigures(reply.answer, [question, ...history.map((t) => t.question), ...observations.map((o) => o.output.data)]);
+  const evidenceNow = [question, ...history.map((t) => t.question), ...observations.map((o) => o.output.data)];
+  let flagged = unsupportedFigures(reply.answer, evidenceNow);
+  // LOOKED UP AGAIN, NOT TAKEN ON TRUST (Sean, 2026-11-14): a figure restated from an earlier answer ("put that in a
+  // table") is checked against that answer's lookups run again NOW — fresh records, never the earlier answer's words.
+  // THIS conversation only: with none, a recent unrelated turn's lookup could clear a figure by coincidence (review of
+  // #1100). And on a strict clock: out of time, or not finished in time, the answer keeps its warning as it stood.
+  const recheckMs = recheckBudgetMs(elapsed());
+  if (flagged.length && history.length && thread && recheckMs > 0) {
+    const timedOut = Symbol("timed out");
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let timeUp = false;
+    const again = await Promise.race([
+      earlierLookupsAgain(user, who.tenantId, thread.id, () => timeUp),
+      new Promise<typeof timedOut>((resolve) => { timer = setTimeout(() => { timeUp = true; resolve(timedOut); }, recheckMs); }),
+    ])
+      .catch(async (error: unknown) => {
+        await logError("crm-assistant", "figure re-check failed", error instanceof Error ? error.name : "unknown");
+        return [] as unknown[];
+      })
+      .finally(() => clearTimeout(timer));
+    if (again === timedOut) await logError("crm-assistant", "figure re-check ran out of time").catch(() => {});
+    else if (again.length) flagged = unsupportedFigures(reply.answer, [...evidenceNow, ...again]);
+  }
   const note = flagged.length ? `\n\n${unsupportedNote(flagged)}` : "";
   // A check-back is not a task to confirm: it is taken out here and saved below (setCheckBacks), so it never
   // becomes a card and never counts as a task that "came to nothing".

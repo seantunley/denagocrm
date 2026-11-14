@@ -23,6 +23,18 @@ export const HARD_DEADLINE_MS = 280_000;
 /** Below this, a model call isn't worth starting. */
 export const MIN_CALL_MS = 5_000;
 
+/** The figure re-check (earlier answers' lookups run again): never longer than this. */
+export const RECHECK_MAX_MS = 6_000;
+/** Kept free under the hard deadline after it, for saving the answer and sending it. */
+export const RECHECK_RESERVE_MS = 20_000;
+/** Below this, the re-check isn't started: the answer keeps its warning (review of #1100). */
+export const RECHECK_MIN_MS = 1_000;
+/** How long the re-check may take, `elapsedMs` into the question — 0: don't start it. */
+export function recheckBudgetMs(elapsedMs: number): number {
+  const left = Math.min(RECHECK_MAX_MS, HARD_DEADLINE_MS - RECHECK_RESERVE_MS - elapsedMs);
+  return left >= RECHECK_MIN_MS ? left : 0;
+}
+
 export type DepthBudget = {
   maxSteps: number;
   maxLookups: number;
