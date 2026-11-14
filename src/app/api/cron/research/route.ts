@@ -5,6 +5,7 @@ import { warmUpForCron } from "@/lib/cronPreflight";
 import { runAutoResearch, AUTO_RESEARCH_RESERVE_MS } from "@/lib/ai";
 import { runCronPerTenant } from "@/lib/tenantCron";
 import { runAssistantTidy, TIDY_RESERVE_MS } from "@/lib/assistantTidy";
+import { runOutcomeLearning } from "@/lib/outcomeLearning";
 
 /**
  * Automatic research on new leads, once per tenant per tick.
@@ -41,7 +42,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ ok: false, skipped: routeBudget.reason }, { status: 503 });
   }
 
-  const runs = await runCronPerTenant(async (_tenantId, budget) => {
+  const runs = await runCronPerTenant(async (tenantId, budget) => {
       if (budget.shouldStop(AUTO_RESEARCH_RESERVE_MS)) return { researched: 0, skipped: "insufficient-budget" as const };
       const researched = await runAutoResearch(budget);
       // The assistant's nightly tidy-up of what it has learned: once a day per
@@ -53,7 +54,14 @@ export async function GET(req: NextRequest) {
             logError("assistant-tidy", error);
             return null;
           });
-      return { researched, assistantTidied };
+      // Learning from outcomes: once a week, database reads only (no model call), filed for the owner to approve.
+      const outcomesLearned = !tenantId || budget.shouldStop(MIN_START_BUDGET_MS)
+        ? null
+        : await runOutcomeLearning(tenantId).catch((error: unknown) => {
+            logError("assistant-outcome-learning", error);
+            return null;
+          });
+      return { researched, assistantTidied, outcomesLearned: outcomesLearned !== null };
     },
     {
       maxRuntimeMs: routeBudget.remainingMs,

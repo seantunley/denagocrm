@@ -36,6 +36,7 @@ function origin(note: LearnedNote): string {
   if (note.source === "owner") return `Taught by ${note.taughtBy ?? "the owner"} ${when}`;
   if (note.source === "person") return `Written by ${note.taughtBy ?? "them"} about themselves ${when}`;
   if (note.source === "tidy") return `Written by the nightly tidy-up ${when}`;
+  if (note.source === "outcomes") return `Worked out from won and lost deals ${when}`;
   return `Learned ${when}${note.taughtBy ? ` talking with ${note.taughtBy}` : ""}`;
 }
 
