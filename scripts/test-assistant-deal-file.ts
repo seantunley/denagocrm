@@ -93,6 +93,23 @@ async function main() {
     const byNumber = first(await inA(() => dealFileLookup(ownerA, { deal: `Q-${number}` })));
     check("by its Q-number, the same deal", byNumber.link === `/deals/${quote.id}`, JSON.stringify(byNumber).slice(0, 200));
 
+    // REVIEW OF #1104: the older, delivered deal behind 21 NEWER quotes on the same customer (another deal of theirs).
+    console.log("\ndeal_file — an older deal behind 21 newer quotes");
+    const newer = await basePrisma.lead.create({ data: { tenantId: A, stageId: a.rows.stageId, name: `Oak Consult ${SFX} fleet`, title: "Fleet order", contactId: contact.id, createdById: a.ownerUserId, assignedToId: a.ownerUserId }, select: { id: true } });
+    await basePrisma.quote.updateMany({ where: { id: quote.id }, data: { deliveredAt: new Date(Date.now() - 20 * 86_400_000), createdAt: new Date(Date.now() - 90 * 86_400_000) } });
+    await basePrisma.quote.createMany({
+      data: Array.from({ length: 21 }, (_, i) => ({ tenantId: A, number: number + 100 + i, status: "draft", leadId: newer.id, contactId: contact.id, createdById: a.ownerUserId })),
+    });
+    const both = first(await inA(() => dealFileLookup(ownerA, { deal: `Oak Consult ${SFX}` })));
+    const candidates = JSON.stringify(both.deals ?? []);
+    check("both deals are offered — the older one too, not lost behind the newest 20", /2 deals match/.test(both.note ?? "") && candidates.includes(`Q-${number}"`), JSON.stringify(both).slice(0, 300));
+    check("by its Q-number it still opens directly", first(await inA(() => dealFileLookup(ownerA, { deal: `Q-${number}` }))).link === `/deals/${quote.id}`);
+    await basePrisma.quote.createMany({
+      data: Array.from({ length: 6 }, (_, i) => ({ tenantId: A, number: number + 200 + i, status: "draft", contactId: contact.id, createdById: a.ownerUserId })),
+    });
+    const many = first(await inA(() => dealFileLookup(ownerA, { deal: `Oak Consult ${SFX}` })));
+    check("more than 6 deals: says how many and asks to narrow — never the newest few as if they were all", /^8 deals match/.test(many.note ?? "") && !("deals" in many), JSON.stringify(many).slice(0, 200));
+
     console.log("\ndeal_file — who may not");
     const refused = first(await inA(() => dealFileLookup(noQuotes, { deal: `Q-${number}` })));
     check("deals but no quote access: refused", /can't open deals/.test(refused.note ?? ""), refused.note);
@@ -126,8 +143,8 @@ async function main() {
     const tenants = [A, b.tenantId];
     await basePrisma.dealVendor.deleteMany({ where: { tenantId: { in: tenants } } }).catch(() => 0);
     await basePrisma.vendor.deleteMany({ where: { tenantId: { in: tenants }, name: { endsWith: SFX } } }).catch(() => 0);
-    await basePrisma.quote.deleteMany({ where: { tenantId: A, number: { in: [number, number + 1] } } }).catch(() => 0);
-    await basePrisma.lead.deleteMany({ where: { tenantId: A, name: `Oak Consult ${SFX}` } }).catch(() => 0);
+    await basePrisma.quote.deleteMany({ where: { tenantId: A, number: { gte: number, lte: number + 300 } } }).catch(() => 0);
+    await basePrisma.lead.deleteMany({ where: { tenantId: A, name: { startsWith: `Oak Consult ${SFX}` } } }).catch(() => 0);
     await basePrisma.contact.deleteMany({ where: { tenantId: A, lastName: `Oak${SFX}` } }).catch(() => 0);
     await teardown(fixture);
     await basePrisma.$executeRaw`DELETE FROM "TenantMember" WHERE "userId" IN (${noQuotes.id}, ${otherRep.id})`.catch(() => 0);

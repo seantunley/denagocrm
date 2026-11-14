@@ -30,6 +30,11 @@ const fuzzy = (needle: string) => ({ contains: needle, mode: "insensitive" as co
 
 /* ── deal_file ───────────────────────────────────────────────────────────── */
 
+/** Quotes searched to tell deals apart, at most; past it, the person narrows. */
+const DEAL_MATCH_CEILING = 1000;
+/** Deals listed to choose from, at most; more than this, only the count is said. */
+const DEAL_CANDIDATES = 6;
+
 export async function dealFileLookup(user: PermissionUser, args: { deal: string }): Promise<Output> {
   if (!(await hasAnyPermission(user, "quotes.view_all", "quotes.view_owned"))) return unavailable("This person can't open deals (no quote access).");
   const quoteIds = await getAccessibleQuoteIds(user);
@@ -55,21 +60,34 @@ export async function dealFileLookup(user: PermissionUser, args: { deal: string 
       ],
     },
     orderBy: { createdAt: "desc" },
-    take: 20,
-    select: { id: true, number: true, leadId: true, contact: { select: { firstName: true, lastName: true, company: true } }, lead: { select: { name: true, title: true } } },
+    // EVERY matching quote (review of #1104: the 20 newest left an older, delivered deal out without a word), only
+    // what tells deals apart. The ceiling guards a one-word search; past it, they narrow.
+    take: DEAL_MATCH_CEILING + 1,
+    select: { id: true, leadId: true, number: true, createdAt: true },
   });
   if (!found.length) return unavailable(`No deal this person may open matches "${args.deal}".`);
-  // One deal = one lead (all its quotes), or a quote with no lead.
-  const deals = [...new Map(found.map((q) => [q.leadId ?? q.id, q])).values()];
-  const who = (q: (typeof found)[number]) => q.contact?.company || (q.contact ? contactName(q.contact) : "") || q.lead?.name || `Q-${q.number}`;
-  if (deals.length > 1) {
+  if (found.length > DEAL_MATCH_CEILING) return unavailable(`More than ${DEAL_MATCH_CEILING} quotes match "${args.deal}" — ask for the Q-number or the customer's full name.`);
+  // One deal = one lead (all its quotes), or a quote with no lead — each shown by its NEWEST quote.
+  const deals = new Map<string, (typeof found)[number]>();
+  for (const q of found) if (!deals.has(q.leadId ?? q.id)) deals.set(q.leadId ?? q.id, q);
+  if (deals.size > DEAL_CANDIDATES) {
+    return unavailable(`${deals.size} deals match "${args.deal}" — ask which one, by its Q-number or the customer's full name. (Not listed: a few of them would look like all of them.)`);
+  }
+  const named = await prisma.quote.findMany({
+    where: { tenantId, id: { in: [...deals.values()].map((q) => q.id) } },
+    orderBy: { createdAt: "desc" },
+    select: { id: true, number: true, leadId: true, contact: { select: { firstName: true, lastName: true, company: true } }, lead: { select: { name: true, title: true } } },
+  });
+  const who = (q: (typeof named)[number]) => q.contact?.company || (q.contact ? contactName(q.contact) : "") || q.lead?.name || `Q-${q.number}`;
+  if (named.length > 1) {
     return {
       rows: [],
       truncated: false,
-      data: [{ note: "Several deals match — ask which one.", deals: deals.slice(0, 6).map((q) => ({ quote: `Q-${q.number}`, customer: who(q), deal: q.lead?.title ?? null })) }],
+      data: [{ note: `${named.length} deals match — ask which one.`, deals: named.map((q) => ({ quote: `Q-${q.number}`, customer: who(q), deal: q.lead?.title ?? null })) }],
     };
   }
-  const quote = deals[0];
+  const quote = named[0];
+  if (!quote) return unavailable(`No deal this person may open matches "${args.deal}".`);
   // The deal page's own loader: only the quotes on this deal this person may open, the current version of each paper.
   const file = await loadDealFile({ id: quote.id, leadId: quote.leadId }, user);
   const link = `/deals/${quote.id}`;

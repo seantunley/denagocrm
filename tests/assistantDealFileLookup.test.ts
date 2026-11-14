@@ -20,6 +20,10 @@ test("deal_file is held to the deal page's rule and reads through its loader", (
   assert.match(src, /AND: \[\s*\.\.\.\(quoteIds === null \? \[\] : \[\{ id: \{ in: quoteIds \} \}\]\),/);
   assert.match(src, /where: \{\s*tenantId,\s*deletedAt: null,/);
   assert.match(src, /await loadDealFile\(\{ id: quote\.id, leadId: quote\.leadId \}, user\)/);
+  // EVERY matching quote, not the newest 20 (review of #1104); more than 6 deals: the count, never a partial list.
+  assert.match(src, /take: DEAL_MATCH_CEILING \+ 1,\s*select: \{ id: true, leadId: true, number: true, createdAt: true \},/);
+  assert.match(src, /if \(deals\.size > DEAL_CANDIDATES\) \{\s*return unavailable\(`\$\{deals\.size\} deals match/);
+  assert.doesNotMatch(src, /take: 20/);
   // With Suppliers off, no supplier is named.
   assert.match(src, /\.\.\.\(file\.suppliersOn\s*\?/);
 });
