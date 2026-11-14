@@ -55,7 +55,8 @@ test("the loop runs a batch side by side, skips repeats, and stops at the total 
   assert.match(loop, /if \(seen\.has\(key\)\) continue;/, "a lookup already run isn't run again");
   assert.match(loop, /fresh\.slice\(0, budget\(\)\.maxLookups - observations\.length\)/);
   assert.match(loop, /await Promise\.all\(\s*batch\.map/);
-  assert.match(loop, /runTool\(user, s\)\)\.catch\(/, "one failed lookup doesn't sink the batch");
+  // runTool(…).then(custom fields) — and the whole of it caught (assistantCustomFieldsLookup, 2026-11-14).
+  assert.match(loop, /runTool\(user, s\)\.then\(async \(out\) => \{[\s\S]*?return out;\s*\}\)\)\.catch\(/, "one failed lookup doesn't sink the batch");
   assert.ok(MAX_LOOKUPS >= MAX_PARALLEL);
 });
 
