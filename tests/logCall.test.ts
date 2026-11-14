@@ -90,10 +90,11 @@ function deferredMic() {
   return { tracks, getMic, calls, grant: () => grant(), refuse: (e: Error) => refuse(e) };
 }
 
+// The recorder asks through the SAME cancellable helper as hands-free (lib/micStarter), with no wake lock.
 test("Cancel while the permission prompt is open: granted afterwards, the microphone goes straight off and nothing starts", async () => {
-  const { micRequest } = await import("../src/lib/micRequest");
+  const { micStarter } = await import("../src/lib/micStarter");
   const prompt = deferredMic();
-  const mic = micRequest(prompt.getMic);
+  const mic = micStarter({ getMic: prompt.getMic });
   const started = mic.start();
   assert.equal(mic.waiting(), true, "waiting for permission");
   mic.cancel(); // Cancel, Stop or unmount — the hook calls the same cancel for each
@@ -103,28 +104,31 @@ test("Cancel while the permission prompt is open: granted afterwards, the microp
   assert.equal(prompt.tracks[0].live, false, "no live microphone track");
 });
 
-test("a refusal after Cancel is nobody's error; one request at a time; a fresh start after Cancel works", async () => {
-  const { micRequest } = await import("../src/lib/micRequest");
+test("a refusal after Cancel is nobody's error; a fresh start after Cancel gets the microphone, with no wake lock asked", async () => {
+  const { micStarter } = await import("../src/lib/micStarter");
   const refused = deferredMic();
-  const mic = micRequest(refused.getMic);
+  const mic = micStarter({ getMic: refused.getMic });
   const first = mic.start();
-  assert.equal(await mic.start(), null, "a second start while one waits is ignored");
-  assert.equal(refused.calls.n, 1, "never a second prompt");
   mic.cancel();
   refused.refuse(new Error("NotAllowedError"));
   assert.equal(await first, null);
+  assert.equal(mic.waiting(), false);
 
   const granted = deferredMic();
-  const again = micRequest(granted.getMic);
+  const again = micStarter({ getMic: granted.getMic });
   const live = again.start();
   granted.grant();
-  const stream = await live;
-  assert.ok(stream && granted.tracks[0].live, "not cancelled: the microphone is handed over");
+  const got = await live;
+  assert.ok(got && granted.tracks[0].live && got.wake === null, "not cancelled: the microphone is handed over, no wake lock");
+  assert.equal(again.waiting(), false, "answered: no longer waiting");
 });
 
 test("the shared recorder (every caller: Log a call, the DAX chat mic) cancels a waiting prompt on Stop, Cancel and unmount", () => {
   const hook = code("src/components/useVoiceRecorder.ts");
-  assert.match(hook, /const \[mic\] = useState\(\(\) => micRequest\(\(\) => navigator\.mediaDevices\.getUserMedia\(\{ audio: true \}\)\)\);/);
+  assert.match(hook, /const \[mic\] = useState\(\(\) => micStarter<MediaStream>\(\{ getMic: \(\) => navigator\.mediaDevices\.getUserMedia\(\{ audio: true \}\) \}\)\);/);
+  // Never a second prompt: the hook asks only when no start is waiting (the helper itself would replace it).
+  assert.ok(hook.indexOf("mic.waiting()) return;") < hook.indexOf("await mic.start()"));
+  assert.ok(!code("src/lib/handsFree.ts").includes("export function micStarter"), "one helper, not two");
   assert.doesNotMatch(hook, /await navigator\.mediaDevices\.getUserMedia/, "never a request that can't be cancelled");
   const stop = hook.slice(hook.indexOf("const stop = useCallback("), hook.indexOf("const start = useCallback("));
   assert.match(stop, /mic\.cancel\(\);/);
@@ -136,7 +140,8 @@ test("the shared recorder (every caller: Log a call, the DAX chat mic) cancels a
   const button = code("src/components/VoiceDebriefButton.tsx");
   assert.match(button, /Waiting for microphone permission…/);
   assert.match(button, /const cancel = \(\) => \{ voice\.stop\(\); setMode\(null\); setError\(null\); \};/);
-  assert.match(code("src/components/AssistantChat.tsx"), /onClick=\{voice\.recording \|\| voice\.waiting \? voice\.stop : voice\.start\}/);
+  // The DAX chat mic (micPress, since hands-free #1113): pressed again while the prompt is open, it cancels.
+  assert.match(code("src/components/AssistantChat.tsx"), /return voice\.recording \|\| voice\.waiting \? voice\.stop\(\) : void voice\.start\(\);/);
 });
 
 test("saving a call is all or nothing, once: checked first, one transaction, its key spent with it", () => {

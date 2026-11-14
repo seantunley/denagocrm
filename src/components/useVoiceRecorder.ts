@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { micRequest } from "@/lib/micRequest";
+import { micStarter } from "@/lib/micStarter";
 
 /** Long enough for a call debrief; short enough to keep uploads small. */
 export const MAX_RECORDING_SECONDS = 180;
@@ -40,8 +40,10 @@ export function useVoiceRecorder(onDone: (audio: Blob) => void, options: Recorde
     () => false,
   );
 
-  // The permission prompt, cancellable (lib/micRequest): Stop, Cancel and unmount void a request still waiting.
-  const [mic] = useState(() => micRequest(() => navigator.mediaDevices.getUserMedia({ audio: true })));
+  // The permission prompt, cancellable (lib/micStarter, shared with hands-free): Stop, Cancel and unmount void a
+  // request still waiting.
+  // No wake lock: a recording is short and the person is looking at the page.
+  const [mic] = useState(() => micStarter<MediaStream>({ getMic: () => navigator.mediaDevices.getUserMedia({ audio: true }) }));
   const [waiting, setWaiting] = useState(false);
   // Set on unmount: a recording cut short by leaving the page is dropped, never sent.
   const gone = useRef(false);
@@ -56,12 +58,12 @@ export function useVoiceRecorder(onDone: (audio: Blob) => void, options: Recorde
   }, [mic]);
 
   const start = useCallback(async () => {
-    // No overlapping starts: already recording, or a request already waiting.
+    // No overlapping starts: already recording, or a request already waiting (never a second prompt).
     if (recorder.current?.state === "recording" || mic.waiting()) return;
     setError(null);
     try {
       setWaiting(true);
-      const stream = await mic.start();
+      const stream = (await mic.start())?.stream ?? null;
       setWaiting(false);
       // Cancelled (or unmounted) while the prompt was open: its microphone is already off. Nothing starts.
       if (!stream || gone.current) {

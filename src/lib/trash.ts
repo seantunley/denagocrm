@@ -427,5 +427,21 @@ export async function purgeTrash(): Promise<number> {
 
     for (const stored of orphanFiles) await deleteFile(stored).catch(() => {});
   }
+
+  // DAX conversations their person deleted over 60 days ago (assistantConversation): the conversation and every
+  // exchange in it, together. Locked and re-checked like the rest, so one restored meanwhile is skipped.
+  purged += await purgeDelete(
+    () =>
+      basePrisma.$transaction(async (tx) => {
+        const locked = await tx.$queryRaw<{ id: string; tenantId: string }[]>(Prisma.sql`
+          SELECT "id", "tenantId" FROM "AssistantConversation" WHERE "deletedAt" < ${cutoff} LIMIT 500 FOR UPDATE`);
+        if (locked.length === 0) return { count: 0 };
+        const ids = locked.map((r) => r.id);
+        const tenants = [...new Set(locked.map((r) => r.tenantId))];
+        await tx.assistantTurn.deleteMany({ where: { conversationId: { in: ids }, tenantId: { in: tenants } } });
+        return tx.assistantConversation.deleteMany({ where: { id: { in: ids }, tenantId: { in: tenants } } });
+      }),
+    "DAX conversations",
+  );
   return purged;
 }
