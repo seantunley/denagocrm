@@ -58,6 +58,7 @@ import { stuckLookup } from "./assistantStuckLookup";
 import { catchUpLookup } from "./assistantCatchUpLookup";
 import { lostAliveLookup } from "./assistantLostAliveLookup";
 import { campaignsLookup, forecastLookup, referralsLookup, surveysLookup, ticketsLookup } from "./assistantAreaLookups";
+import { competitorsLookup, targetsLookup } from "./assistantTargetsLookup";
 import { notesLookup } from "./assistantNotesLookup";
 import { stuckDealsLookup } from "./assistantStuckDeals";
 import { countQuoted, modelsNamed, quoteLineWhere } from "./quotedProducts";
@@ -1699,6 +1700,8 @@ async function runTool(user: User, step: ToolStep): Promise<ToolOutput> {
     case "tickets": return ticketsLookup(user, step.args);
     case "campaigns": return campaignsLookup(user, step.args);
     case "forecast": return forecastLookup(user, step.args);
+    case "targets": return targetsLookup(user, step.args);
+    case "competitors": return competitorsLookup(user, step.args);
     case "surveys": return surveysLookup(user, step.args);
     case "referrals": return referralsLookup(user, step.args);
     case "notes": return notesLookup(user, step.args);
