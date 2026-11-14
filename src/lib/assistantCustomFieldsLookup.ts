@@ -205,9 +205,15 @@ export async function customFieldsLookup(user: PermissionUser, args: CustomField
   // BOUNDED (review of #1105): the value is matched in the database where it can be (a checkbox by yes/no, anything
   // else by its words), newest change first, and at most SCAN_MAX are read — past that the total is "at least".
   const wantedValue = args.value?.trim();
+  // The database filter only ever narrows to a SUPERSET of what valueMatches accepts (re-review of #1105): a tick
+  // list is stored as JSON (["Paarl","Stellenbosch"]) but matched as shown ("Paarl, Stellenbosch"), so each
+  // comma-separated part is looked for on its own and valueMatches decides.
+  const parts = wantedValue?.split(",").map((p) => p.trim()).filter(Boolean) ?? [];
   const valueWhere = !wantedValue ? [] : def.type === "checkbox"
     ? [{ value: /^(yes|true|ticked|y|1)$/i.test(wantedValue) ? "true" : "false" }]
-    : [{ value: { contains: wantedValue, mode: "insensitive" as const } }];
+    : def.type === "multiselect" && parts.length
+      ? [{ OR: parts.map((part) => ({ value: { contains: part, mode: "insensitive" as const } })) }]
+      : [{ value: { contains: wantedValue, mode: "insensitive" as const } }];
   const read = await prisma.customFieldValue.findMany({
     where: {
       tenantId,

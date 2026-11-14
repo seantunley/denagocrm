@@ -83,6 +83,8 @@ async function main() {
   const old = await def(A, "old", "Old field", { active: false });
   const referred = await def(A, "ref", "Referred by", { type: "link", linkTo: "contact" });
   const expoB = await def(B, "expo", "Expo", { type: "select", options: ["Paarl"] });
+  // A tick list (multiselect): stored as JSON, shown as "Paarl, Stellenbosch" (re-review of #1105).
+  const regions = await def(A, "regions", "Regions", { type: "multiselect", options: ["Paarl", "Stellenbosch", "Cape Town"] });
   const value = (tenantId: string, defId: string, recordId: string, v: string) => basePrisma.customFieldValue.create({ data: { tenantId, defId, recordId, value: v } });
   await value(A, expo.id, repLead.id, "Paarl");
   await value(A, stand.id, repLead.id, "B12");
@@ -92,6 +94,8 @@ async function main() {
   await value(A, stand.id, repLead2.id, "Z9");
   await value(A, expo.id, ownerLead.id, "Paarl");
   await value(B, expoB.id, bLead.id, "Paarl");
+  await value(A, regions.id, repLead.id, JSON.stringify(["Paarl", "Stellenbosch"]));
+  await value(A, regions.id, repLead2.id, JSON.stringify(["Cape Town"]));
 
   const L = (label: string) => `${label} ${SFX}`;
   const inA = <T>(fn: () => Promise<T>) => runInTenantScope({ tenantId: A, system: false }, fn);
@@ -124,6 +128,10 @@ async function main() {
     check("the owner: both Paarl leads", listed(byOwner).length === 2 && listed(byOwner).includes(`/leads/${ownerLead.id}`), JSON.stringify(byOwner.data));
     const hidden = await inA(() => customFieldsLookup(ownerA, { record: "lead", field: L("Expo stand") }));
     check("a field hidden by 'Show only when' lists only where it shows", JSON.stringify(listed(hidden)) === JSON.stringify([`/leads/${repLead.id}`]), JSON.stringify(hidden.data));
+    const shownAs = await inA(() => customFieldsLookup(rep, { record: "lead", field: L("Regions"), value: "Paarl, Stellenbosch" }));
+    check("a tick list found by the value as shown, 'Paarl, Stellenbosch'", JSON.stringify(listed(shownAs)) === JSON.stringify([`/leads/${repLead.id}`]), JSON.stringify(shownAs.data));
+    const oneOption = await inA(() => customFieldsLookup(rep, { record: "lead", field: L("Regions"), value: "Paarl" }));
+    check("…and by one ticked option, 'Paarl' (not the lead with only Cape Town)", JSON.stringify(listed(oneOption)) === JSON.stringify([`/leads/${repLead.id}`]), JSON.stringify(oneOption.data));
     const off = await inA(() => customFieldsLookup(ownerA, { record: "lead", field: L("Old field") }));
     check("a switched-off field can't be searched", /No custom field/.test(String((off.data[0] as Data).note)), JSON.stringify(off.data));
     const fields = await inA(() => customFieldsLookup(rep, { record: "lead" }));
