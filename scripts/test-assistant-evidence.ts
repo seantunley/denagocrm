@@ -465,9 +465,11 @@ async function main() {
     check("…'photos read' names only the odometer, and the VIN photo is said NOT read", JSON.stringify(partial.photosRead).includes("Odometer") && !JSON.stringify(partial.photosRead).includes("VIN") && /NOT read: VIN \/ serial number/.test(String(partial.notOpened)), JSON.stringify(partial).slice(0, 300));
     const onlyMissing = first(await inT(() => readDocument(rep, { handover: hendrik, step: "VIN" })));
     check("…and asked for the VIN alone, it says it couldn't open it — nothing reaches the AI", /couldn't open the handover photos/.test(onlyMissing.note ?? "") && sent.at(-1)?.about === told, JSON.stringify(onlyMissing).slice(0, 200));
+    // Counted afresh: the missing-photo read above reached the AI once (review of #1099).
+    const beforeOff = sent.length;
     await basePrisma.tenant.update({ where: { id: T }, data: { modules: (savedModules ?? "").split(",").filter((m) => m && m !== "automotive").join(",") } });
     const off = first(await inT(() => readDocument(rep, { handover: hendrik, step: "VIN" })));
-    check("Automotive off: no handover photos", /no handover photos/.test(off.note ?? "") && sent.length === before, off.note);
+    check("Automotive off: no handover photos", /no handover photos/.test(off.note ?? "") && sent.length === beforeOff, off.note);
     __setPictureReaderForTests(null);
   }
 
