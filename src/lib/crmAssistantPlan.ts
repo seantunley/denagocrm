@@ -206,6 +206,23 @@ export const campaignsArgs = z.object({ from: isoDay.optional(), to: isoDay.opti
 export const forecastArgs = z.object({ period: z.string().trim().regex(/^\d{4}-\d{2}$/).optional() }).strict();
 export const surveysArgs = z.object({ from: isoDay.optional(), to: isoDay.optional(), survey: name.optional() }).strict();
 export const referralsArgs = z.object({ from: isoDay.optional(), to: isoDay.optional(), status: z.enum(["pending", "earned", "redeemed"]).optional() }).strict();
+/** CUSTOMERS AS A LIST (assistantCustomersLookup) — by area, fleet, tag, owner, birthday, date added (Sean, 2026-11-14). */
+export const customersArgs = z
+  .object({
+    area: name.optional(),
+    fleet: name.optional(),
+    tag: name.optional(),
+    owner: name.optional(),
+    kind: z.enum(["individual", "business", "fleet"]).optional(),
+    /** Birthdays from today through this many days ahead (0 = today only). */
+    birthdayWithinDays: z.number().int().min(0).transform((n) => Math.min(n, 31)).optional(),
+    createdFrom: isoDay.optional(),
+    createdTo: isoDay.optional(),
+    openDeal: z.boolean().optional(),
+    sort: z.enum(["newest", "name"]).optional(),
+    limit: upTo(60).optional(),
+  })
+  .strict();
 /** Notes ADDED on a day or a period, across everything the person may open, with who added each (assistantNotesLookup). */
 export const notesArgs = z.object({ from: isoDay, to: isoDay.optional(), by: name.optional(), limit: z.number().int().min(1).max(40).optional() }).strict();
 /** What the business knows: products, prices, approved answers, competitors. */
@@ -251,6 +268,7 @@ export const assistantStep = z.discriminatedUnion("tool", [
   z.object({ tool: z.literal("forecast"), args: forecastArgs.default({}) }),
   z.object({ tool: z.literal("surveys"), args: surveysArgs.default({}) }),
   z.object({ tool: z.literal("referrals"), args: referralsArgs.default({}) }),
+  z.object({ tool: z.literal("customers"), args: customersArgs.default({}) }),
   z.object({ tool: z.literal("notes"), args: notesArgs }),
   z.object({ tool: z.literal("stuck_deals"), args: z.object({}).strict().default({}) }),
   z.object({ tool: z.literal("knowledge"), args: knowledgeArgs }),
@@ -323,6 +341,7 @@ export function planInstructions(ctx: PlanContext): string {
     '- forecast: {"period":"YYYY-MM" (default this month)} — the SALES FORECAST for deals expected to close that month: open, weighted, commit, best case and pipeline totals in rands, and the biggest deals with probability, category, close date, stage and owner. Run it for "what\'s the forecast for this month", "what are we committing for December".',
     '- surveys: {"from":"YYYY-MM-DD","to":"YYYY-MM-DD","survey":"<words of a survey title>"} — CUSTOMER SURVEYS sent in that period (default the last 30 days): per survey, sent, answered, response rate, NPS or average score, and the unhappy answers with what the customer said. Run it for "how are our NPS scores", "any unhappy customers in the surveys".',
     '- referrals: {"from":"YYYY-MM-DD","to":"YYYY-MM-DD","status":"pending|earned|redeemed"} — REFERRALS in that period (default the last 90 days): totals pending / earned-not-redeemed / redeemed, the top referrers, and the latest referrals. Run it for "how many referrals this quarter", "who refers the most", "which rewards are still owed".',
+    '- customers: {"area":"<suburb, city, province or estate>","fleet":"<fleet name>","tag":"<tag>","owner":"<person>","kind":"individual|business|fleet","birthdayWithinDays":<0-31, 0 = today>,"createdFrom":"YYYY-MM-DD","createdTo":"YYYY-MM-DD","openDeal":true|false,"sort":"newest|name","limit":<1-60>} — CUSTOMERS AS A LIST, only those the person may open: the TOTAL that match, then each with area, fleet, tags, owner, open deals, birthday, phone, email, whether they opted out of marketing, and a link. Run it for "customers in Constantia", "birthdays this week", "customers added last month", "who is on the Pearl Valley fleet", "customers tagged VIP with no open deal". To find ONE customer by name use search_everything or lead_brief.',
     '- lost_alive: {"mine":true (only their own deals and unassigned ones)} — deals marked LOST in the last 90 days for a went-quiet or timing reason ("gone cold", "stopped responding", "buying later") where the customer has since messaged or opened a quote: each with when and why it was lost and what the customer did since. Run it for "which lost deals are still alive", "any lost deals worth another look", "lost but not really lost"; it answers on its own ("then":"answer"), offering a nurture or reopen card for each.',
     '- stuck_deals: {} — THEIR most-stuck open deals (the three furthest past their stage\'s time limit), each with its top reason from the stuck check and its link — and, for someone who sees a team\'s deals, the team\'s worst five. Run it for "which of my deals are stuck", "my stuck deals", and the Monday brief; it answers on its own ("then":"answer").',
     '- knowledge: {"topic":"<what to look up>" (required)} — the business\'s own knowledge: products and prices (each with its productId), approved answers (finance, warranty, policies…), company details, competitor intelligence. ALWAYS run this when the person asks for a quote or names a product to quote — a quote can only be built from products found here.',
@@ -483,6 +502,7 @@ const LOOKUP_STATUS: Record<string, string> = {
   forecast: "Working out the forecast",
   surveys: "Reading the survey results",
   referrals: "Checking referrals",
+  customers: "Listing customers",
   notes: "Reading the notes added",
   stuck_deals: "Finding your most-stuck deals",
   find_activities: "Checking activities",
