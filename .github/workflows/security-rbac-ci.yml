@@ -413,6 +413,12 @@ jobs:
         # workspace sees none of A's.
         run: npm run test:assistant-targets
 
+      - name: DAX custom fields -- only on records the person may open, only fields the page would show
+        # Sean, 2026-11-14: "DAX must have knowledge of those things, permission based". A rep sees their lead's
+        # custom fields, never a colleague's; switched-off and "Show only when"-hidden fields stay hidden; a link
+        # names a customer only they may open; the other workspace sees only its own.
+        run: npm run test:assistant-custom-fields
+
       - name: DAX customer lists -- only the customers the person may open, filters work
         # Sean, 2026-11-14: "DAX must have knowledge of those things, permission based". Owner sees all; a view_owned
         # rep only theirs; the other workspace nothing; no customer access refused; fleets need fleets.view.

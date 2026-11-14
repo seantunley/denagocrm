@@ -215,6 +215,16 @@ export const referralsArgs = z.object({ from: isoDay.optional(), to: isoDay.opti
 /** The month's business targets against actuals, and competitor intelligence (assistantTargetsLookup). */
 export const targetsArgs = z.object({ period: z.string().trim().regex(/^\d{4}-\d{2}/).transform((s) => s.slice(0, 7)).optional() }).strict();
 export const competitorsArgs = z.object({ name: name.optional() }).strict();
+/** Records of one type by one of the workspace's own CUSTOM FIELDS (assistantCustomFieldsLookup); no field: the fields there are. */
+export const customFieldsArgs = z
+  .object({
+    record: z.enum(["lead", "contact", "quote", "case", "vehicle", "jobcard"]),
+    field: name.optional(),
+    value: name.optional(),
+    limit: upTo(50).optional(),
+  })
+  .strict();
+
 /** CUSTOMERS AS A LIST (assistantCustomersLookup) — by area, fleet, tag, owner, birthday, date added (Sean, 2026-11-14). */
 export const customersArgs = z
   .object({
@@ -282,6 +292,7 @@ export const assistantStep = z.discriminatedUnion("tool", [
   z.object({ tool: z.literal("referrals"), args: referralsArgs.default({}) }),
   z.object({ tool: z.literal("targets"), args: targetsArgs.default({}) }),
   z.object({ tool: z.literal("competitors"), args: competitorsArgs.default({}) }),
+  z.object({ tool: z.literal("custom_fields"), args: customFieldsArgs }),
   z.object({ tool: z.literal("customers"), args: customersArgs.default({}) }),
   z.object({ tool: z.literal("deal_file"), args: dealFileArgs }),
   z.object({ tool: z.literal("suppliers"), args: suppliersArgs.default({}) }),
@@ -359,6 +370,7 @@ export function planInstructions(ctx: PlanContext): string {
     '- referrals: {"from":"YYYY-MM-DD","to":"YYYY-MM-DD","status":"pending|earned|redeemed"} — REFERRALS in that period (default the last 90 days): totals pending / earned-not-redeemed / redeemed, the top referrers, and the latest referrals. Run it for "how many referrals this quarter", "who refers the most", "which rewards are still owed".',
     '- targets: {"period":"YYYY-MM" (default this month)} — the business\'s MONTHLY TARGETS (new leads, sales value, deliveries, services) against what was done, with the gap still needed and the percentage, as the Targets page counts them (sales = deals WON in the month). Run it for "are we on target this month", "how far are we from the sales target". Targets are for the whole business, not per person — say so if asked about one person\'s target.',
     '- competitors: {"name":"<competitor>"} — COMPETITOR INTELLIGENCE: the competitors being watched, their tier, notes and the changes found on their websites waiting for review; with a name, its recent changes and latest research brief. Run it for "what are our competitors up to", "anything new from <competitor>". It is not linked to deals.',
+    '- custom_fields: {"record":"lead|contact|quote|case|vehicle|jobcard" (required),"field":"<the field\'s name>","value":"<words of the value>","limit":<1-50>} — the workspace\'s OWN CUSTOM FIELDS (fields it added itself, e.g. "Finance house", "Expo"). Without field: which custom fields that record type has, with their options. With field (and value): the records whose field matches, that the person may open. Leads, quotes, customers and vehicles that other lookups return already carry their filled custom fields as customFields — read those first. Run it for "which leads came from the Paarl expo", "customers financing with WesBank", "what custom fields do we have on quotes".',
     '- customers: {"area":"<suburb, city, province or estate>","fleet":"<fleet name>","tag":"<tag>","owner":"<person>","kind":"individual|business|fleet","birthdayWithinDays":<0-31, 0 = today>,"createdFrom":"YYYY-MM-DD","createdTo":"YYYY-MM-DD","openDeal":true|false,"sort":"newest|name","limit":<1-60>} — CUSTOMERS AS A LIST, only those the person may open: the TOTAL that match, then each with area, fleet, tags, owner, open deals, birthday, phone, email, whether they opted out of marketing, and a link. Run it for "customers in Constantia", "birthdays this week", "customers added last month", "who is on the Pearl Valley fleet", "customers tagged VIP with no open deal". To find ONE customer by name use search_everything or lead_brief.',
     '- deal_file: {"deal":"<customer, lead title or Q-number>" (required)} — ONE DEAL\'S FILE, as the deal page shows it: its quotes, the checklist (each item done or missing, and why), what is still MISSING, the papers on file by type, signing requests, handover photo count, and — with Suppliers on — the suppliers on the deal and which of their papers are missing. Run it for "what paperwork is missing on X\'s deal", "is X\'s deal file complete", "has the supplier invoice come in for Q-1031".',
     '- suppliers: {"supplier":"<supplier name>","missing":true (deals still missing supplier papers),"orders":true (their purchase orders)} — SUPPLIERS (workspace owner only, Suppliers module on): each supplier with kind, contact, terms and how many deals, papers and orders; with a supplier named, its purchase orders and the deals still missing its papers. Run it for "which deals are missing supplier invoices", "what have we ordered from Denago", "who are our suppliers". No bank details are ever in it.',
@@ -524,6 +536,7 @@ const LOOKUP_STATUS: Record<string, string> = {
   referrals: "Checking referrals",
   targets: "Checking the targets",
   competitors: "Checking competitor intelligence",
+  custom_fields: "Checking custom fields",
   customers: "Listing customers",
   deal_file: "Opening the deal file",
   suppliers: "Checking suppliers",
