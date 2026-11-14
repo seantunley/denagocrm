@@ -18,6 +18,7 @@ import { basePrisma } from "../src/lib/db";
 import { runInTenantScope } from "../src/lib/tenantScope";
 import { __setTenantEnforcingForTests } from "../src/lib/tenantEnforcement";
 import { signingLookup, type SigningArgs } from "../src/lib/assistantSigningLookup";
+import { pendingApprovalsFor } from "../src/lib/signing/access";
 import type { PermissionUser } from "../src/lib/permissions";
 import { seedTwoTenants, teardown } from "./harness/seed";
 
@@ -88,9 +89,13 @@ async function main() {
     { name: "Marcel", status: "viewed", viewedAt: ago(1), remindedAt: ago(1) },
   ]);
   await request("Owner quote", { quoteId: ownerQuote.id, contactId: petrus.id }, [{ name: "Petrus", status: "sent" }]);
-  await request("Delivery note rep", { subjectType: "delivery_note", subjectId: repQuote.id, contactId: marcel.id }, [{ name: "Marcel", status: "sent" }]);
-  // On the page this one is governed by the customer — whom the rep may open — but it is about the OWNER's quote.
-  await request("Delivery note owner", { subjectType: "delivery_note", subjectId: ownerQuote.id, contactId: marcel.id }, [{ name: "Marcel", status: "sent" }]);
+  const repNote = await request("Delivery note rep", { subjectType: "delivery_note", subjectId: repQuote.id, contactId: marcel.id }, [{ name: "Marcel", status: "sent" }]);
+  // Its customer is one the rep may open — but it is about the OWNER's quote, which governs it (#1111).
+  const ownerNote = await request("Delivery note owner", { subjectType: "delivery_note", subjectId: ownerQuote.id, contactId: marcel.id }, [{ name: "Marcel", status: "sent" }]);
+  // REVIEW OF #1111: the rep is the ASSIGNED approver on both delivery notes.
+  for (const requestId of [repNote, ownerNote]) {
+    await basePrisma.approvalStep.create({ data: { tenantId: A, requestId, nodeId: "n1", label: `Approve ${SFX}`, assigneeType: "staff", assigneeUserId: rep.id, assigneeName: rep.name, token: token() } });
+  }
   await request("Contract", { contactId: marcel.id, status: "completed", completedAt: ago(1) }, [
     { name: "Marcel", status: "signed", signedAt: ago(1) },
     { name: "Anna", status: "signed", signedAt: ago(2) },
@@ -143,6 +148,15 @@ async function main() {
     check("sees their quote's request and the delivery note for it", titles(repSees).includes("Rep quote") && titles(repSees).includes("Delivery note rep"), JSON.stringify(titles(repSees)));
     check("never the owner's quote's request", !titles(repSees).includes("Owner quote"));
     check("never the delivery note for the owner's quote — though its customer is theirs", !titles(repSees).includes("Delivery note owner"));
+
+    console.log("\nThe Signatures page's Pending approvals (review of #1111)");
+    const approvals = async (u: PermissionUser) =>
+      (await runInTenantScope({ tenantId: A, system: false }, () => pendingApprovalsFor(u))).map((s) => s.request.title.replace(` ${SFX}`, "")).sort();
+    const repApprovals = await approvals(rep);
+    check("the assigned rep sees the approval on their own deal's delivery note", repApprovals.includes("Delivery note rep"), JSON.stringify(repApprovals));
+    check("…never the one on the owner's deal, though assigned to them and its customer is theirs", !repApprovals.includes("Delivery note owner"), JSON.stringify(repApprovals));
+    const ownerApprovals = await approvals(ownerA);
+    check("the owner sees both", ownerApprovals.includes("Delivery note rep") && ownerApprovals.includes("Delivery note owner"), JSON.stringify(ownerApprovals));
 
     console.log("\nRefused, and the other workspace");
     const refused = await lookup(A, noSigning, { status: "any" });

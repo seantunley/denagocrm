@@ -127,7 +127,12 @@ test("the request page checks the record, not just the Signatures permission", (
   // Every query the list and its counts are built from.
   assert.equal((list.match(/AND: \[mine\]/g) ?? []).length, 4, "status counts, completion times, the list itself and Needs attention");
   assert.doesNotMatch(list, /\.\.\.mine/, "a spread would be overwritten by a query's own OR");
-  assert.match(list, /allPendingApprovals\.filter\(\(step\) => canActOnStep\(step, user\)\)/);
+  // Pending approvals: the assignee check AND the record rule (review of #1111), in one shared function.
+  assert.match(list, /pendingApprovalsFor\(user\)/);
+  assert.doesNotMatch(list, /approvalStep\.findMany/, "the page keeps no approvals query of its own");
+  const access = code("src/lib/signing/access.ts");
+  assert.match(access, /request: \{ deletedAt: null, status: \{ notIn: \[\.\.\.CLOSED_REQUEST_STATUSES\] \}, AND: \[mine\] \}/);
+  assert.match(access, /return steps\.filter\(\(step\) => canActOnStep\(step, user\)\);/);
 });
 
 /** Evaluate the Prisma-shaped filter against a row, for the handful of operators it uses. */
