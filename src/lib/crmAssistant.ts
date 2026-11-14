@@ -46,7 +46,7 @@ import {
 } from "./permissions";
 import { ASSISTANT_PROFILE_KEY, parseProfile, selfKnowledge, soulText } from "./assistantSoul";
 import { LEARN_INSTRUCTIONS, memoryPrompt, methodInstructions } from "./assistantMemory";
-import { researchGate } from "./assistantResearchGate";
+import { missingEvidence, researchGate } from "./assistantResearchGate";
 import { DEPTH_BUDGETS, HARD_DEADLINE_MS, MIN_CALL_MS, deepen, parseLedger, recheckBudgetMs, researchLeftMs, roundFits, startingDepth, type Depth } from "./assistantDepth";
 import { matchDecisions, parseDecision } from "./assistantDecisions";
 import { CITE_RULE, REPLY_FORMAT, SPOKEN_RULE, STATE_INSTRUCTIONS, citableLinks, resolveCitations, splitReply, type Evidence } from "./assistantReply";
@@ -2531,6 +2531,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     const gate = researchGate({
       question,
       tools: observations.map((o) => o.tool),
+      steps: observations.map((o) => ({ tool: o.tool, args: o.args })),
       lastRoundEmpty: lastEmpty,
       planSaysAnswer: enough,
       stepsUsed: step + 1,
@@ -2540,6 +2541,11 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     if (gate === "continue") continue;
     if (gate === "answer" || enough) break;
   }
+  // Research stopped short of what the question's subject needs (out of rounds, or the plan gave up): the answer is
+  // told exactly what wasn't checked, so it says so instead of filling the gap (DAX_Conversational_Upgrades item 4).
+  const evidenceGap = observations.length
+    ? missingEvidence(question, observations.map((o) => o.tool), observations.map((o) => ({ tool: o.tool, args: o.args })))
+    : null;
   // For the owner's speed view (assistantRun.runSpeed): numbers only — 1 = investigated, 0 = quick; and, when the
   // research step said, whether it still thought another lookup would change the answer when it stopped.
   timings.depth = depth === "investigate" ? 1 : 0;
@@ -2605,6 +2611,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       observations.length
         ? resultsBlock("What the CRM returned:", observations.map(observationText).join("\n\n"))
         : "No lookup was needed for this question.",
+      evidenceGap ? `Not checked: ${evidenceGap}. Say plainly that this wasn't checked — don't answer that part from the other results.` : "",
       // Per question (only when the answer will be spoken), so in the prompt and not the cached instructions.
       opts.spoken ? SPOKEN_RULE : "",
     ].filter(Boolean).join("\n\n"),
