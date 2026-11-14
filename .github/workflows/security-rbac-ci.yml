@@ -413,6 +413,11 @@ jobs:
         # workspace sees none of A's.
         run: npm run test:assistant-targets
 
+      - name: DAX customer lists -- only the customers the person may open, filters work
+        # Sean, 2026-11-14: "DAX must have knowledge of those things, permission based". Owner sees all; a view_owned
+        # rep only theirs; the other workspace nothing; no customer access refused; fleets need fleets.view.
+        run: npm run test:assistant-customer-lists
+
       - name: DAX deal file and suppliers -- each held to its page's own rule
         # Sean, 2026-11-14: "DAX must have knowledge of those things, permission based". deal_file needs quote access
         # to the deal; suppliers the workspace owner and the Suppliers module; never a payment reference; never another

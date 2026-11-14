@@ -60,6 +60,7 @@ import { catchUpLookup } from "./assistantCatchUpLookup";
 import { lostAliveLookup } from "./assistantLostAliveLookup";
 import { campaignsLookup, forecastLookup, referralsLookup, surveysLookup, ticketsLookup } from "./assistantAreaLookups";
 import { competitorsLookup, targetsLookup } from "./assistantTargetsLookup";
+import { customersLookup } from "./assistantCustomersLookup";
 import { dealFileLookup, suppliersLookup } from "./assistantDealFileLookup";
 import { notesLookup } from "./assistantNotesLookup";
 import { stuckDealsLookup } from "./assistantStuckDeals";
@@ -1762,6 +1763,7 @@ async function runTool(user: User, step: ToolStep): Promise<ToolOutput> {
     case "competitors": return competitorsLookup(user, step.args);
     case "surveys": return surveysLookup(user, step.args);
     case "referrals": return referralsLookup(user, step.args);
+    case "customers": return customersLookup(user, step.args);
     case "deal_file": return dealFileLookup(user, step.args);
     case "suppliers": return suppliersLookup(user, step.args);
     case "notes": return notesLookup(user, step.args);
