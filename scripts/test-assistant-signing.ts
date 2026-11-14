@@ -38,7 +38,8 @@ function guardEnvironment() {
 const DAY = 86_400_000;
 const ago = (days: number) => new Date(Date.now() - days * DAY);
 const quoteNo = () => 100_000_000 + crypto.randomInt(800_000_000);
-const token = () => crypto.randomBytes(24).toString("hex");
+// Stored as a SHA-256 digest, as the database insists (never a raw capability).
+const token = () => crypto.createHash("sha256").update(crypto.randomBytes(32)).digest("hex");
 
 type Req = { title: string; for: string; status: string; signed: string[]; notSigned: string[]; openedNotSigned: string[]; lastReminder: string | null };
 type Data = { total?: number; note?: string; requests?: Req[] };
