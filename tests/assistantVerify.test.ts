@@ -97,11 +97,14 @@ test("every answer goes through the check, and the note is part of what's saved 
   // person — their stored tools, never their answers or working memory.
   // Only in THIS conversation (no thread: no re-check), and only with time left (review of #1100).
   assert.match(src, /const recheckMs = recheckBudgetMs\(elapsed\(\)\);\s*if \(flagged\.length && history\.length && thread && recheckMs > 0\) \{/);
-  assert.match(src, /earlierLookupsAgain\(user, who\.tenantId, thread\.id\),\s*new Promise<typeof timedOut>\(\(resolve\) => \{ timer = setTimeout\(\(\) => resolve\(timedOut\), recheckMs\); \}\),/);
+  assert.match(src, /earlierLookupsAgain\(user, who\.tenantId, thread\.id, \(\) => timeUp\),\s*new Promise<typeof timedOut>\(\(resolve\) => \{ timer = setTimeout\(\(\) => \{ timeUp = true; resolve\(timedOut\); \}, recheckMs\); \}\),/);
   // Ran out of time: the warning stands as it was.
   assert.match(src, /if \(again === timedOut\) await logError\("crm-assistant", "figure re-check ran out of time"\)\.catch\(\(\) => \{\}\);\s*else if \(again\.length\) flagged = unsupportedFigures\(reply\.answer, \[\.\.\.evidenceNow, \.\.\.again\]\);/);
   const rerun = src.slice(src.indexOf("async function earlierLookupsAgain("), src.indexOf("/** The records each answer listed travel apart"));
-  assert.match(rerun, /conversationId: string\)/);
+  assert.match(rerun, /conversationId: string, timeUp: \(\) => boolean\)/);
+  // One at a time, and none started once the time is up: a timed-out re-check leaves at most one lookup running.
+  assert.match(rerun, /for \(const step of stepsToRecheck\(turns\.map\(\(t\) => t\.tools\)\)\) \{\s*if \(timeUp\(\)\) break;\s*const output = await runTool\(user, step\)/);
+  assert.doesNotMatch(rerun, /Promise\.all/, "never all six at once");
   assert.match(rerun, /where: \{ tenantId, userId: user\.id, conversationId \}/);
   assert.doesNotMatch(rerun, /CONVERSATION_WINDOW_MS|createdAt: \{ gte/, "never 'recent turns' from other conversations");
   assert.match(rerun, /select: \{ tools: true \}/);

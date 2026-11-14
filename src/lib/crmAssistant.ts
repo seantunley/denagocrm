@@ -1792,16 +1792,22 @@ async function recentTurns(userId: string): Promise<PriorTurn[]> {
  * The lookups the last few answers in THIS conversation ran, run again now as this person (stepsToRecheck says
  * which), and their fresh results. The answer being written isn't saved yet, so it is never among them.
  */
-async function earlierLookupsAgain(user: User, tenantId: string, conversationId: string): Promise<unknown[]> {
+async function earlierLookupsAgain(user: User, tenantId: string, conversationId: string, timeUp: () => boolean): Promise<unknown[]> {
   const turns = await prisma.assistantTurn.findMany({
     where: { tenantId, userId: user.id, conversationId },
     orderBy: { createdAt: "desc" },
     take: RECHECK_TURNS,
     select: { tools: true },
   });
-  const steps = stepsToRecheck(turns.map((t) => t.tools));
-  const outputs = await Promise.all(steps.map((step) => runTool(user, step).catch(() => null)));
-  return outputs.flatMap((output) => (output ? [output.data] : []));
+  // ONE AT A TIME, and none started once the time is up (review of #1100): a Prisma query already running can't be
+  // cancelled, so the most a timed-out re-check leaves behind is the single lookup in flight — never six.
+  const found: unknown[] = [];
+  for (const step of stepsToRecheck(turns.map((t) => t.tools))) {
+    if (timeUp()) break;
+    const output = await runTool(user, step).catch(() => null);
+    if (output) found.push(output.data);
+  }
+  return found;
 }
 
 /** The records each answer listed travel apart from its working memory (assistantListedRules). */
@@ -2575,9 +2581,10 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   if (flagged.length && history.length && thread && recheckMs > 0) {
     const timedOut = Symbol("timed out");
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let timeUp = false;
     const again = await Promise.race([
-      earlierLookupsAgain(user, who.tenantId, thread.id),
-      new Promise<typeof timedOut>((resolve) => { timer = setTimeout(() => resolve(timedOut), recheckMs); }),
+      earlierLookupsAgain(user, who.tenantId, thread.id, () => timeUp),
+      new Promise<typeof timedOut>((resolve) => { timer = setTimeout(() => { timeUp = true; resolve(timedOut); }, recheckMs); }),
     ])
       .catch(async (error: unknown) => {
         await logError("crm-assistant", "figure re-check failed", error instanceof Error ? error.name : "unknown");
