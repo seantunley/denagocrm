@@ -8,6 +8,7 @@ import {
   REPORT_RULE,
   REPORT_TITLE_CHARS,
   buildReport,
+  isWrittenAsReport,
   printable,
   reportFileName,
   titleFromQuestion,
@@ -173,12 +174,31 @@ test("the report rule changes how an answer is written, never what may be said",
   assert.match(REPORT_RULE, /it replaces the chat formatting above: no \*\*bold\*\* and no \| --- \| tables in a report\. Every other rule above still holds\./);
   assert.match(REPORT_RULE, /Report: <short title>/);
   assert.match(REPORT_RULE, /Columns: A \| B \| C/);
-  // It never claims to make or send the file, and never to a customer.
-  assert.match(REPORT_RULE, /You do not create, attach or send the file yourself/);
+  // The CRM makes and sends the file — to the asker only, never a customer.
+  assert.match(REPORT_RULE, /The CRM makes the file and sends it — only to the person who asked, never to a customer/);
   // It never tells them every answer has a PDF.
-  assert.match(REPORT_RULE, /appears only under an answer to a question that asked for a report or a PDF/);
+  assert.match(REPORT_RULE, /A PDF exists only for an answer to a question that asked for a report or a PDF/);
   assert.doesNotMatch(REPORT_RULE, /ANY of your answers|never refuse a PDF/);
-  assert.match(REPORT_RULE, /never goes to a customer from you/);
+  // On WhatsApp it says the PDF follows, and never that it can't be sent there (Sean, 2026-11-14).
+  assert.match(REPORT_RULE, /asked on WhatsApp: say the PDF follows in this chat/);
+  assert.match(REPORT_RULE, /Never say you can't send it to WhatsApp/);
+  assert.match(REPORT_RULE, /write it again now as a report — that is how they get the file/);
+});
+
+test("WhatsApp: a report asked for there is followed by its PDF, to the asker only", () => {
+  assert.equal(isWrittenAsReport("Report: Open leads in New\n\nThere are 3."), true);
+  assert.equal(isWrittenAsReport("  report : Stuck deals"), true);
+  assert.equal(isWrittenAsReport("If you mean the report PDF, open the Ask page."), false);
+  assert.equal(isWrittenAsReport("There are 3 leads.\nReport: not the first line"), false);
+  const wa = code("src/lib/assistantWhatsApp.ts");
+  // Only for a question that asked for one AND an answer written as a report.
+  assert.match(wa, /if \(answer && wantsReport\(q\) && isWrittenAsReport\(answer\)\) await sendReportPdf\(tenantId, user, waId, q, answer\);/);
+  const send = wa.slice(wa.indexOf("async function sendReportPdf("), wa.indexOf("const OUT_OF_TIME"));
+  // Made from the answer itself; sent to the same chat with no customer record; a failure says where the PDF is.
+  assert.match(send, /renderAssistantReportPdf\(\{ tenantId, preparedFor: user\.name \?\? "", question, answer, answeredAt: new Date\(\) \}\)/);
+  assert.match(send, /sendWhatsAppDocument\(waId, \{ content: pdf, filename: fileName, contentType: "application\/pdf" \}, `[^`]*`\);/);
+  assert.match(send, /press PDF there/);
+  assert.doesNotMatch(send, /askCrm|runTool|findLeads/);
 });
 
 test("DAX knows the truth about itself: there is a PDF button, and it sends nothing", () => {
@@ -190,6 +210,7 @@ test("DAX knows the truth about itself: there is a PDF button, and it sends noth
   assert.match(about, /Your other answers have no PDF button/);
   assert.doesNotMatch(about, /Under every answer/);
   assert.match(about, /You never create, attach or send the file yourself/);
+  assert.match(about, /Asked on WhatsApp, the CRM sends that PDF into the same chat straight after your report/);
 });
 
 /* ── who may have it, and what the header carries ─────────────────── */
@@ -215,10 +236,15 @@ test("only the person who was answered can download the report", () => {
 
 test("the report is the stored answer and nothing else — no lookup runs to make it", () => {
   const route = code("src/app/api/pdf/assistant-report/[turnId]/route.tsx");
-  assert.match(route, /buildReport\(turn\.question, turn\.answer\)/);
-  assert.doesNotMatch(route, /askCrm|runTool|findLeads|findQuotes|leadBrief|codexRespond/);
+  const pdf = code("src/lib/assistantReportPdf.tsx");
+  assert.match(route, /question: turn\.question, answer: turn\.answer, answeredAt: turn\.createdAt/);
+  assert.match(pdf, /buildReport\(input\.question, input\.answer\)/);
+  for (const file of [route, pdf]) assert.doesNotMatch(file, /askCrm|runTool|findLeads|findQuotes|leadBrief|codexRespond/);
   // And it says when its figures were true.
-  assert.match(route, /answeredAt: formatDateTime\(turn\.createdAt/);
+  assert.match(pdf, /answeredAt: formatDateTime\(input\.answeredAt, regional\)/);
+  // Every setting read for the NAMED workspace, never the ambient one.
+  assert.doesNotMatch(pdf, /getSetting\(|getRegionalSettings\(|getCompanyProfile\(\)/);
+  assert.match(pdf, /getCompanyProfile\(tenantId\)/);
 });
 
 test("the header carries the business's name and logo on every page", () => {
@@ -226,9 +252,9 @@ test("the header carries the business's name and logo on every page", () => {
   assert.match(doc, /<View style=\{\[s\.header, [^\]]*\]\} fixed>/);
   assert.match(doc, /meta\.logo \? <Image src=\{\{ data: meta\.logo, format: "png" \}\}/);
   assert.match(doc, /\{meta\.companyName\}/);
-  const route = code("src/app/api/pdf/assistant-report/[turnId]/route.tsx");
-  assert.match(route, /companyName: company\.name/);
-  assert.match(route, /logo: await reportLogoPng\(tenantId, company\.logoUrl\)/);
+  const pdf = code("src/lib/assistantReportPdf.tsx");
+  assert.match(pdf, /companyName: company\.name/);
+  assert.match(pdf, /logo: await reportLogoPng\(tenantId, company\.logoUrl\)/);
   // The footer too: who it was compiled for, and that it is a snapshot.
   assert.match(doc, /<View style=\{s\.footer\} fixed>/);
   assert.match(doc, /A snapshot: figures may have changed since/);
