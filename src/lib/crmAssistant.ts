@@ -2300,6 +2300,10 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   // exchanges and its summary are DAX's memory of it. A scheduled answer, watch or alert stands on its own.
   const who = { tenantId: ownedWriteTenantId(), userId: user.id };
   const target = pageTarget(page);
+  // The workspace's assistant profile — read alongside the conversation pick, since the route below needs its NAME
+  // ("Thanks Jarvis" is a thank-you where the assistant is Jarvis). Its failure surfaces where it is awaited.
+  const profileRead = getSetting(ASSISTANT_PROFILE_KEY);
+  profileRead.catch(() => undefined);
   const thread = tasksOn
     ? await pickConversation(who, {
         requested: opts.conversation ?? null,
@@ -2312,18 +2316,18 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   // WHICH WAY IT GOES, before anything is read (assistantFollowUp): a thank-you, a wording-only edit or small talk never
   // researches, so it skips the CRM context only research and the fast path read — the page's record, the
   // workspace's stages/staff/activity types, the re-check of listed records. Numbers only in the timings.
-  const route = followUpRoute(question, Boolean(opts.images?.length));
+  const profileRaw = await profileRead;
+  const route = followUpRoute(question, Boolean(opts.images?.length), parseProfile(profileRaw).name);
   const light = route !== "full";
   timings.followUp = FOLLOW_UP_CODE[route];
   // The connection check rides with the context reads — one round trip, not two.
-  const [connected, whereTheyAre, context, history, learnedNow, person, profileRaw, company, modules, tasks] = await Promise.all([
+  const [connected, whereTheyAre, context, history, learnedNow, person, company, modules, tasks] = await Promise.all([
     isCodexConnected(),
     light ? "" : pageContext(user, page),
     light ? quietContext(user) : planContext(user),
     thread ? conversationTurns(who, thread.id).then(withListed) : recentTurns(user.id),
     loadLearned(user.id),
     personContext(user).catch(() => ""),
-    getSetting(ASSISTANT_PROFILE_KEY),
     getCompanyProfile().catch(() => null),
     getEnabledModuleIds(),
     // The person's open job sheets (up to 3, last 14 days) — whatever the 3-hour conversation window says.

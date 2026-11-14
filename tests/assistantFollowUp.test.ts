@@ -38,6 +38,24 @@ test("anything mixed, a question, a name, a figure or an instruction goes the fu
   assert.equal(followUpRoute("thanks", true), "full");
 });
 
+test("the workspace's own assistant name counts like DAX — beside a bare thank-you or greeting only", () => {
+  assert.equal(followUpRoute("Thanks Jarvis", false, "Jarvis"), "ack");
+  assert.equal(followUpRoute("Shot jarvis 👍", false, "Jarvis"), "ack");
+  assert.equal(followUpRoute("Hi Jarvis!", false, "Jarvis"), "chat");
+  assert.equal(followUpRoute("Cheers DAX", false, "Jarvis"), "ack", "DAX is still recognised");
+  // No name given: an unknown word, so the full way (safe, just slower).
+  assert.equal(followUpRoute("Thanks Jarvis"), "full");
+  assert.equal(followUpRoute("Hi Jarvis"), "full");
+  // The name never widens anything else.
+  assert.equal(followUpRoute("Jarvis, has Anna paid?", false, "Jarvis"), "full");
+  assert.equal(followUpRoute("Jarvis send it", false, "Jarvis"), "full");
+  assert.equal(followUpRoute("Thanks Anna, and the deposit?", false, "Anna"), "full", "a name that is also a customer's widens nothing");
+  assert.equal(followUpRoute("Jarvis", false, "Jarvis"), "full", "the name alone is no greeting");
+  const lib = code("src/lib/crmAssistant.ts");
+  assert.match(lib, /const route = followUpRoute\(question, Boolean\(opts\.images\?\.length\), parseProfile\(profileRaw\)\.name\);/);
+  assert.ok(lib.indexOf("const profileRead = getSetting(ASSISTANT_PROFILE_KEY);") < lib.indexOf("const thread = tasksOn"), "read alongside the conversation pick");
+});
+
 test("the small talk DAX already answered without research keeps doing so", () => {
   for (const q of ["Hi", "ok", "👍", "Who are you?", "Good morning"]) assert.equal(followUpRoute(q), "chat", q);
   assert.deepEqual(new Set(Object.values(FOLLOW_UP_CODE)).size, 4, "each route has its own code in the timings");
@@ -47,7 +65,7 @@ test("a route that never researches reads no CRM context, and the timings say wh
   const lib = code("src/lib/crmAssistant.ts");
   const ask = lib.slice(lib.indexOf("export async function askCrm("));
   // Decided BEFORE the reads, from the words alone.
-  const decided = ask.indexOf("const route = followUpRoute(question, Boolean(opts.images?.length));");
+  const decided = ask.indexOf("const route = followUpRoute(question, Boolean(opts.images?.length), parseProfile(profileRaw).name);");
   const reads = ask.indexOf("await Promise.all([\n    isCodexConnected(),");
   assert.ok(decided > 0 && decided < reads, "routed before anything is read");
   // The page's record, the workspace's stages/staff/types and the listed-record re-check: none on a light route.

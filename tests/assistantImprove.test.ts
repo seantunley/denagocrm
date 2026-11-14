@@ -60,7 +60,7 @@ test("small talk skips the research round — and nothing that could be about th
     assert.equal(isSmallTalk(q), false, q);
   }
   // Small talk is a route that never researches (assistantFollowUp); a fresh photo always routes "full".
-  assert.match(lib, /const route = followUpRoute\(question, Boolean\(opts\.images\?\.length\)\);/, "an attached image always gets the normal path");
+  assert.match(lib, /const route = followUpRoute\(question, Boolean\(opts\.images\?\.length\), parseProfile\(profileRaw\)\.name\);/, "an attached image always gets the normal path");
   assert.match(lib, /const research = !light && !fast;/);
   assert.match(lib, /for \(let step = 0; research && step < budget\(\)\.maxSteps/);
 });

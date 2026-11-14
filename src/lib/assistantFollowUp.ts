@@ -27,20 +27,35 @@ const WORDING =
   /^(?:(?:please|pls|can you|could you)\s+)?(?:(?:make|keep)\s+)?(?:(?:it|that|this|the (?:email|message|draft|whatsapp|reply|note))\s+)?(?:(?:a (?:bit|little|touch)|slightly|much|even|way)\s+)?(?:(?:more|less)\s+)?(warmer|friendlier|shorter|longer|softer|firmer|punchier|simpler|clearer|crisper|formal|casual|professional|polite|salesy|pushy|personal|friendly|direct|concise)(?:\s+please)?$/;
 const WORDING_VERBS = /^(?:(?:please|pls|can you|could you)\s+)?(?:(?:shorten|soften|tighten|simplify|polish)\s+(?:it|that|this)|(?:tone|warm)\s+(?:it|that|this)\s+(?:down|up))(?:\s+(?:a (?:bit|little)|please))?$/;
 
-export function followUpRoute(question: string, freshImages = false): FollowUpRoute {
+/** The words of a name, lower case, letters only — "Jarvis" → ["jarvis"]. */
+const nameWords = (name: string | undefined) => (name ?? "").toLowerCase().match(/\p{L}+/gu) ?? [];
+
+/**
+ * @param assistantName the workspace's own name for its assistant (Sean 2026-11-14: everything works when a workspace
+ *   renames it). It counts like "DAX" — whole words, any case — and ONLY beside a bare thank-you or greeting: it never
+ *   widens anything else, so a name that is also a common word or a customer's changes nothing but "Thanks <name>".
+ */
+export function followUpRoute(question: string, freshImages = false, assistantName?: string): FollowUpRoute {
   if (freshImages) return "full";
   const q = question.trim().toLowerCase();
   if (!q || /\d/.test(q)) return "full";
+  const named = new Set(nameWords(assistantName));
   // Emoji and punctuation out; what's left must be words.
   const words = q.replace(/[\p{Extended_Pictographic}\p{Emoji_Component}]/gu, " ").replace(/[!.,…\-—–]+/g, " ").trim();
   if (!q.includes("?") && words) {
     const tokens = words.split(/\s+/);
-    if (tokens.some((t) => THANKS.has(t)) && tokens.every((t) => THANKS.has(t) || WITH_THANKS.has(t))) return "ack";
+    if (tokens.some((t) => THANKS.has(t)) && tokens.every((t) => THANKS.has(t) || WITH_THANKS.has(t) || named.has(t))) return "ack";
   }
   // A wording edit may be asked as a question ("can you make it shorter?") — only that one trailing "?".
   const edit = words.replace(/\?$/, "").trim();
   if (!edit.includes("?") && (WORDING.test(edit) || WORDING_VERBS.test(edit))) return "wording";
-  return isSmallTalk(question) ? "chat" : "full";
+  if (isSmallTalk(question)) return "chat";
+  // "Hi Jarvis!" — small talk once the assistant's own name is taken out; what remains must still be bare small talk.
+  if (named.size) {
+    const rest = question.trim().split(/\s+/).filter((w) => !named.has(nameWords(w).join(""))).join(" ").replace(/^[\s,]+/, "");
+    if (rest && rest !== question.trim() && isSmallTalk(rest)) return "chat";
+  }
+  return "full";
 }
 
 /** For the run's timings (numbers only, never the words): which route each question took, to compare their speed. */
