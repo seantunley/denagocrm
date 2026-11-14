@@ -225,6 +225,16 @@ export const invoicesArgs = z
     limit: upTo(60).optional(),
   })
   .strict();
+/** Records of one type by one of the workspace's own CUSTOM FIELDS (assistantCustomFieldsLookup); no field: the fields there are. */
+export const customFieldsArgs = z
+  .object({
+    record: z.enum(["lead", "contact", "quote", "case", "vehicle", "jobcard"]),
+    field: name.optional(),
+    value: name.optional(),
+    limit: upTo(50).optional(),
+  })
+  .strict();
+
 /** CUSTOMERS AS A LIST (assistantCustomersLookup) — by area, fleet, tag, owner, birthday, date added (Sean, 2026-11-14). */
 export const customersArgs = z
   .object({
@@ -291,6 +301,7 @@ export const assistantStep = z.discriminatedUnion("tool", [
   z.object({ tool: z.literal("surveys"), args: surveysArgs.default({}) }),
   z.object({ tool: z.literal("referrals"), args: referralsArgs.default({}) }),
   z.object({ tool: z.literal("invoices"), args: invoicesArgs.default({}) }),
+  z.object({ tool: z.literal("custom_fields"), args: customFieldsArgs }),
   z.object({ tool: z.literal("customers"), args: customersArgs.default({}) }),
   z.object({ tool: z.literal("deal_file"), args: dealFileArgs }),
   z.object({ tool: z.literal("suppliers"), args: suppliersArgs.default({}) }),
@@ -367,6 +378,7 @@ export function planInstructions(ctx: PlanContext): string {
     '- surveys: {"from":"YYYY-MM-DD","to":"YYYY-MM-DD","survey":"<words of a survey title>"} — CUSTOMER SURVEYS sent in that period (default the last 30 days): per survey, sent, answered, response rate, NPS or average score, and the unhappy answers with what the customer said. Run it for "how are our NPS scores", "any unhappy customers in the surveys".',
     '- referrals: {"from":"YYYY-MM-DD","to":"YYYY-MM-DD","status":"pending|earned|redeemed"} — REFERRALS in that period (default the last 90 days): totals pending / earned-not-redeemed / redeemed, the top referrers, and the latest referrals. Run it for "how many referrals this quarter", "who refers the most", "which rewards are still owed".',
     '- invoices: {"status":"unpaid|paid|any" (default unpaid),"customer":"<customer or fleet name>","number":"<INV-000042 or a Xero number>","from":"YYYY-MM-DD","to":"YYYY-MM-DD" (by invoice date),"olderThanDays":<days since invoiced>,"xero":"not_sent|sent|excluded","limit":<1-60>} — ISSUED INVOICES as the Invoices page shows them: the TOTAL that match and what is OUTSTANDING per currency, then each with its quote, customer, invoice date, days since invoiced, total, received, owing, delivery and its Xero copy (number, status, when sent). Invoices have NO due date in the CRM: never call one "overdue" — for "what\'s overdue" use olderThanDays (say "invoiced more than N days ago and still owing"). Run it for "which invoices are unpaid", "how much is outstanding", "has Marcel\'s invoice gone to Xero".',
+    '- custom_fields: {"record":"lead|contact|quote|case|vehicle|jobcard" (required),"field":"<the field\'s name>","value":"<words of the value>","limit":<1-50>} — the workspace\'s OWN CUSTOM FIELDS (fields it added itself, e.g. "Finance house", "Expo"). Without field: which custom fields that record type has, with their options. With field (and value): the records whose field matches, that the person may open. Leads, quotes, customers and vehicles that other lookups return already carry their filled custom fields as customFields — read those first. Run it for "which leads came from the Paarl expo", "customers financing with WesBank", "what custom fields do we have on quotes".',
     '- customers: {"area":"<suburb, city, province or estate>","fleet":"<fleet name>","tag":"<tag>","owner":"<person>","kind":"individual|business|fleet","birthdayWithinDays":<0-31, 0 = today>,"createdFrom":"YYYY-MM-DD","createdTo":"YYYY-MM-DD","openDeal":true|false,"sort":"newest|name","limit":<1-60>} — CUSTOMERS AS A LIST, only those the person may open: the TOTAL that match, then each with area, fleet, tags, owner, open deals, birthday, phone, email, whether they opted out of marketing, and a link. Run it for "customers in Constantia", "birthdays this week", "customers added last month", "who is on the Pearl Valley fleet", "customers tagged VIP with no open deal". To find ONE customer by name use search_everything or lead_brief.',
     '- deal_file: {"deal":"<customer, lead title or Q-number>" (required)} — ONE DEAL\'S FILE, as the deal page shows it: its quotes, the checklist (each item done or missing, and why), what is still MISSING, the papers on file by type, signing requests, handover photo count, and — with Suppliers on — the suppliers on the deal and which of their papers are missing. Run it for "what paperwork is missing on X\'s deal", "is X\'s deal file complete", "has the supplier invoice come in for Q-1031".',
     '- suppliers: {"supplier":"<supplier name>","missing":true (deals still missing supplier papers),"orders":true (their purchase orders)} — SUPPLIERS (workspace owner only, Suppliers module on): each supplier with kind, contact, terms and how many deals, papers and orders; with a supplier named, its purchase orders and the deals still missing its papers. Run it for "which deals are missing supplier invoices", "what have we ordered from Denago", "who are our suppliers". No bank details are ever in it.',
@@ -531,6 +543,7 @@ const LOOKUP_STATUS: Record<string, string> = {
   surveys: "Reading the survey results",
   referrals: "Checking referrals",
   invoices: "Checking invoices",
+  custom_fields: "Checking custom fields",
   customers: "Listing customers",
   deal_file: "Opening the deal file",
   suppliers: "Checking suppliers",

@@ -60,6 +60,7 @@ import { catchUpLookup } from "./assistantCatchUpLookup";
 import { lostAliveLookup } from "./assistantLostAliveLookup";
 import { campaignsLookup, forecastLookup, referralsLookup, surveysLookup, ticketsLookup } from "./assistantAreaLookups";
 import { invoicesLookup } from "./assistantInvoicesLookup";
+import { CUSTOM_FIELD_TOOLS, customFieldsLookup, withCustomFields } from "./assistantCustomFieldsLookup";
 import { customersLookup } from "./assistantCustomersLookup";
 import { dealFileLookup, suppliersLookup } from "./assistantDealFileLookup";
 import { notesLookup } from "./assistantNotesLookup";
@@ -1762,6 +1763,7 @@ async function runTool(user: User, step: ToolStep): Promise<ToolOutput> {
     case "surveys": return surveysLookup(user, step.args);
     case "referrals": return referralsLookup(user, step.args);
     case "invoices": return invoicesLookup(user, step.args);
+    case "custom_fields": return customFieldsLookup(user, step.args);
     case "customers": return customersLookup(user, step.args);
     case "deal_file": return dealFileLookup(user, step.args);
     case "suppliers": return suppliersLookup(user, step.args);
@@ -2401,7 +2403,15 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     // Independent lookups, side by side; one failing doesn't cost the others.
     const outputs = await Promise.all(
       batch.map((s) =>
-        (s.tool === "web" ? internet(user, question) : runTool(user, s)).catch(async (error: unknown): Promise<ToolOutput> => {
+        (s.tool === "web" ? internet(user, question) : runTool(user, s).then(async (out) => {
+          // A lead, quote, customer or vehicle carries its own custom fields — those this person may see (assistantCustomFieldsLookup).
+          if (CUSTOM_FIELD_TOOLS.has(s.tool)) {
+            await withCustomFields(user, out.data).catch(async (error: unknown) => {
+              await logError("crm-assistant", "custom fields read failed", error instanceof Error ? error.name : "unknown");
+            });
+          }
+          return out;
+        })).catch(async (error: unknown): Promise<ToolOutput> => {
           await logError("crm-assistant", `lookup ${s.tool} failed`, error instanceof Error ? error.name : "unknown");
           return { truncated: false, rows: [], data: [{ note: "That lookup failed — say so if it matters." }] };
         }),
