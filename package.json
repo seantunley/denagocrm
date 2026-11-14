@@ -102,6 +102,7 @@
     "test:assistant-invoices": "tsx --tsconfig tsconfig.harness.json scripts/test-assistant-invoices.ts",
     "test:assistant-listed": "tsx --tsconfig tsconfig.harness.json scripts/test-assistant-listed.ts",
     "test:assistant-test-drives": "tsx --tsconfig tsconfig.harness.json scripts/test-assistant-test-drives.ts",
+    "test:assistant-conversation-manage": "tsx --tsconfig tsconfig.harness.json scripts/test-assistant-conversation-manage.ts",
     "test:assistant-updates-whatsapp": "tsx --tsconfig tsconfig.scripts.json scripts/test-assistant-updates-whatsapp.ts",
     "test:phone-match": "tsx --tsconfig tsconfig.scripts.json scripts/test-phone-match.ts",
     "test:in-person-signing": "tsx --tsconfig tsconfig.scripts.json scripts/test-in-person-signing.ts",

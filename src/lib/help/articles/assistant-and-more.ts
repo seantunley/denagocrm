@@ -46,6 +46,13 @@ export const assistantAndMoreArticles: HelpArticle[] = [
         "A question can be up to 500 characters, and there is a limit of roughly 60 questions an hour per person.",
         "The small window shows today's conversation. The full page keeps your conversations for 30 days. They are private to you.",
       ] },
+      { type: "h", text: "Finding, renaming and deleting conversations" },
+      { type: "list", items: [
+        "**Search**: type in **Search your conversations** on the Ask page. It finds your own conversations by their name or by anything said in them, newest first, with the words around the match.",
+        "**Rename**: open a conversation and press **Rename** next to the search box.",
+        "**Delete**: open a conversation and press **Delete**. It leaves your list and the assistant stops remembering it. Restore it under **Recently deleted** for 60 days; after that it is removed for good. Nothing in the CRM changes.",
+        "Only you can see, search, rename or delete your conversations — the workspace owner included.",
+      ] },
       { type: "callout", tone: "warning", text: "The assistant runs on your workspace's ChatGPT connection. If you see \"This runs on your workspace's ChatGPT connection, which isn't set up yet\", ask your workspace owner to connect it under **Settings → Integrations**. The assistant is part of the Automation & AI module, so it is hidden if that module is off." },
     ],
   },
