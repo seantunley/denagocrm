@@ -12,9 +12,10 @@ import { WHO_LEGEND, messageAuthor } from "./assistantWho";
 import { openedFact } from "./emailOpenTracking";
 import { isModuleEnabled } from "./modules/enabled";
 import { isAutomotiveOwnedDocument } from "./modules/registry";
-import { canAccessContact, getAccessibleContactIds, getAccessibleDocumentIds, getAccessibleLeadIds, hasAnyPermission, type PermissionUser } from "./permissions";
+import { canAccessContact, getAccessibleContactIds, getAccessibleDocumentIds, getAccessibleLeadIds, getAccessibleQuoteIds, hasAnyPermission, type PermissionUser } from "./permissions";
 import { messageSearchArgs, openMessageArgs, readDocumentArgs } from "./crmAssistantPlan";
-import { declaredKind, readPictures, scanPagePictures, sniffKind, type PictureRead } from "./assistantFileReading";
+import { MAX_PICTURES, declaredKind, readPictures, scanPagePictures, sniffKind, type PictureRead } from "./assistantFileReading";
+import { handoverPhotosFor } from "./dealFileData";
 import type { AssistantRow } from "./crmAssistant";
 
 /**
@@ -463,6 +464,7 @@ export async function pdfPages(bytes: Uint8Array, from = 1): Promise<{ totalPage
 export async function readDocument(user: User, raw: z.infer<typeof readDocumentArgs>): Promise<ToolOutput> {
   const args = readDocumentArgs.parse(raw);
   if (args.message) return readAttachment(user, args.message, args.fromPage ?? 1);
+  if (args.handover) return readHandover(user, args.handover, args.step);
   if (!(await hasAnyPermission(user, "documents.view_all", "documents.view_owned"))) return refused("documents");
   const docIds = await getAccessibleDocumentIds(user);
   if (docIds !== null && docIds.length === 0) return note("There are no documents you can open.");
@@ -549,6 +551,84 @@ async function readAttachment(user: User, messageId: string, fromPage: number): 
   const kind = sniffKind(bytes);
   if (kind === "other") return note("That attachment is a kind of file I can't read yet — only pictures, PDFs and plain text.", about);
   return readBytes(bytes, kind, "the attachment", fromPage, about);
+}
+
+/**
+ * The photos taken at a delivery handover (the delivery checklist), read by the AI — "what's the VIN from 1 Oak's
+ * handover photo?" (Sean, 2026-11-14). The deal file's own rule decides what is shown: only quotes this person may open
+ * (getAccessibleQuoteIds), in this workspace, and none with the Automotive module off (handoverPhotosFor). Each photo
+ * is read back checked against the workspace, as the deal file's ZIP reads it.
+ */
+const HANDOVER_QUOTES = 500;
+async function readHandover(user: User, asked: string, step: string | undefined): Promise<ToolOutput> {
+  const quoteIds = await getAccessibleQuoteIds(user);
+  if (quoteIds !== null && quoteIds.length === 0) return refused("quotes");
+  const tenantId = ownedWriteTenantId();
+  const number = /^\s*Q-?(\d{2,})\s*$/i.exec(asked);
+  const words = asked.split(/\s+/).filter(Boolean).slice(0, 4);
+  const quotes = await prisma.quote.findMany({
+    where: {
+      tenantId,
+      deletedAt: null,
+      // AND, never spread, as readDocument: the access filter must not be replaced by what was asked for.
+      AND: [
+        ...(quoteIds === null ? [] : [{ id: { in: quoteIds } }]),
+        number
+          ? { number: Number(number[1]) }
+          : {
+              OR: [
+                { contact: { AND: words.map((w) => ({ OR: [{ firstName: fuzzy(w) }, { lastName: fuzzy(w) }, { company: fuzzy(w) }] })) } },
+                { lead: { AND: words.map((w) => ({ name: fuzzy(w) })) } },
+              ],
+            },
+      ],
+    },
+    orderBy: { createdAt: "desc" },
+    // EVERY matching quote, not the newest few: an older delivered quote holds the handover (review of #1099 —
+    // 20 newest could leave it out and say "no photos"). The ceiling only guards against a one-word search.
+    take: HANDOVER_QUOTES + 1,
+    select: { id: true, number: true, contact: { select: { firstName: true, lastName: true, company: true } }, lead: { select: { name: true } } },
+  });
+  if (!quotes.length) return note(`No quote you can open matches "${asked}", so there are no handover photos to read.`);
+  if (quotes.length > HANDOVER_QUOTES) return note(`More than ${HANDOVER_QUOTES} quotes match "${asked}" — ask for the customer's full name or the Q-number.`);
+  const photos = await handoverPhotosFor(tenantId, quotes.map((q) => q.id));
+  const who = (q: (typeof quotes)[number]) => q.contact?.company || (q.contact ? contactName(q.contact) : "") || q.lead?.name || `Q-${q.number}`;
+  const byId = new Map(quotes.map((q) => [q.id, q]));
+  if (!photos.length) return note(`There are no handover photos on file for "${asked}" — the delivery checklist on ${quotes.slice(0, 3).map((q) => `Q-${q.number}`).join(", ")} has none.`);
+  const customers = [...new Set(photos.map((p) => who(byId.get(p.quoteId)!)))];
+  if (customers.length > 1) return note("Handover photos of several customers match — ask which one.", { customers: customers.slice(0, 5) });
+  const stepWords = (step ?? "").toLowerCase().split(/[\s/]+/).filter((w) => w.length >= 2);
+  const matched = stepWords.length ? photos.filter((p) => stepWords.some((w) => p.step.toLowerCase().includes(w))) : photos;
+  const steps = [...new Set(photos.map((p) => p.step))];
+  if (!matched.length) return note(`No handover photo of ${customers[0]} is from a step like "${step}".`, { stepsWithPhotos: steps.slice(0, 20) });
+  const picked = matched.slice(0, MAX_PICTURES);
+  const quote = byId.get(picked[0].quoteId)!;
+  const about = { handover: customers[0], title: `Handover photos, Q-${quote.number}`, link: `/quotes/${quote.id}`, added: dateKey(picked[0].capturedAt) };
+  // Each picture kept WITH its step (review of #1099): what the AI is told, and what DAX says it read, name only the
+  // photos that actually opened — never a VIN photo that failed beside an odometer one that didn't.
+  const loaded: { photo: (typeof picked)[number]; bytes: Buffer }[] = [];
+  const missing: string[] = [];
+  for (const photo of picked) {
+    try {
+      loaded.push({ photo, bytes: await readFile(photo.url, tenantId) });
+    } catch (error) {
+      missing.push(photo.step);
+      await logError("crm-assistant", "read handover photo failed", error instanceof Error ? error.name : "unknown");
+    }
+  }
+  if (!loaded.length) return note("I couldn't open the handover photos just now — say so; they may be missing from storage.", { ...about, notOpened: missing });
+  const result = pictureResult(await readPictures(loaded.map((l) => l.bytes), `the delivery handover photos of ${customers[0]}, in this order: ${loaded.map((l, i) => `${i + 1}. ${l.photo.step}`).join("; ")}`), about, "the handover photos");
+  const first = result.data[0] as Record<string, unknown> | undefined;
+  if (first && "text" in first) {
+    first.photosRead = loaded.map((l) => `${l.photo.step} (taken ${dateKey(l.photo.capturedAt)})`);
+    if (missing.length) first.notOpened = `Could not be opened from storage, so NOT read: ${missing.join(", ")}.`;
+    if (matched.length > picked.length) {
+      first.more = `${matched.length - picked.length} more photo(s) not read — ask with a narrower step.`;
+      result.truncated = true;
+    }
+    if (!stepWords.length) first.stepsWithPhotos = steps.slice(0, 20);
+  }
+  return result;
 }
 
 /** What a picture says, as a result — read just now by the workspace's AI, which can misread. */
