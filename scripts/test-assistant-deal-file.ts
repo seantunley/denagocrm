@@ -76,6 +76,9 @@ async function main() {
     const vendor = await basePrisma.vendor.create({ data: { tenantId: A, name: `Denago OEM ${SFX}`, kind: "oem", paymentReference: `SECRETREF${SFX}`, email: `oem.${SFX}@supplier.invalid` }, select: { id: true } });
     await basePrisma.dealVendor.create({ data: { tenantId: A, leadId: lead.id, vendorId: vendor.id } });
     await basePrisma.vendor.create({ data: { tenantId: b.tenantId, name: `Bravo OEM ${SFX}`, kind: "oem" } });
+    // The other salesperson's OWN deal: their access list is not empty, so asking for Oak's deal really runs the
+    // filtered query (an empty list returns before it — and would prove nothing).
+    await basePrisma.quote.create({ data: { tenantId: A, number: number + 1, status: "sent", createdById: otherRep.id } });
 
     const inA = <R>(fn: () => Promise<R>) => runInTenantScope({ tenantId: A, system: false }, fn);
     const inB = <R>(fn: () => Promise<R>) => runInTenantScope({ tenantId: b.tenantId, system: false }, fn);
@@ -95,6 +98,8 @@ async function main() {
     check("deals but no quote access: refused", /can't open deals/.test(refused.note ?? ""), refused.note);
     const notTheirs = first(await inA(() => dealFileLookup(otherRep, { deal: `Q-${number}` })));
     check("quote access, but not to this deal: nothing", /No deal this person may open/.test(notTheirs.note ?? ""), notTheirs.note);
+    const theirOwn = first(await inA(() => dealFileLookup(otherRep, { deal: `Q-${number + 1}` })));
+    check("…while their own deal opens", theirOwn.link !== undefined && !JSON.stringify(theirOwn).includes(`Oak Consult ${SFX}`), JSON.stringify(theirOwn).slice(0, 200));
     const otherWs = first(await inB(() => dealFileLookup(ownerB, { deal: `Q-${number}` })));
     check("the other workspace's owner, by Q-number: nothing", /No deal/.test(otherWs.note ?? "") && !JSON.stringify(otherWs).includes(`Oak Consult ${SFX}`), otherWs.note);
 
@@ -121,7 +126,7 @@ async function main() {
     const tenants = [A, b.tenantId];
     await basePrisma.dealVendor.deleteMany({ where: { tenantId: { in: tenants } } }).catch(() => 0);
     await basePrisma.vendor.deleteMany({ where: { tenantId: { in: tenants }, name: { endsWith: SFX } } }).catch(() => 0);
-    await basePrisma.quote.deleteMany({ where: { tenantId: A, number } }).catch(() => 0);
+    await basePrisma.quote.deleteMany({ where: { tenantId: A, number: { in: [number, number + 1] } } }).catch(() => 0);
     await basePrisma.lead.deleteMany({ where: { tenantId: A, name: `Oak Consult ${SFX}` } }).catch(() => 0);
     await basePrisma.contact.deleteMany({ where: { tenantId: A, lastName: `Oak${SFX}` } }).catch(() => 0);
     await teardown(fixture);
