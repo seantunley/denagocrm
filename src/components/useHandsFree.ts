@@ -5,7 +5,7 @@ import { speakAssistantAnswer } from "@/app/actions/assistantVoice";
 import { transcribeQuestion } from "@/app/actions/voice";
 import { audioForm, microphoneError, MAX_RECORDING_SECONDS } from "@/components/useVoiceRecorder";
 import {
-  HANDS_FREE_OFF, HIDDEN_STOPPED, IDLE_STOPPED, freshVad, handsFreeStep, mayRecord, rms, vadStep, type Phase,
+  HANDS_FREE_OFF, HIDDEN_STOPPED, IDLE_STOPPED, freshVad, handsFreeStep, mayRecord, micStarter, rms, vadStep, type Phase,
 } from "@/lib/handsFree";
 
 // An empty WAV: played on the tap that starts hands-free, it unlocks the ONE audio element every answer is then
@@ -48,8 +48,18 @@ export function useHandsFree(onQuestion: (text: string) => void) {
   const wake = useRef<{ release: () => Promise<void> } | null>(null);
   // The question hands-free asked: only ITS answer is spoken, not one typed meanwhile.
   const asked = useRef<string | null>(null);
+  // Getting the microphone, cancellably (lib/handsFree micStarter): a grant that lands after Stop starts nothing.
+  const starter = useRef<ReturnType<typeof micStarter<MediaStream, WakeLockSentinel>> | null>(null);
+  // Which run this is: a transcript or spoken answer that comes back after Stop (or a restart) belongs to none.
+  const session = useRef(0);
 
-  const stop = useCallback((reason?: string) => dispatch({ type: "stop", reason }), []);
+  // EVERY way of stopping comes here — Stop, toggle off, tab hidden, idle, refusals — and cancels synchronously,
+  // before anything else can wait, so even a start still at the permission prompt comes to nothing.
+  const halt = useCallback((reason?: string) => {
+    starter.current?.cancel();
+    session.current++;
+    dispatch({ type: "stop", reason });
+  }, []);
 
   // Started from the tap itself: the audio element and the audio context must be unlocked inside it.
   const start = useCallback(async () => {
@@ -58,18 +68,34 @@ export function useHandsFree(onQuestion: (text: string) => void) {
     player.current = audio;
     audio.src = SILENCE;
     void audio.play().catch(() => undefined);
+    const mine = ++session.current;
+    dispatch({ type: "starting" });
     try {
+      void audioCtx.current?.close().catch(() => undefined);
       const ctx = new AudioContext();
       audioCtx.current = ctx;
       void ctx.resume().catch(() => undefined);
-      stream.current = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
-      // Keep the screen on while it runs (driving): a phone that sleeps hides the page, which stops it.
-      wake.current = await navigator.wakeLock?.request("screen").catch(() => null) ?? null;
+      starter.current ??= micStarter({
+        getMic: () => navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }),
+        // Keep the screen on while it runs (driving): a phone that sleeps hides the page, which stops it.
+        wakeLock: async () => (await navigator.wakeLock?.request("screen")) ?? null,
+      });
+      // A newer start replaces this one; Stop, close or hidden cancels it — either way, null, already let go.
+      const got = await starter.current.start();
+      if (!got || mine !== session.current) {
+        if (got) {
+          got.stream.getTracks().forEach((track) => track.stop());
+          void got.wake?.release().catch(() => undefined);
+        }
+        return;
+      }
+      stream.current = got.stream;
+      wake.current = got.wake;
       dispatch({ type: "start" });
     } catch (error) {
-      dispatch({ type: "stop", reason: microphoneError(error) });
+      if (mine === session.current) halt(microphoneError(error));
     }
-  }, []);
+  }, [halt]);
 
   // Off: let go of the microphone, the audio and the screen.
   useEffect(() => {
@@ -84,8 +110,10 @@ export function useHandsFree(onQuestion: (text: string) => void) {
     asked.current = null;
   }, [state.phase]);
 
-  // Closing the panel or leaving the page stops it.
+  // Closing the panel or leaving the page stops it — including a start still waiting at the permission prompt.
   useEffect(() => () => {
+    starter.current?.cancel();
+    session.current++;
     stream.current?.getTracks().forEach((track) => track.stop());
     void audioCtx.current?.close().catch(() => undefined);
     player.current?.pause();
@@ -96,15 +124,16 @@ export function useHandsFree(onQuestion: (text: string) => void) {
   useEffect(() => {
     if (state.phase === "off") return;
     const hidden = () => {
-      if (document.visibilityState === "hidden") dispatch({ type: "stop", reason: HIDDEN_STOPPED });
+      if (document.visibilityState === "hidden") halt(HIDDEN_STOPPED);
     };
     document.addEventListener("visibilitychange", hidden);
     return () => document.removeEventListener("visibilitychange", hidden);
-  }, [state.phase]);
+  }, [state.phase, halt]);
 
   const hear = useCallback(async (audio: Blob) => {
+    const mine = session.current;
     const heard = await transcribeQuestion(audioForm(audio)).catch(() => ({ ok: false as const, error: "Couldn't send the recording." }));
-    if (phase.current !== "hearing") return; // stopped meanwhile: ask nothing
+    if (mine !== session.current || phase.current !== "hearing") return; // stopped meanwhile: ask nothing
     const text = heard.ok ? heard.text.trim() : "";
     if (text) {
       setNote(null);
@@ -159,7 +188,7 @@ export function useHandsFree(onQuestion: (text: string) => void) {
         dispatch({ type: "spoke" });
       } else if (step.verdict === "idle") {
         clearInterval(timer);
-        dispatch({ type: "stop", reason: IDLE_STOPPED });
+        halt(IDLE_STOPPED);
       }
     }, FRAME_MS);
     return () => {
@@ -176,21 +205,23 @@ export function useHandsFree(onQuestion: (text: string) => void) {
     if (phase.current !== "thinking" || question !== asked.current) return;
     asked.current = null;
     if (!turnId) return dispatch({ type: "answered", speak: false });
+    const mine = session.current;
     dispatch({ type: "answered", speak: true });
     const spoken = await speakAssistantAnswer(turnId).catch(() => ({ ok: false as const, error: "Couldn't reach the server — try again.", off: false }));
-    // Read again after the wait: Stop may have been pressed meanwhile.
-    if ((phase.current as Phase) !== "speaking") return;
+    // Read again after the wait: Stop (or a restart) may have happened meanwhile.
+    if (mine !== session.current || (phase.current as Phase) !== "speaking") return;
     if (!spoken.ok) {
-      if (spoken.off) return dispatch({ type: "stop", reason: spoken.error });
+      if (spoken.off) return halt(spoken.error);
       setNote(spoken.error);
       return dispatch({ type: "spokenEnd" });
     }
     player.current ??= new Audio();
     playOnce(player.current, spoken.audio, (blocked) => {
+      if (mine !== session.current) return;
       if (blocked) setNote("Your browser blocked the spoken answer — it's on screen. Tap the mic again if it keeps happening.");
       dispatch({ type: "spokenEnd" });
     });
-  }, []);
+  }, [halt]);
 
-  return { state, note, start, stop, answered };
+  return { state, note, start, stop: halt, answered };
 }
