@@ -9,6 +9,9 @@
  *  - Confirm (the real runAssistantAction → logVoiceDebrief, the Log a call button's own save) files a completed call
  *    on the deal, its notes on the timeline and the follow-up for that rep — in their workspace;
  *  - on a customer with no deal, the same, on the customer;
+ *  - a proposal naming no activity is a call; a second Confirm of the same card files nothing more;
+ *  - a follow-up that clashes with the rep's leave is refused with NOTHING saved; the same card with the time fixed,
+ *    confirmed twice, leaves exactly one call, one timeline note and one follow-up (review of #1117);
  *  - another rep gets no card for this rep's deal or customer, and their Confirm of this rep's card writes nothing;
  *  - the other workspace's customer: no card, and a forged card writes nothing there.
  *
@@ -99,6 +102,8 @@ async function main() {
     const proposal = { type: "log_call", leadId: repDeal.id, summary: `Wants the XL in white ${SFX}`, notes: "• Finance through the bank", nextStep: `Send the finance form ${SFX}`, followUp: inThreeDays };
     const { card, problems } = await propose(rep, repSession, proposal);
     check("a card, showing the notes, the next step and the follow-up", !!card && card.detail.includes("• Finance through the bank") && card.detail.includes("Follow-up call booked:") && card.detail.includes("the customer is not contacted"), JSON.stringify({ card, problems }));
+    // REVIEW OF #1117: the proposal names no activity — it is a call (the resolver normalises it, not only the schema).
+    check("no activity named: a call", card?.activity === "call" && card.title.startsWith("Log the call:"), JSON.stringify(card));
     check("…and NOTHING is written until Confirm", (await written()) === before, String(await written()));
 
     // Another rep presses Confirm on this rep's card: their access is checked again, nothing is filed.
@@ -113,6 +118,30 @@ async function main() {
     check("…its notes on the timeline, with the next step", !!note && note.body.includes("Finance through the bank") && note.body.includes("Next step:") && note.tenantId === A, JSON.stringify(note));
     check("…and the follow-up booked for the rep on that day", !!followUp && followUp.assignedToId === rep.id && johannesburgDateKey(followUp.dueDate) === inThreeDays && followUp.tenantId === A, JSON.stringify(followUp));
     check("…confirmed from DAX's card, in the audit trail", (await basePrisma.auditEvent.count({ where: { eventType: "assistant.action_confirmed", summary: { contains: "log a call" }, actorUserId: rep.id } })) >= 1);
+    const filed = await written();
+    const twice = await runAsSession(repSession, () => scoped(() => runAssistantAction(card!)));
+    check("Confirm the same card again (the answer was lost): ok, and nothing more is filed", twice.ok && (await written()) === filed
+      && (await basePrisma.activity.count({ where: { leadId: repDeal.id, type: "call", status: "done" } })) === 1, JSON.stringify(twice));
+
+    console.log("\nA follow-up refused: nothing saved; fixed and saved again: filed once (review of #1117)");
+    // The rep is on leave at the agreed time — the clash every booking checks.
+    const leaveDay = johannesburgDateKey(new Date(Date.now() + 5 * 86_400_000));
+    await basePrisma.activity.create({
+      data: { tenantId: A, type: "todo", summary: "On leave", availabilityBlock: true, status: "planned", dueDate: new Date(`${leaveDay}T08:00:00+02:00`), endDate: new Date(`${leaveDay}T17:00:00+02:00`), assignedToId: rep.id, createdById: rep.id },
+    });
+    const clash = await propose(rep, repSession, { type: "log_call", contactId: marcel.id, summary: `Clash ${SFX}`, notes: `Clash notes ${SFX}`, followUp: `${leaveDay}T10:00` });
+    const beforeClash = await written();
+    const refused = await runAsSession(repSession, () => scoped(() => runAssistantAction(clash.card!)));
+    check("the follow-up clashes: refused, and NOTHING was saved — no call, no note", !refused.ok && /Nothing was saved/.test(refused.error ?? "") && (await written()) === beforeClash, JSON.stringify(refused));
+    // The person fixes the time and saves again — the same draft, the same key.
+    const fixed: CallCard = { ...clash.card!, followUp: inThreeDays };
+    const saved = await runAsSession(repSession, () => scoped(() => runAssistantAction(fixed)));
+    const again = await runAsSession(repSession, () => scoped(() => runAssistantAction(fixed)));
+    const calls = await basePrisma.activity.count({ where: { contactId: marcel.id, summary: `Clash ${SFX}`, status: "done" } });
+    const notes = await basePrisma.communication.count({ where: { contactId: marcel.id, body: { contains: `Clash notes ${SFX}` } } });
+    const followUps = await basePrisma.activity.findMany({ where: { contactId: marcel.id, leadId: null, status: "planned", type: "call" }, select: { dueDate: true } });
+    check("saved again with the time fixed (and once more): exactly one call, one timeline note, one follow-up on the fixed day", saved.ok && again.ok && calls === 1 && notes === 1
+      && followUps.length === 1 && johannesburgDateKey(followUps[0].dueDate) === inThreeDays, JSON.stringify({ saved, again, calls, notes, followUps }));
 
     console.log("\nOn a customer with no deal");
     const visit = await propose(rep, repSession, { type: "log_call", contactId: anna.id, activity: "meeting", summary: `Showroom visit ${SFX}` });
@@ -131,8 +160,9 @@ async function main() {
     const otherWorkspace = await propose(rep, repSession, { type: "log_call", contactId: b.rows.contactId, summary: `B ${SFX}` });
     check("the other workspace's customer: no card", !otherWorkspace.card, otherWorkspace.problems.join(" | "));
     // A card made up by hand for B's customer and for another rep's deal: Confirm checks access itself.
-    const forgedB: CallCard = { ...visit.card!, id: "forged-b", contactId: b.rows.contactId, summary: `Forged B ${SFX}` };
-    const forgedDeal: CallCard = { ...card!, id: "forged-deal", leadId: otherDeal.id, summary: `Forged deal ${SFX}` };
+    const freshKey = () => `qk_${crypto.randomBytes(16).toString("hex")}`;
+    const forgedB: CallCard = { ...visit.card!, id: "forged-b", contactId: b.rows.contactId, summary: `Forged B ${SFX}`, confirmKey: freshKey() };
+    const forgedDeal: CallCard = { ...card!, id: "forged-deal", leadId: otherDeal.id, summary: `Forged deal ${SFX}`, confirmKey: freshKey() };
     const resultB = await runAsSession(repSession, () => scoped(() => runAssistantAction(forgedB)));
     const resultDeal = await runAsSession(repSession, () => scoped(() => runAssistantAction(forgedDeal)));
     check("forged cards: both refused, nothing written anywhere", !resultB.ok && !resultDeal.ok && (await written()) === beforeOthers, JSON.stringify({ resultB, resultDeal }));
@@ -142,6 +172,7 @@ async function main() {
     const ids = [rep.id, other.id];
     await basePrisma.activity.deleteMany({ where: { OR: [{ assignedToId: { in: ids } }, { createdById: { in: ids } }] } }).catch(() => 0);
     await basePrisma.communication.deleteMany({ where: { userId: { in: ids } } }).catch(() => 0);
+    await basePrisma.assistantPendingAction.deleteMany({ where: { userId: { in: ids } } }).catch(() => 0);
     await basePrisma.lead.deleteMany({ where: { tenantId: A, name: { endsWith: `Call${SFX}` } } }).catch(() => 0);
     await basePrisma.contact.deleteMany({ where: { tenantId: A, lastName: `Call${SFX}` } }).catch(() => 0);
     await basePrisma.auditLog.deleteMany({ where: { userId: { in: ids } } }).catch(() => 0);

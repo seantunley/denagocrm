@@ -889,7 +889,8 @@ export type ActionCard =
   // `image`: the photo sent with the question, as a cleaned JPEG data: URL — shown on the card, uploaded at Confirm by the note form's own action.
   | (LeadCard & { kind: "note"; text: string; pin?: boolean; image?: string; detail?: string })
   // A call that happened: on a deal (leadId) or a customer (contactId, leadId null). `detail`: everything Confirm files.
-  | { id: string; kind: "log_call"; leadId: string | null; contactId?: string; leadLabel: string; title: string; activity: "call" | "meeting"; summary: string; notes: string; followUp?: string; nextStep?: string; detail: string; reason?: string }
+  // `confirmKey`: spent by logVoiceDebrief in the transaction that files the call — a second Confirm files nothing more.
+  | { id: string; kind: "log_call"; leadId: string | null; contactId?: string; leadLabel: string; title: string; activity: "call" | "meeting"; summary: string; notes: string; followUp?: string; nextStep?: string; detail: string; confirmKey: string; reason?: string }
   // leadId null and leadLabel the customer's name: the same shape an activity with no lead has.
   | { id: string; kind: "customer_note"; contactId: string; leadId: null; leadLabel: string; title: string; text: string; pin?: boolean; image?: string; detail?: string; reason?: string }
   // A new customer record: `detail` is every field as the person reads it before confirming. Confirm checks for a duplicate again.

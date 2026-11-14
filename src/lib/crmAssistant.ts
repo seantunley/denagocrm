@@ -3446,11 +3446,16 @@ export async function resolveActions(
         followUpLabel = at.toLocaleString("en-ZA", { timeZone: "Africa/Johannesburg", weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
       }
       const notes = p.notes ?? "";
+      // The schema's default ("call") applies only to a parsed proposal: normalised HERE too, at the boundary, so a
+      // proposal reaching this function any other way is a call unless it says visit (review of #1117).
+      const activity = p.activity === "meeting" ? "meeting" : "call";
       cards.push({
         id: `a${index}-${p.leadId ?? p.contactId}-call`, kind: "log_call", leadId: p.leadId ?? null, ...(p.contactId ? { contactId: p.contactId } : {}), leadLabel,
-        title: `Log the ${p.activity === "call" ? "call" : "visit"}: ${p.summary}`, activity: p.activity, summary: p.summary, notes,
+        title: `Log the ${activity === "call" ? "call" : "visit"}: ${p.summary}`, activity, summary: p.summary, notes,
         ...(p.followUp ? { followUp: p.followUp } : {}), ...(p.nextStep ? { nextStep: p.nextStep } : {}),
-        detail: logCallDetail({ activity: p.activity, notes, nextStep: p.nextStep, followUpLabel }),
+        detail: logCallDetail({ activity, notes, nextStep: p.nextStep, followUpLabel }),
+        // One Confirm, one call: spent by logVoiceDebrief in the transaction that files it.
+        confirmKey: `qk_${randomBytes(16).toString("hex")}`,
         ...(p.reason ? { reason: p.reason } : {}),
       });
       continue;

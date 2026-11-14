@@ -540,7 +540,7 @@ export default function AssistantChat({
         {voice.supported && (
           <button
             type="button"
-            onClick={voice.recording ? voice.stop : voice.start}
+            onClick={voice.recording || voice.waiting ? voice.stop : voice.start}
             disabled={hearing}
             className={`grid size-10 shrink-0 place-items-center rounded-md border ${voice.recording ? "border-destructive text-destructive" : "border-border text-muted-foreground hover:text-foreground"}`}
             aria-label={voice.recording ? "Stop and ask" : "Ask by voice"}

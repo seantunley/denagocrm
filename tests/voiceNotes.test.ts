@@ -68,6 +68,8 @@ test("saving a call is a completed activity on a deal or customer the user may t
   assert.match(body, /prisma\.contact\.findFirst\(\{ where: \{ id: data\.contactId!, deletedAt: null \}/, "never a customer in the bin");
   assert.match(body, /status: "done",\s*doneAt: now/);
   assert.match(body, /logAudit\(/);
-  // A logged call already happened: no schedule lock or clash check here.
-  assert.doesNotMatch(body.slice(0, body.indexOf("scheduleFollowUpBody")), /lockStaffSchedules|findStaffAvailabilityConflict/);
+  // A logged call already happened: it is never clash-checked. The lock and the clash check are the FOLLOW-UP's own
+  // (a booking), and only when there is one — inside the same transaction (review of #1117).
+  assert.match(body, /prisma\.\$transaction\(async \(tx\) => \{\s*if \(followUpAt\) \{\s*const end = [^\n]+\n\s*await lockStaffSchedules\(tx, scheduleTenant, \[user\.id\]\);\s*const conflict = await findStaffAvailabilityConflict\(/);
+  assert.equal((body.match(/lockStaffSchedules|findStaffAvailabilityConflict/g) ?? []).length, 2, "nowhere else");
 });

@@ -38,7 +38,8 @@ export default function VoiceDebriefButton({
   const [typed, setTyped] = useState("");
   const [drafting, setDrafting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [draft, setDraft] = useState<(DebriefDraft & { type: "call" | "meeting" }) | null>(null);
+  // `opKey`: minted once per draft. Save again (after a refusal, or an answer lost on the way back) files it once.
+  const [draft, setDraft] = useState<(DebriefDraft & { type: "call" | "meeting"; opKey: string }) | null>(null);
   const [summarised, setSummarised] = useState(true);
   const [deal, setDeal] = useState(openDeals.length === 1 ? openDeals[0].id : CUSTOMER_ONLY);
   const [saving, startSaving] = useTransition();
@@ -48,7 +49,7 @@ export default function VoiceDebriefButton({
     setDrafting(false);
     if (!result.ok) return setError(result.error);
     setSummarised(result.summarised);
-    setDraft({ ...result.draft, type: "call" });
+    setDraft({ ...result.draft, type: "call", opKey: `qk_${crypto.randomUUID().replace(/-/g, "")}` });
     setMode(null);
     setTyped("");
   };
@@ -89,6 +90,7 @@ export default function VoiceDebriefButton({
         notes,
         followUpDate: draft.followUpDate || undefined,
         nextStep: draft.nextStep,
+        opKey: draft.opKey,
       });
       if (!result.ok) {
         toast.error(result.error ?? "Couldn't save it.");
@@ -175,6 +177,19 @@ export default function VoiceDebriefButton({
     );
   }
 
+  // The browser's permission prompt is open: say so, and let Cancel stop it ever starting (useVoiceRecorder).
+  const cancel = () => { voice.stop(); setMode(null); setError(null); };
+  if (voice.waiting) {
+    return (
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
+          <Loader2 className="size-4 animate-spin" /> Waiting for microphone permission…
+        </p>
+        <button type="button" className="btn-secondary btn-sm" onClick={cancel}>Cancel</button>
+      </div>
+    );
+  }
+
   if (voice.recording) {
     return (
       <div className="space-y-1">
@@ -216,7 +231,7 @@ export default function VoiceDebriefButton({
         <p className="text-xs">Tell the customer the call is being recorded before you start. The recording is turned into text and then deleted.</p>
         {(error || voice.error) && <p className="text-xs text-destructive">{error ?? voice.error}</p>}
         <div className="flex justify-end gap-2">
-          <button type="button" className="btn-secondary btn-sm" onClick={() => { setMode(null); setError(null); }}>Cancel</button>
+          <button type="button" className="btn-secondary btn-sm" onClick={cancel}>Cancel</button>
           <button type="button" className="btn-primary btn-sm inline-flex items-center gap-1.5" onClick={voice.start}>
             <CircleDot className="size-4" /> They know — start recording
           </button>

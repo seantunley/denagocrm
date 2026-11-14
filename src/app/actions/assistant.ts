@@ -259,15 +259,20 @@ export async function runAssistantAction(
       case "log_call": {
         // The Log a call button's own save: activities.manage, access to THIS deal or customer, a completed call, its
         // notes on the timeline and the follow-up — all checked again here, nothing taken from the card on trust.
+        // Its key is spent with the call: a second Confirm of this card files nothing more.
+        if (!CONFIRM_KEY.test(String(card.confirmKey ?? ""))) return untouched(STALE_CARD);
         const on = card.leadId ? { leadId: card.leadId } : { contactId: card.contactId ?? null };
         const result = await logVoiceDebrief({
           ...on,
-          type: card.activity,
+          type: card.activity === "meeting" ? "meeting" : "call",
           summary: card.summary,
           notes: [card.notes, card.nextStep && `Next step: ${card.nextStep}`].filter(Boolean).join("\n\n"),
           followUpDate: card.followUp,
           nextStep: card.nextStep,
+          opKey: card.confirmKey,
         });
+        // A delegate's error is returned unproven (the house rule). logVoiceDebrief is all or nothing and keyed, so a
+        // refusal wrote nothing and a retry of this card can never file the call twice.
         if (!result.ok) return { ok: false, error: result.error ?? "Couldn't log it." };
         const visit = card.activity === "meeting";
         await confirmedOn(visit ? "log a visit" : "log a call", { leadId: card.leadId, contactId: card.contactId ?? null });

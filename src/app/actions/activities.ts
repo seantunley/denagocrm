@@ -34,6 +34,10 @@ import {
   followUpDueDateError,
   followUpValidationError,
 } from "@/lib/followUp";
+import { CONFIRM_KEY } from "@/lib/assistantActions";
+
+/** How long a logged call's key stays spent: longer than any draft or DAX card lives. */
+const LOGGED_CALL_KEY_KEPT_MS = 35 * 24 * 60 * 60 * 1000;
 
 const str = (formData: FormData, key: string) => {
   const value = String(formData.get(key) ?? "").trim();
@@ -650,6 +654,12 @@ async function scheduleFollowUpBody(data: {
  * only if they kept one — the follow-up it agreed. On a deal (`leadId`) or on a customer with no deal in question
  * (`contactId`), never both. Drafted by draftVoiceDebrief / draftTypedDebrief or a DAX log_call card; saved only on
  * their Save or Confirm. `followUpDate` is YYYY-MM-DD (09:00) or YYYY-MM-DDTHH:MM.
+ *
+ * ALL OR NOTHING, ONCE (review of #1117). Everything is checked first — the follow-up's time and the person's
+ * calendar included — then the call, its timeline note, the follow-up and the spent `opKey` are written in ONE
+ * transaction. A refused follow-up leaves nothing behind, so Save again after fixing the date files the call once.
+ * `opKey` (CONFIRM_KEY, minted once per draft or DAX card) is spent as an AssistantPendingAction row in that same
+ * transaction — the record job cards and quotes use — so a repeat with the same key files nothing more.
  */
 export async function logVoiceDebrief(data: {
   leadId?: string | null;
@@ -659,17 +669,30 @@ export async function logVoiceDebrief(data: {
   notes: string;
   followUpDate?: string;
   nextStep?: string;
-}): Promise<{ ok: boolean; error?: string }> {
+  opKey: string;
+}): Promise<{ ok: boolean; error?: string; repeated?: boolean }> {
   return asOwnResult(
     () =>
       withActingStaffScope(async () => {
         const user = await requirePermission("activities.manage");
+        if (!CONFIRM_KEY.test(String(data.opKey ?? ""))) refuse("That draft has expired — start it again.");
         if (Boolean(data.leadId) === Boolean(data.contactId)) refuse("Log it on one deal or one customer.");
         await assertLinks(user, { leadId: data.leadId, contactId: data.contactId });
         const summary = data.summary.trim().slice(0, 200);
         if (!summary) refuse("Add a one-line summary.");
         if (data.type !== "call" && data.type !== "meeting") refuse("Pick call or visit.");
         if (data.followUpDate && !/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?$/.test(data.followUpDate)) refuse("Pick a valid follow-up date.");
+        // The follow-up's time, checked BEFORE anything is written.
+        const followUpAt = data.followUpDate
+          ? new Date(`${data.followUpDate.includes("T") ? data.followUpDate : `${data.followUpDate}T09:00`}:00+02:00`)
+          : null;
+        if (followUpAt) {
+          const bad = followUpDueDateError(followUpAt);
+          if (bad) refuse(`${bad} Nothing was saved — fix the follow-up and save again.`);
+        }
+        // Already filed with this key: the first result, nothing more.
+        const spent = await prisma.assistantPendingAction.findFirst({ where: { id: data.opKey, userId: user.id }, select: { id: true } });
+        if (spent) return { ok: true, repeated: true };
         const notes = data.notes.trim().slice(0, 8000);
         let contactId: string | null;
         if (data.leadId) {
@@ -683,37 +706,68 @@ export async function logVoiceDebrief(data: {
         }
         const leadId = data.leadId ?? null;
         const tenantId = await customerRecordTenantId({ contactId, leadId });
+        const scheduleTenant = await staffScheduleTenantId(tenantId);
+        const followUpSummary = data.nextStep?.trim().slice(0, 200) || "Follow-up call";
         const now = new Date();
-        await prisma.activity.create({
-          data: {
-            type: data.type,
-            summary,
-            note: notes || null,
-            dueDate: now,
-            endDate: now,
-            status: "done",
-            doneAt: now,
-            leadId,
-            contactId,
-            assignedToId: user.id,
-            createdById: user.id,
-            tenantId,
-          },
-        });
-        if (notes) {
-          await prisma.communication.create({
+        const written = await prisma.$transaction(async (tx) => {
+          if (followUpAt) {
+            // The same lock and clash check every booking makes — inside the transaction, so nothing is written
+            // when the person is unavailable then.
+            const end = new Date(followUpAt.getTime() + DEFAULT_ACTIVITY_DURATION_MS);
+            await lockStaffSchedules(tx, scheduleTenant, [user.id]);
+            const conflict = await findStaffAvailabilityConflict({ userId: user.id, tenantId: scheduleTenant, start: followUpAt, end, db: tx });
+            if (conflict) return { conflict } as const;
+            await tx.activity.create({
+              data: { type: "call", summary: followUpSummary, dueDate: followUpAt, endDate: end, leadId, contactId, assignedToId: user.id, createdById: user.id, tenantId },
+            });
+          }
+          await tx.activity.create({
             data: {
               type: data.type,
-              direction: "outbound",
-              subject: `🎙 ${data.type === "call" ? "Call" : "Visit"}: ${summary}`,
-              body: notes,
+              summary,
+              note: notes || null,
+              dueDate: now,
+              endDate: now,
+              status: "done",
+              doneAt: now,
               leadId,
               contactId,
-              userId: user.id,
+              assignedToId: user.id,
+              createdById: user.id,
               tenantId,
             },
           });
+          if (notes) {
+            await tx.communication.create({
+              data: {
+                type: data.type,
+                direction: "outbound",
+                subject: `🎙 ${data.type === "call" ? "Call" : "Visit"}: ${summary}`,
+                body: notes,
+                leadId,
+                contactId,
+                userId: user.id,
+                tenantId,
+              },
+            });
+          }
+          // With the call or not at all: a second Save at the same moment collides on this key and is undone whole.
+          await tx.assistantPendingAction.create({
+            data: {
+              id: data.opKey, tenantId: scheduleTenant, userId: user.id, card: { kind: "confirm_key", what: "a logged call" },
+              confirmedAt: now, completedAt: now, expiresAt: new Date(now.getTime() + LOGGED_CALL_KEY_KEPT_MS),
+            },
+          });
+          return { ok: true } as const;
+        }).catch((error: unknown) => {
+          if ((error as { code?: string } | null)?.code === "P2002") return { repeated: true } as const;
+          throw error;
+        });
+        if ("repeated" in written) return { ok: true, repeated: true };
+        if ("conflict" in written && written.conflict) {
+          return { ok: false, error: `${availabilityConflictMessage(written.conflict)} Nothing was saved — pick another follow-up time and save again.` };
         }
+        const page = leadId ? `/leads/${leadId}` : `/contacts/${contactId}`;
         await logAudit({
           action: "activity.logged",
           summary: `Logged a ${data.type === "call" ? "call" : "visit"}: “${summary}”`,
@@ -721,19 +775,9 @@ export async function logVoiceDebrief(data: {
           contactId,
           user,
         });
-        const page = leadId ? `/leads/${leadId}` : `/contacts/${contactId}`;
-        if (data.followUpDate) {
-          const followUp = await scheduleFollowUpBody({
-            leadId,
-            contactId,
-            type: "call",
-            when: data.followUpDate.includes("T") ? data.followUpDate : `${data.followUpDate}T09:00`,
-            summary: data.nextStep?.trim() || undefined,
-          });
-          if (!followUp.ok) {
-            revalidatePath(page);
-            return { ok: false, error: `Saved the ${data.type}, but the follow-up wasn't booked: ${followUp.error}` };
-          }
+        if (followUpAt) {
+          await logAudit({ action: "activity.scheduled", summary: `Scheduled call: “${followUpSummary}” (next step)`, leadId, contactId, user });
+          revalidatePath("/calendar");
         }
         revalidatePath(page);
         revalidatePath("/activities");

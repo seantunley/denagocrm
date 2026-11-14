@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { micRequest } from "@/lib/micRequest";
 
 /** Long enough for a call debrief; short enough to keep uploads small. */
 export const MAX_RECORDING_SECONDS = 180;
@@ -39,16 +40,34 @@ export function useVoiceRecorder(onDone: (audio: Blob) => void, options: Recorde
     () => false,
   );
 
+  // The permission prompt, cancellable (lib/micRequest): Stop, Cancel and unmount void a request still waiting.
+  const [mic] = useState(() => micRequest(() => navigator.mediaDevices.getUserMedia({ audio: true })));
+  const [waiting, setWaiting] = useState(false);
+  // Set on unmount: a recording cut short by leaving the page is dropped, never sent.
+  const gone = useRef(false);
+
+  /** Stop recording — or, while the permission prompt is still open, stop it from ever starting. Also Cancel. */
   const stop = useCallback(() => {
+    mic.cancel();
+    setWaiting(false);
     if (timer.current) clearInterval(timer.current);
     timer.current = null;
     if (recorder.current && recorder.current.state !== "inactive") recorder.current.stop();
-  }, []);
+  }, [mic]);
 
   const start = useCallback(async () => {
+    // No overlapping starts: already recording, or a request already waiting.
+    if (recorder.current?.state === "recording" || mic.waiting()) return;
     setError(null);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      setWaiting(true);
+      const stream = await mic.start();
+      setWaiting(false);
+      // Cancelled (or unmounted) while the prompt was open: its microphone is already off. Nothing starts.
+      if (!stream || gone.current) {
+        stream?.getTracks().forEach((track) => track.stop());
+        return;
+      }
       const chunks: Blob[] = [];
       const { maxSeconds = MAX_RECORDING_SECONDS, bitsPerSecond } = opts.current;
       const rec = new MediaRecorder(stream, bitsPerSecond ? { audioBitsPerSecond: bitsPerSecond } : undefined);
@@ -59,7 +78,7 @@ export function useVoiceRecorder(onDone: (audio: Blob) => void, options: Recorde
         stream.getTracks().forEach((track) => track.stop());
         setRecording(false);
         const audio = new Blob(chunks, { type: rec.mimeType || "audio/webm" });
-        if (audio.size) done.current(audio);
+        if (audio.size && !gone.current) done.current(audio);
       };
       recorder.current = rec;
       rec.start();
@@ -72,14 +91,22 @@ export function useVoiceRecorder(onDone: (audio: Blob) => void, options: Recorde
         });
       }, 1000);
     } catch (error) {
+      setWaiting(false);
       setError(microphoneError(error));
     }
+  }, [mic, stop]);
+
+  // Leaving the page must release the microphone — a recording under way, or a permission prompt still open — and
+  // send nothing.
+  useEffect(() => {
+    gone.current = false;
+    return () => {
+      gone.current = true;
+      stop();
+    };
   }, [stop]);
 
-  // Leaving the page mid-recording must release the microphone.
-  useEffect(() => stop, [stop]);
-
-  return { supported, recording, seconds, error, start, stop };
+  return { supported, recording, waiting, seconds, error, start, stop };
 }
 
 /** The Blob as a FormData field for a server action. */

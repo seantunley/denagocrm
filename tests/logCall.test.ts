@@ -72,6 +72,101 @@ test("Log a call is on the customer page as well as the deal, for those who may 
   assert.match(code("src/app/(app)/leads/[id]/page.tsx"), /<VoiceDebriefButton leadId=\{lead\.id\} \/>/);
 });
 
+// ── Review of #1117 ─────────────────────────────────────────────────────────────────────────────────────────────
+
+/** A permission prompt held open: resolve() grants, reject() refuses. */
+function deferredMic() {
+  const tracks = [{ live: true, stop() { this.live = false; } }];
+  let grant!: () => void;
+  let refuse!: (e: Error) => void;
+  const calls = { n: 0 };
+  const getMic = () => {
+    calls.n++;
+    return new Promise<{ getTracks(): typeof tracks }>((resolve, reject) => {
+      grant = () => resolve({ getTracks: () => tracks });
+      refuse = reject;
+    });
+  };
+  return { tracks, getMic, calls, grant: () => grant(), refuse: (e: Error) => refuse(e) };
+}
+
+test("Cancel while the permission prompt is open: granted afterwards, the microphone goes straight off and nothing starts", async () => {
+  const { micRequest } = await import("../src/lib/micRequest");
+  const prompt = deferredMic();
+  const mic = micRequest(prompt.getMic);
+  const started = mic.start();
+  assert.equal(mic.waiting(), true, "waiting for permission");
+  mic.cancel(); // Cancel, Stop or unmount — the hook calls the same cancel for each
+  assert.equal(mic.waiting(), false);
+  prompt.grant();
+  assert.equal(await started, null, "nothing to record with");
+  assert.equal(prompt.tracks[0].live, false, "no live microphone track");
+});
+
+test("a refusal after Cancel is nobody's error; one request at a time; a fresh start after Cancel works", async () => {
+  const { micRequest } = await import("../src/lib/micRequest");
+  const refused = deferredMic();
+  const mic = micRequest(refused.getMic);
+  const first = mic.start();
+  assert.equal(await mic.start(), null, "a second start while one waits is ignored");
+  assert.equal(refused.calls.n, 1, "never a second prompt");
+  mic.cancel();
+  refused.refuse(new Error("NotAllowedError"));
+  assert.equal(await first, null);
+
+  const granted = deferredMic();
+  const again = micRequest(granted.getMic);
+  const live = again.start();
+  granted.grant();
+  const stream = await live;
+  assert.ok(stream && granted.tracks[0].live, "not cancelled: the microphone is handed over");
+});
+
+test("the shared recorder (every caller: Log a call, the DAX chat mic) cancels a waiting prompt on Stop, Cancel and unmount", () => {
+  const hook = code("src/components/useVoiceRecorder.ts");
+  assert.match(hook, /const \[mic\] = useState\(\(\) => micRequest\(\(\) => navigator\.mediaDevices\.getUserMedia\(\{ audio: true \}\)\)\);/);
+  assert.doesNotMatch(hook, /await navigator\.mediaDevices\.getUserMedia/, "never a request that can't be cancelled");
+  const stop = hook.slice(hook.indexOf("const stop = useCallback("), hook.indexOf("const start = useCallback("));
+  assert.match(stop, /mic\.cancel\(\);/);
+  const start = hook.slice(hook.indexOf("const start = useCallback("), hook.indexOf("// Leaving the page must release"));
+  assert.match(start, /if \(recorder\.current\?\.state === "recording" \|\| mic\.waiting\(\)\) return;/, "no overlapping starts");
+  assert.ok(start.indexOf("if (!stream || gone.current)") < start.indexOf("new MediaRecorder("), "cancelled or unmounted: no recorder");
+  assert.match(hook, /return \(\) => \{\s*gone\.current = true;\s*stop\(\);\s*\};/, "unmount: cancel, and send nothing");
+  assert.match(hook, /if \(audio\.size && !gone\.current\) done\.current\(audio\);/);
+  const button = code("src/components/VoiceDebriefButton.tsx");
+  assert.match(button, /Waiting for microphone permission…/);
+  assert.match(button, /const cancel = \(\) => \{ voice\.stop\(\); setMode\(null\); setError\(null\); \};/);
+  assert.match(code("src/components/AssistantChat.tsx"), /onClick=\{voice\.recording \|\| voice\.waiting \? voice\.stop : voice\.start\}/);
+});
+
+test("saving a call is all or nothing, once: checked first, one transaction, its key spent with it", () => {
+  const actions = code("src/app/actions/activities.ts");
+  const body = actions.slice(actions.indexOf("export async function logVoiceDebrief"), actions.indexOf("export async function cancelActivity"));
+  const firstWrite = body.indexOf("await prisma.$transaction(async (tx) => {");
+  assert.ok(firstWrite > 0, "one interactive transaction");
+  assert.doesNotMatch(body, /prisma\.\$transaction\(\[/, "never the array form (it throws on the scoped client)");
+  assert.ok(body.indexOf("followUpDueDateError(followUpAt)") < firstWrite, "the follow-up's time is checked before anything is written");
+  assert.ok(body.indexOf("assistantPendingAction.findFirst({ where: { id: data.opKey") < firstWrite, "a repeat returns before writing");
+  const tx = body.slice(firstWrite, body.indexOf("}).catch("));
+  assert.ok(tx.indexOf("findStaffAvailabilityConflict(") < tx.indexOf("tx.activity.create"), "a clash returns before the first write");
+  for (const write of ["tx.activity.create", "tx.communication.create", "tx.assistantPendingAction.create"]) assert.ok(tx.includes(write), write);
+  assert.doesNotMatch(tx, /prisma\.(activity|communication)\./, "every write on the transaction");
+  assert.doesNotMatch(body, /scheduleFollowUpBody\(/, "the follow-up is booked inside the transaction, not after it");
+  assert.match(body, /code === "P2002"\) return \{ repeated: true \}/, "two Saves at once: the second is the first's repeat");
+  // Both callers send one key per draft / card.
+  assert.match(code("src/components/VoiceDebriefButton.tsx"), /opKey: `qk_\$\{crypto\.randomUUID\(\)\.replace\(\/-\/g, ""\)\}`/);
+  const run = code("src/app/actions/assistant.ts");
+  assert.match(run.slice(run.indexOf('case "log_call": {')), /opKey: card\.confirmKey,/);
+});
+
+test("log_call with no activity is a call — normalised where the card is made (review of #1117)", () => {
+  const build = code("src/lib/crmAssistant.ts");
+  const card = build.slice(build.indexOf('if (p.type === "log_call") {'), build.indexOf('if (p.type === "follow_up" || p.type === "meeting") {'));
+  assert.match(card, /const activity = p\.activity === "meeting" \? "meeting" : "call";/);
+  assert.doesNotMatch(card, /p\.activity(?! === "meeting")/, "nothing else reads the raw value");
+  assert.match(card, /confirmKey: `qk_\$\{randomBytes\(16\)\.toString\("hex"\)\}`/);
+});
+
 test("a transcript of the call itself is written up like a debrief", () => {
   assert.match(DEBRIEF_INSTRUCTIONS, /a transcript of the call itself/);
   const draft = parseDebrief('{"summary":"Marcel: XL in white","notes":["Wants finance"],"nextStep":"Call back","followUpDays":3}', "Hi Marcel…", "2026-11-14");
