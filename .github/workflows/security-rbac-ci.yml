@@ -407,6 +407,12 @@ jobs:
         # number or quote view from lost_alive; one with quote access, and the owner, do; the other workspace nothing.
         run: npm run test:assistant-lost-alive
 
+      - name: DAX targets and competitors -- the Targets page's counts, each held to its page's permission
+        # Sean, 2026-11-14: "DAX must have knowledge of those things, permission based". Targets need a reports
+        # permission and use lib/targetProgress (the page's own counts); competitors need competitors.view; the other
+        # workspace sees none of A's.
+        run: npm run test:assistant-targets
+
       - name: DAX custom fields -- only on records the person may open, only fields the page would show
         # Sean, 2026-11-14: "DAX must have knowledge of those things, permission based". A rep sees their lead's
         # custom fields, never a colleague's; switched-off and "Show only when"-hidden fields stay hidden; a link
@@ -756,6 +762,11 @@ jobs:
       - name: Assistant -- a report PDF only from an answer in this workspace
         run: npm run test:assistant-report-tenant
 
+      # Every signing request for DAX (Sean, 2026-11-14), held to the Signatures page's rule: only requests for
+      # records the person may open, a delivery note only with its quote, nothing without signing.view, no tokens.
+      - name: Assistant -- signing requests, only those the person may open
+        run: npm run test:assistant-signing
+
       # "Why did this happen?": a record's history with the cause of each event,
       # to the people who may open the record — journeys only with Marketing on
       # and journeys.manage, the chatbot only with Automation on and inbox
@@ -768,6 +779,12 @@ jobs:
       # never acted on, never swapped); another workspace's never appears. Writes nothing.
       - name: Assistant -- "the fourth one" is re-checked against what the person may open now
         run: npm run test:assistant-listed
+
+      # Sean, 2026-11-14: "DAX must have knowledge of those things, permission based". test_drives is held to the
+      # /test-drives page's own rule: Automotive on, activities.view, its booking scope; a won deal named only when the
+      # person may open it; never a licence number, emergency contact or incident report; the other workspace nothing.
+      - name: DAX test drives -- held to the test-drives page's own rule
+        run: npm run test:assistant-test-drives
 
       # A scheduled briefing going to a linked phone: what is waiting, claimed
       # before it is sent and released when it could not be, the template nudge
