@@ -193,6 +193,8 @@ const CITE = /\[\[\s*(\/[^\]\s]{1,200})\s*\]\]/g;
 const CLAUSE = /[,;]\s+|\s+(?:and|but|while|whereas)\s+/i;
 /** A delivery that happened, as opposed to one booked or promised. */
 const DELIVERED = /\b(?:was|were|got|been)\s+delivered\b|\bdelivered\s+(?:on|at)\b/i;
+/** A payment that isn't the deposit ("…and paid the balance"). */
+const OTHER_PAYMENT = /\b(balance|invoice|fees?|total|amount|rest|instal?ments?)\b/i;
 
 /** "the email was delivered" / "she read your email" — the CRM can only know accepted, bounced or opened. */
 const EMAIL_CLAIM = /\be-?mail\w*\b[^.,;:!?]{0,40}?\b(delivered|read|received)\b|\b(read|received)\b[^.,;:!?]{0,25}?\be-?mail/i;
@@ -256,19 +258,37 @@ export function unsupportedFigures(answer: string, sources: unknown[]): string[]
     for (const m of text.matchAll(QUOTE)) if (!quotes.has(m[1])) flagged.push(`Q-${m[1]}`);
     if (free) continue;
 
-    // Said without "quote", a claim is checked only against a quote whose lookup carried that fact at all.
-    const depositBound = saysQuote ? bound : bound.filter((r) => r.depositKnown);
-    if (depositBound.length && /\bdeposit\b/i.test(text) && /\bpaid\b/i.test(text) && !NEGATED.test(text) && !depositBound.some((r) => r.paid)) {
-      flagged.push(`deposit paid (not on ${on(depositBound)})`);
+    // Deposit and delivery claims, PER OWNER (review of #1116): "Werner has paid his deposit and Anna has paid hers"
+    // is two claims, each checked against its own customer's quote, with its own negation. A clause naming no record
+    // belongs to the claim before it ("Anna's deposit, R10 000, is paid" is one claim); a sentence that opens without
+    // one falls back to the sentence's record only when that is a single quote — never a guess between several.
+    const segments: { text: string; quotes: typeof bound }[] = [];
+    for (const clause of sentence.split(CLAUSE).map(quotesBy)) {
+      if (clause.quotes.length || !segments.length) segments.push({ text: clause.text, quotes: clause.quotes });
+      else segments[segments.length - 1].text += ` ${clause.text}`;
     }
-    // Dates written after "deliver…": "signed 3 Oct, delivery not booked" names no delivery date.
-    const deliverAt = text.search(/\bdeliver/i);
-    const dates = deliverAt < 0 ? [] : datesIn(text.slice(deliverAt));
-    const deliveryBound = saysQuote ? bound : bound.filter((r) => r.delivery.size > 0);
-    // "Was delivered on 4 Nov" says it HAPPENED: only a delivered date supports it, never one merely booked.
-    const done = DELIVERED.test(text) && !NEGATED.test(text);
-    if (deliveryBound.length && dates.length && !dates.some((d) => deliveryBound.some((r) => (done ? r.delivered : r.delivery).has(d.key)))) {
-      flagged.push(`${done ? "delivered" : "delivery"} ${dates[0].written} (not on ${on(deliveryBound)})`);
+    let depositSaid = false, deliverySaid = false, doneSaid = false;
+    for (const seg of segments) {
+      const segBound = seg.quotes.length ? seg.quotes.filter((r) => bound.includes(r)) : bound.length === 1 ? bound : [];
+      const negated = NEGATED.test(seg.text);
+      // "…and Anna has paid hers": the deposit named earlier in the sentence — unless this part pays something else.
+      depositSaid ||= /\bdeposit\b/i.test(seg.text);
+      const paidClaim = /\bpaid\b/i.test(seg.text) && !negated && depositSaid && (/\bdeposit\b/i.test(seg.text) || !OTHER_PAYMENT.test(seg.text));
+      // Only against a quote whose lookup said anything about its deposit: missing data is never a false flag.
+      const depositBound = segBound.filter((r) => r.depositKnown);
+      if (paidClaim && depositBound.length && !depositBound.some((r) => r.paid)) flagged.push(`deposit paid (not on ${on(depositBound)})`);
+
+      // Dates after "deliver…" ("signed 3 Oct, delivery not booked" names no delivery date) — or, once delivery has
+      // been the subject, every date of a later part ("Werner's was delivered on 31 Oct and Anna's on 4 Nov").
+      const deliverAt = seg.text.search(/\bdeliver/i);
+      const dates = deliverAt >= 0 ? datesIn(seg.text.slice(deliverAt)) : deliverySaid ? datesIn(seg.text) : [];
+      // "Was delivered on 4 Nov" says it HAPPENED: only a delivered date supports it, never one merely booked.
+      const done = (deliverAt >= 0 ? DELIVERED.test(seg.text) : doneSaid) && !negated;
+      if (deliverAt >= 0) { deliverySaid = true; doneSaid = DELIVERED.test(seg.text); }
+      const deliveryBound = segBound.filter((r) => r.delivery.size > 0);
+      if (!negated && deliveryBound.length && dates.length && !dates.some((d) => deliveryBound.some((r) => (done ? r.delivered : r.delivery).has(d.key)))) {
+        flagged.push(`${done ? "delivered" : "delivery"} ${dates[0].written} (not on ${on(deliveryBound)})`);
+      }
     }
     if (/\b(in stock|available)\b/i.test(text) && !NEGATED.test(text)) {
       const units = records.stock.filter((u) => cites.has(u.link) || (u.unit && word(u.unit).test(text)) || (u.product.length >= 3 && word(u.product).test(text)));

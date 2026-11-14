@@ -119,6 +119,26 @@ test("delivered (done) and delivery booked (promised) are different facts", () =
   assert.deepEqual(unsupportedFigures("Anna's delivery is on 9 Dec.", [quotes]), []);
 });
 
+test("review of #1116: deposit and delivery claims are checked per owner, with negation scoped to its own part", () => {
+  const annaDelivered = [{ quote: "Q-1041", link: "/quotes/anna", customer: "Anna Jacobs", deposit: "paid 2026-10-20", deliveryDate: "2026-11-04", delivered: "2026-11-04" }];
+  // 1. Two paid claims, only Anna's true: Anna's paid deposit no longer vouches for Werner's.
+  assert.deepEqual(unsupportedFigures("Werner has paid his deposit and Anna has paid hers.", [brief, deliveries]), ["deposit paid (not on Q-1040)"]);
+  assert.deepEqual(unsupportedFigures("Anna has paid her deposit and Werner has paid his.", [brief, deliveries]), ["deposit paid (not on Q-1040)"], "either order");
+  // 2. Two delivered claims, only Anna's true: Werner's is booked, not delivered.
+  assert.deepEqual(unsupportedFigures("Werner's cart was delivered on 31 Oct and Anna's was delivered on 4 Nov.", [brief, annaDelivered]), ["delivered 31 Oct (not on Q-1040)"]);
+  assert.deepEqual(unsupportedFigures("Werner's cart was delivered on 31 Oct and Anna's on 4 Nov.", [brief, annaDelivered]), ["delivered 31 Oct (not on Q-1040)"], "the verb carried into the second part");
+  assert.deepEqual(unsupportedFigures("Werner's delivery is booked for 31 Oct and Anna's was delivered on 4 Nov.", [brief, annaDelivered]), [], "both true");
+  // 3. A negated second part doesn't silence the first.
+  assert.deepEqual(unsupportedFigures("Werner has paid his deposit and Anna has not paid hers.", [brief, deliveries]), ["deposit paid (not on Q-1040)"]);
+  assert.deepEqual(unsupportedFigures("Anna has paid her deposit but Werner hasn't paid his.", [brief, deliveries]), [], "the negated part is not a claim");
+  // One claim across several clauses still belongs to its owner.
+  assert.deepEqual(unsupportedFigures("Werner's deposit, R 10 000, is paid.", [brief, deliveries]), ["R 10 000 (not on Q-1040)", "deposit paid (not on Q-1040)"]);
+  // A part naming nobody, in a sentence about several quotes: no guess.
+  assert.deepEqual(unsupportedFigures("The deposit is paid, for Werner and Anna.", [brief, deliveries]), []);
+  // Missing lookup data is never a false flag, even when "quote" is said.
+  assert.deepEqual(unsupportedFigures("Anna's quote deposit is paid.", [quotes]), []);
+});
+
 test("end to end, as the answer is checked: evidence shaped like the live call (question, history, lookups) → the note", () => {
   // crmAssistant: evidenceNow = [question, ...history questions, ...observations' data]; then unsupportedNote.
   const evidenceNow = ["Compare Werner's and Anna's quotes", "How are my deals?", quotes, deliveries];
