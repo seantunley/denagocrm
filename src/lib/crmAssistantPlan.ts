@@ -224,6 +224,19 @@ export const campaignsArgs = z.object({ from: isoDay.optional(), to: isoDay.opti
 export const forecastArgs = z.object({ period: z.string().trim().regex(/^\d{4}-\d{2}$/).optional() }).strict();
 export const surveysArgs = z.object({ from: isoDay.optional(), to: isoDay.optional(), survey: name.optional() }).strict();
 export const referralsArgs = z.object({ from: isoDay.optional(), to: isoDay.optional(), status: z.enum(["pending", "earned", "redeemed"]).optional() }).strict();
+/** INVOICES (assistantInvoicesLookup) — what /invoices holds, held to its own rule (Sean, 2026-11-14). */
+export const invoicesArgs = z
+  .object({
+    status: z.enum(["unpaid", "paid", "any"]).optional(),
+    customer: name.optional(),
+    number: z.string().trim().max(30).optional(),
+    from: isoDay.optional(),
+    to: isoDay.optional(),
+    olderThanDays: days.optional(),
+    xero: z.enum(["not_sent", "sent", "excluded"]).optional(),
+    limit: upTo(60).optional(),
+  })
+  .strict();
 /** Every signing request — delivery notes, contracts, documents, quotes (assistantSigningLookup). Up to 60 for a full list. */
 export const signingArgs = z
   .object({
@@ -314,6 +327,7 @@ export const assistantStep = z.discriminatedUnion("tool", [
   z.object({ tool: z.literal("forecast"), args: forecastArgs.default({}) }),
   z.object({ tool: z.literal("surveys"), args: surveysArgs.default({}) }),
   z.object({ tool: z.literal("referrals"), args: referralsArgs.default({}) }),
+  z.object({ tool: z.literal("invoices"), args: invoicesArgs.default({}) }),
   z.object({ tool: z.literal("signing"), args: signingArgs.default({}) }),
   z.object({ tool: z.literal("targets"), args: targetsArgs.default({}) }),
   z.object({ tool: z.literal("competitors"), args: competitorsArgs.default({}) }),
@@ -394,6 +408,7 @@ export function planInstructions(ctx: PlanContext): string {
     '- forecast: {"period":"YYYY-MM" (default this month)} — the SALES FORECAST for deals expected to close that month: open, weighted, commit, best case and pipeline totals in rands, and the biggest deals with probability, category, close date, stage and owner. Run it for "what\'s the forecast for this month", "what are we committing for December".',
     '- surveys: {"from":"YYYY-MM-DD","to":"YYYY-MM-DD","survey":"<words of a survey title>"} — CUSTOMER SURVEYS sent in that period (default the last 30 days): per survey, sent, answered, response rate, NPS or average score, and the unhappy answers with what the customer said. Run it for "how are our NPS scores", "any unhappy customers in the surveys".',
     '- referrals: {"from":"YYYY-MM-DD","to":"YYYY-MM-DD","status":"pending|earned|redeemed"} — REFERRALS in that period (default the last 90 days): totals pending / earned-not-redeemed / redeemed, the top referrers, and the latest referrals. Run it for "how many referrals this quarter", "who refers the most", "which rewards are still owed".',
+    '- invoices: {"status":"unpaid|paid|any" (default unpaid),"customer":"<customer or fleet name>","number":"<INV-000042 or a Xero number>","from":"YYYY-MM-DD","to":"YYYY-MM-DD" (by invoice date),"olderThanDays":<days since invoiced>,"xero":"not_sent|sent|excluded","limit":<1-60>} — ISSUED INVOICES as the Invoices page shows them: the TOTAL that match and what is OUTSTANDING per currency, then each with its quote, customer, invoice date, days since invoiced, total, received, owing, delivery and its Xero copy (number, status, when sent). Invoices have NO due date in the CRM: never call one "overdue" — for "what\'s overdue" use olderThanDays (say "invoiced more than N days ago and still owing"). Run it for "which invoices are unpaid", "how much is outstanding", "has Marcel\'s invoice gone to Xero".',
     '- signing: {"status":"waiting|viewed|completed|declined|expired|any" (default waiting — sent, not yet finished; viewed = opened by someone who has not signed),"customer":"<customer or signer name>","title":"<words of the document title>","from":"YYYY-MM-DD","to":"YYYY-MM-DD" (when it was sent),"limit":<1-60>} — EVERY SIGNING REQUEST, not only quotes: delivery notes, contracts, custom documents and quotes. The TOTAL that match, then each with its title, what it is for (delivery note for Q-…, quote Q-…, job card, document), status, when sent, who has signed, who has not (and whether they opened it), the last reminder and a link. Run it for "who still has to sign their delivery note", "which contracts are waiting", "did Marcel sign".',
     '- targets: {"period":"YYYY-MM" (default this month)} — the business\'s MONTHLY TARGETS (new leads, sales value, deliveries, services) against what was done, with the gap still needed and the percentage, as the Targets page counts them (sales = deals WON in the month). Run it for "are we on target this month", "how far are we from the sales target". Targets are for the whole business, not per person — say so if asked about one person\'s target.',
     '- competitors: {"name":"<competitor>"} — COMPETITOR INTELLIGENCE: the competitors being watched, their tier, notes and the changes found on their websites waiting for review; with a name, its recent changes and latest research brief. Run it for "what are our competitors up to", "anything new from <competitor>". It is not linked to deals.',
@@ -562,6 +577,7 @@ const LOOKUP_STATUS: Record<string, string> = {
   forecast: "Working out the forecast",
   surveys: "Reading the survey results",
   referrals: "Checking referrals",
+  invoices: "Checking invoices",
   signing: "Checking who has signed",
   targets: "Checking the targets",
   competitors: "Checking competitor intelligence",
