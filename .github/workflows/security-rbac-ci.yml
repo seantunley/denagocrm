@@ -762,6 +762,11 @@ jobs:
       - name: Assistant -- a report PDF only from an answer in this workspace
         run: npm run test:assistant-report-tenant
 
+      # Every signing request for DAX (Sean, 2026-11-14), held to the Signatures page's rule: only requests for
+      # records the person may open, a delivery note only with its quote, nothing without signing.view, no tokens.
+      - name: Assistant -- signing requests, only those the person may open
+        run: npm run test:assistant-signing
+
       # "Why did this happen?": a record's history with the cause of each event,
       # to the people who may open the record — journeys only with Marketing on
       # and journeys.manage, the chatbot only with Automation on and inbox
