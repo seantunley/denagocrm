@@ -786,6 +786,12 @@ jobs:
       - name: DAX test drives -- held to the test-drives page's own rule
         run: npm run test:assistant-test-drives
 
+      # Sean, 2026-11-14: "no search across past conversations, and no rename or delete". Search finds only the
+      # person's own live conversations; rename/delete writes can't reach a colleague's or another workspace's; a
+      # deleted conversation leaves the list, the picker and what DAX recalls; the purge removes it after 60 days.
+      - name: DAX conversations -- search, rename and delete, only your own
+        run: npm run test:assistant-conversation-manage
+
       # A scheduled briefing going to a linked phone: what is waiting, claimed
       # before it is sent and released when it could not be, the template nudge
       # claimed once. No WhatsApp connection here, so nothing is ever sent.

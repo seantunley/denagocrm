@@ -23,10 +23,19 @@ function softDeletedByActions(): Set<string> {
   return found;
 }
 
+/**
+ * Restorable, but NOT from the workspace Trash: a DAX conversation is private to its person — not even the owner may
+ * see it — so it waits under "Recently deleted" on that person's own Ask page (actions/assistantConversations.ts).
+ */
+const OWN_RESTORE: Record<string, string> = { assistantConversation: "src/app/actions/assistantConversations.ts" };
+
 test("every model an action soft-deletes can be restored from Trash", () => {
   const deleted = softDeletedByActions();
   assert.ok(deleted.size >= 10, `the scan itself found only: ${[...deleted].join(", ")}`);
-  const missing = [...deleted].filter((m) => !restorable.has(m));
+  for (const [model, file] of Object.entries(OWN_RESTORE)) {
+    assert.match(read(file), new RegExp(`prisma\\.${model}\\.updateMany\\(\\{[^;]*deletedAt: \\{ not: null \\}[^;]*data: \\{ deletedAt: null`), `${model} has its own restore`);
+  }
+  const missing = [...deleted].filter((m) => !restorable.has(m) && !(m in OWN_RESTORE));
   assert.deepEqual(missing, [], `soft-deleted but not restorable: ${missing.join(", ")}`);
 });
 

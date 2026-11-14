@@ -22,7 +22,7 @@ import { getCompanyProfile } from "./companyProfile";
 import { searchBotKnowledge } from "./botKnowledge";
 import { getEnabledModuleIds, isModuleEnabled } from "./modules/enabled";
 import { ownedWriteTenantId } from "./tenantWrite";
-import { afterAnswer, conversationTurns, pickConversation } from "./assistantConversation";
+import { afterAnswer, conversationTurns, liveTurnsWhere, pickConversation } from "./assistantConversation";
 import { runAfterResponse } from "./afterResponse";
 import { isCustomerSigner } from "./signing/quoteMirror";
 import { firstCustomerView, memoCustomer } from "./signing/customerView";
@@ -1193,6 +1193,8 @@ async function recall(user: User, raw: z.infer<typeof recallArgs>): Promise<Tool
      WHERE "tenantId" = ${ownedWriteTenantId()}
        AND "userId" = ${user.id}
        AND "createdAt" >= ${since}
+       -- Never from a conversation its person deleted (assistantConversation.liveTurnsWhere, as SQL).
+       AND NOT EXISTS (SELECT 1 FROM "AssistantConversation" c WHERE c."id" = "AssistantTurn"."conversationId" AND c."deletedAt" IS NOT NULL)
        AND (
          (cardinality(${words}::text[]) = 0 AND cardinality(${refs}::text[]) = 0)
          OR "refs" && ${refs}::text[]
@@ -1204,19 +1206,20 @@ async function recall(user: User, raw: z.infer<typeof recallArgs>): Promise<Tool
      LIMIT ${RECALL_CANDIDATES}`;
   const best = rankRecall(candidates, words, refs).slice(0, RECALL_MATCHES);
   if (!best.length) return { truncated: false, rows: [], data: [{ note: "Nothing in this person's last 30 days of conversations matches." }] };
-  // The turn before and after each match, same South African day.
+  // The turn before and after each match, same South African day — never one from a deleted conversation.
+  const live = await liveTurnsWhere(ownedWriteTenantId(), user.id);
   const around = await Promise.all(
     best.map((t) => {
       const day = dateKey(t.createdAt);
       const dayStart = new Date(`${day}T00:00:00+02:00`);
       return Promise.all([
         prisma.assistantTurn.findFirst({
-          where: { userId: user.id, tenantId: ownedWriteTenantId(), createdAt: { gte: dayStart, lt: t.createdAt } },
+          where: { userId: user.id, tenantId: ownedWriteTenantId(), createdAt: { gte: dayStart, lt: t.createdAt }, AND: [live] },
           orderBy: { createdAt: "desc" },
           select: { question: true, answer: true },
         }),
         prisma.assistantTurn.findFirst({
-          where: { userId: user.id, tenantId: ownedWriteTenantId(), createdAt: { gt: t.createdAt, lt: new Date(dayStart.getTime() + DAY) } },
+          where: { userId: user.id, tenantId: ownedWriteTenantId(), createdAt: { gt: t.createdAt, lt: new Date(dayStart.getTime() + DAY) }, AND: [live] },
           orderBy: { createdAt: "asc" },
           select: { question: true, answer: true },
         }),
@@ -1848,8 +1851,10 @@ export function describePerson(p: { name: string; jobTitle: string | null; sees:
 
 /** This person's turns in the current conversation (the last few hours), oldest first. */
 async function recentTurns(userId: string): Promise<PriorTurn[]> {
+  const live = await liveTurnsWhere(ownedWriteTenantId(), userId);
   const turns = await prisma.assistantTurn.findMany({
-    where: { userId, createdAt: { gte: new Date(Date.now() - CONVERSATION_WINDOW_MS) } },
+    // Never from a conversation its person deleted.
+    where: { userId, createdAt: { gte: new Date(Date.now() - CONVERSATION_WINDOW_MS) }, AND: [live] },
     orderBy: { createdAt: "desc" },
     take: 6,
     // state: the working memory each answer wrote (parsed and cleaned before
