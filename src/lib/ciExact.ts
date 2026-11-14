@@ -96,7 +96,7 @@ function quoteIdentifier(name: string): string {
 export async function ciExactIds(
   target: CiExactTarget,
   value: string,
-  opts: { client?: RawCapableClient; limit?: number } = {},
+  opts: { client?: RawCapableClient; limit?: number; tenantId?: string } = {},
 ): Promise<string[]> {
   const { table, column, fold } = TARGETS[target];
   const client = opts.client ?? basePrisma;
@@ -113,7 +113,7 @@ export async function ciExactIds(
 
   const rows = await client.$queryRaw<{ id: string }[]>(Prisma.sql`
     SELECT "id" FROM ${Prisma.raw(quoteIdentifier(table))}
-    WHERE ${match}
+    WHERE ${match}${opts.tenantId ? Prisma.sql` AND "tenantId" = ${opts.tenantId}` : Prisma.empty}
     ORDER BY "createdAt" ASC, "id" ASC
     LIMIT ${limit}
   `);
@@ -132,7 +132,7 @@ export async function ciExactIds(
 export async function ciExactIdFilter(
   target: CiExactTarget,
   value: string,
-  opts: { client?: RawCapableClient; limit?: number } = {},
+  opts: { client?: RawCapableClient; limit?: number; tenantId?: string } = {},
 ): Promise<{ id: { in: string[] } }> {
   return { id: { in: await ciExactIds(target, value, opts) } };
 }

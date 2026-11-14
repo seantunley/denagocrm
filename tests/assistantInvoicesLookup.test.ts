@@ -4,10 +4,11 @@ import { readFileSync } from "node:fs";
 import { parseSteps, invoicesArgs } from "../src/lib/crmAssistantPlan";
 import { parseInvoiceNumber } from "../src/lib/invoiceNumber";
 
-test("an invoice number names ONE invoice: the CRM's exactly, else a whole Xero reference, else none (review of #1109)", () => {
-  assert.deepEqual(parseInvoiceNumber("INV-000123"), { crm: 123 });
-  assert.deepEqual(parseInvoiceNumber("inv123"), { crm: 123 });
-  assert.deepEqual(parseInvoiceNumber("123"), { crm: 123 });
+test("an invoice number is the whole Xero reference, AND the CRM's own number when shaped like one, else none (review of #1109)", () => {
+  // A Xero number can be shaped INV-000123 too (re-review of #1109): both are asked.
+  assert.deepEqual(parseInvoiceNumber("INV-000123"), { xero: "INV-000123", crm: 123 });
+  assert.deepEqual(parseInvoiceNumber("inv123"), { xero: "inv123", crm: 123 });
+  assert.deepEqual(parseInvoiceNumber("123"), { xero: "123", crm: 123 });
   // Not the first run of digits: the whole reference, for Xero.
   assert.deepEqual(parseInvoiceNumber("XERO-2026-00142"), { xero: "XERO-2026-00142" });
   assert.deepEqual(parseInvoiceNumber("XINV-ABC"), { xero: "XINV-ABC" });
@@ -42,7 +43,10 @@ test("invoices are held to the Invoices page's own rule, and read only", () => {
   assert.doesNotMatch(lib, /reference: true|bankAccount|bankName|accountNumber|iban|xeroDepositPaymentId|accessToken|refreshToken/i);
   assert.doesNotMatch(lib, /\.(create|update|upsert|delete)(Many)?\(|logError|console\./);
   // A Xero reference: exact and case-folded via ciExact (never ILIKE), ANDed into the guarded query.
-  assert.match(lib, /await ciExactIdFilter\("quoteXeroInvoiceNumber", asked\.xero\)/);
+  // …in THIS workspace before its row cap, and OR'd with the CRM number when there is one.
+  assert.match(lib, /await ciExactIdFilter\("quoteXeroInvoiceNumber", asked\.xero, \{ tenantId \}\)/);
+  assert.match(lib, /\{ OR: \[\{ invoiceNumber: asked\.crm \}, byXero\] \}/);
+  assert.match(code("src/lib/ciExact.ts"), /AND "tenantId" = \$\{opts\.tenantId\}/);
   assert.match(code("src/lib/ciExact.ts"), /quoteXeroInvoiceNumber: \{ table: "Quote", column: "xeroInvoiceNumber", fold: "upper" \}/);
   assert.doesNotMatch(lib, /match\(\/\\d\+\/\)/, "never the first run of digits");
   // Ages and date filters in SA calendar days.

@@ -51,8 +51,11 @@ export async function invoicesLookup(user: PermissionUser, args: InvoicesArgs): 
   if (quoteIds !== null && quoteIds.length === 0) return note("There are no invoices this person can open.");
   const asked = args.number === undefined ? undefined : parseInvoiceNumber(args.number);
   if (asked === null) return note(`There is no invoice numbered "${args.number}" — that isn't an invoice number (INV-000123) or a Xero reference.`);
-  // Exact, whole, case-folded — ids from ciExact (never ILIKE), then ANDed into the guarded query below.
-  const byNumber = !asked ? null : "crm" in asked ? { invoiceNumber: asked.crm } : await ciExactIdFilter("quoteXeroInvoiceNumber", asked.xero);
+  // The whole text as a Xero number — exact, case-folded, in THIS workspace before its cap (ciExact, never ILIKE) —
+  // OR, when it is shaped like one, this CRM's own number. Either way ANDed into the guarded query below.
+  const byXero = asked ? await ciExactIdFilter("quoteXeroInvoiceNumber", asked.xero, { tenantId }) : null;
+  const byNumber = !asked || !byXero ? null : asked.crm === undefined ? byXero : { OR: [{ invoiceNumber: asked.crm }, byXero] };
+  const xeroIds = new Set(byXero?.id.in ?? []);
   const quotes = await prisma.quote.findMany({
     where: {
       tenantId,
@@ -111,6 +114,19 @@ export async function invoicesLookup(user: PermissionUser, args: InvoicesArgs): 
   const page = matches.slice(0, take);
   // Owing per currency, never added across currencies (currencyRules).
   const outstanding = formatTotals(totalsByCurrency(matches, (r) => ({ cents: r.owing, currency: r.quote.currency }), moneyFmt.currency), moneyFmt);
+  // How an asked-for number matched each invoice — and, when it names one invoice by CRM number and a DIFFERENT one by
+  // Xero number, say so and let the person choose rather than pick for them.
+  const matchedBy = (q: (typeof quotes)[number]) => {
+    if (!asked) return undefined;
+    const crm = asked.crm !== undefined && q.invoiceNumber === asked.crm;
+    const xero = xeroIds.has(q.id);
+    return crm && xero ? "CRM and Xero number" : crm ? "CRM invoice number" : "Xero invoice number";
+  };
+  const viaCrm = matches.filter((r) => asked?.crm !== undefined && r.quote.invoiceNumber === asked.crm);
+  const viaXero = matches.filter((r) => xeroIds.has(r.quote.id));
+  const ambiguous = viaCrm.length && viaXero.some((x) => !viaCrm.some((c) => c.quote.id === x.quote.id))
+    ? `"${args.number}" names more than one invoice: CRM invoice ${viaCrm.map((r) => `${formatInvoiceNumber(r.quote.invoiceNumber)} (Q-${r.quote.number})`).join(", ")}, and Xero invoice number on ${viaXero.map((r) => `${formatInvoiceNumber(r.quote.invoiceNumber)} (Q-${r.quote.number})`).join(", ")}. Show both and ask which one they mean.`
+    : undefined;
   const xeroOf = (q: (typeof quotes)[number]) =>
     q.xeroInvoiceId ? `in Xero${q.xeroInvoiceNumber ? ` as ${q.xeroInvoiceNumber}` : ""}, ${xeroStatusLabel(q.xeroStatus).toLowerCase()}${q.xeroSentAt ? `, sent ${saDay(q.xeroSentAt)}` : ""}`
       : q.xeroExcludedAt ? "marked not for Xero" : "not sent to Xero";
@@ -123,12 +139,14 @@ export async function invoicesLookup(user: PermissionUser, args: InvoicesArgs): 
         listed: page.length,
         outstanding,
         ...(asked && !matches.length ? { noInvoice: `No invoice numbered "${args.number}" that this person can open.` } : {}),
+        ...(ambiguous ? { ambiguous } : {}),
         note: "Invoices carry no due date in the CRM: 'days since invoiced' is the age, not days overdue. Owing = total less the deposit and payments recorded.",
       },
       ...page.map(({ quote, total, received, owing, who, issued, age }) => {
         const fmt = withCurrency(moneyFmt, quote.currency);
         return {
           invoice: formatInvoiceNumber(quote.invoiceNumber),
+          ...(asked ? { matchedBy: matchedBy(quote) } : {}),
           quote: `Q-${quote.number}`,
           link: `/quotes/${quote.id}`,
           customer: who,

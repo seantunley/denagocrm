@@ -102,6 +102,13 @@ async function main() {
     await invoice({ contactId: await num("Longercust"), createdById: a.ownerUserId, cents: 1_000_000, xeroNumber: `XERO-2026-${SFX}-2` });
     const short = await invoice({ contactId: await num("Shortcust"), createdById: a.ownerUserId, cents: 1_000_000, invoiceNumber: base });
     await invoice({ contactId: await num("Longcust"), createdById: a.ownerUserId, cents: 1_000_000, invoiceNumber: base * 10 + 1 });
+    // RE-REVIEW OF #1109: a Xero number shaped like a CRM one. Clashcust's Xero number is INV-<clash>, which is ALSO
+    // Ownnumcust's CRM number; Xeroonlycust's Xero number INV-<solo> is no CRM invoice's number.
+    const clash = 10_000_000 + crypto.randomInt(40_000_000);
+    const solo = 50_000_000 + crypto.randomInt(40_000_000);
+    await invoice({ contactId: await num("Clashcust"), createdById: a.ownerUserId, cents: 1_000_000, xeroNumber: `INV-${clash}` });
+    await invoice({ contactId: await num("Ownnumcust"), createdById: a.ownerUserId, cents: 1_000_000, invoiceNumber: clash });
+    await invoice({ contactId: await num("Xeroonlycust"), createdById: a.ownerUserId, cents: 1_000_000, xeroNumber: `INV-${solo}` });
     // REVIEW OF #1109, ages: invoiced 40 SA calendar days ago at 23:59 — later in the day than any report time.
     const saToday = new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Johannesburg" }).format(new Date());
     const fortyAgo = new Date(new Date(`${saToday}T23:59:00+02:00`).getTime() - 40 * 86_400_000);
@@ -150,6 +157,14 @@ async function main() {
     check("two CRM numbers sharing digits: only the exact one", exact[0].total === 1 && names(exact)[0] === "Shortcust", JSON.stringify(names(exact)));
     const paidByNumber = await run(A, ownerA, { number: String(yearXero.invoiceNumber) });
     check("asked by number, found whether paid or not (status defaults to any)", paidByNumber[0].total === 1);
+    type Matched = Row & { matchedBy?: string };
+    const xeroOnly = await run(A, ownerA, { number: `INV-${solo}` });
+    check("an INV-shaped Xero number with no CRM invoice of that number: found by its Xero number", xeroOnly[0].total === 1 && names(xeroOnly)[0] === "Xeroonlycust" && (xeroOnly[1] as Matched).matchedBy === "Xero invoice number", JSON.stringify(xeroOnly));
+    check("…and not called ambiguous", !("ambiguous" in (xeroOnly[0] as object)));
+    const both = await run(A, ownerA, { number: `INV-${clash}` });
+    const how = Object.fromEntries((both.slice(1) as Matched[]).map((r) => [r.customer?.split(" ")[0], r.matchedBy]));
+    check("one number, two invoices (CRM on one, Xero on another): BOTH shown, each saying how it matched", both[0].total === 2 && how.Ownnumcust === "CRM invoice number" && how.Clashcust === "Xero invoice number", JSON.stringify(how));
+    check("…and the answer says it's ambiguous rather than picking one", /names more than one invoice/.test(String((both[0] as Record<string, unknown>).ambiguous)), JSON.stringify(both[0]));
 
     console.log("\ninvoices — ages in SA calendar days (review of #1109)");
     const lateRow = (await run(A, ownerA, { customer: "Latecust", status: "any" })).slice(1)[0] as Row & { daysSinceInvoiced?: number };
