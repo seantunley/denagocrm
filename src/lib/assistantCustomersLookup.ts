@@ -1,5 +1,6 @@
 import "server-only";
 import type { z } from "zod";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "./db";
 import { ownedWriteTenantId } from "./tenantWrite";
 import { getAccessibleContactIds, hasAnyPermission, type PermissionUser } from "./permissions";
@@ -21,8 +22,6 @@ import type { customersArgs } from "./crmAssistantPlan";
 type Args = z.infer<typeof customersArgs>;
 type Output = { rows: { label: string; detail: string; href: string }[]; data: unknown[]; truncated: boolean };
 const DAY = 86_400_000;
-/** A birthday window is sorted in memory (by the day it falls on): at most this many are read for it. */
-const BIRTHDAY_READ = 500;
 const note = (text: string): Output => ({ rows: [], data: [{ note: text }], truncated: false });
 const fuzzy = (needle: string) => ({ contains: needle, mode: "insensitive" as const });
 const day = (d: Date) => d.toISOString().slice(0, 10);
@@ -34,7 +33,9 @@ export async function customersLookup(user: PermissionUser, args: Args): Promise
   const tenantId = ownedWriteTenantId();
   // Fleets are Automotive's, behind their own permission — a filter or a column only for those who may open /fleets.
   const fleetsOpen = (await isModuleEnabled("automotive")) && (await hasAnyPermission(user, "fleets.view", "fleets.manage"));
-  if (args.fleet && !fleetsOpen) return note("You don't have access to fleets, so customers can't be listed by fleet.");
+  // Fleet MEMBERSHIP is fleet data too (review of #1103): without fleet access no fleet filter, no fleet kind — and a
+  // fleet member is just a business, so "business" can't reveal who is on a fleet by leaving them out.
+  if ((args.fleet || args.kind === "fleet") && !fleetsOpen) return note("You don't have access to fleets, so customers can't be listed by fleet.");
   const fleetIds = args.fleet
     ? (await prisma.fleet.findMany({ where: { tenantId, name: fuzzy(args.fleet) }, select: { id: true }, take: 50 })).map((f) => f.id)
     : null;
@@ -42,7 +43,6 @@ export async function customersLookup(user: PermissionUser, args: Args): Promise
 
   // Birthdays from today, in day order (as /birthdays: 29 February is kept on 28 February in a common year).
   const days = args.birthdayWithinDays === undefined ? null : nextDays(args.birthdayWithinDays + 1);
-  const dayOrder = new Map((days ? birthdayKeys(days) : []).map((k, i) => [`${k.month}-${k.day}`, i]));
   const createdAt = {
     ...(args.createdFrom ? { gte: new Date(`${args.createdFrom}T00:00:00+02:00`) } : {}),
     ...(args.createdTo ? { lt: new Date(new Date(`${args.createdTo}T00:00:00+02:00`).getTime() + DAY) } : {}),
@@ -56,7 +56,9 @@ export async function customersLookup(user: PermissionUser, args: Args): Promise
       ...(args.area ? [{ OR: [{ suburb: fuzzy(args.area) }, { city: fuzzy(args.area) }, { province: fuzzy(args.area) }, { address: fuzzy(args.area) }] }] : []),
       ...(args.tag ? [{ tags: { some: { name: fuzzy(args.tag) } } }] : []),
       ...(args.owner ? [{ owner: { name: fuzzy(args.owner) } }] : []),
-      ...(args.kind === "individual" ? [{ isCompany: false }] : args.kind === "business" ? [{ isCompany: true, fleetId: null }] : args.kind === "fleet" ? [{ fleetId: { not: null } }] : []),
+      ...(args.kind === "individual" ? [{ isCompany: false }]
+        : args.kind === "business" ? [fleetsOpen ? { isCompany: true, fleetId: null } : { isCompany: true }]
+          : args.kind === "fleet" ? [{ fleetId: { not: null } }] : []),
       ...(fleetIds ? [{ fleetId: { in: fleetIds } }] : []),
       ...(days ? [{ OR: birthdayKeys(days).map((k) => ({ birthMonth: k.month, birthDay: k.day })) }] : []),
       ...(Object.keys(createdAt).length ? [{ createdAt }] : []),
@@ -64,24 +66,32 @@ export async function customersLookup(user: PermissionUser, args: Args): Promise
     ],
   };
   const take = args.limit ?? 10;
-  const [total, found] = await Promise.all([
-    prisma.contact.count({ where }),
-    prisma.contact.findMany({
-      where,
-      orderBy: args.sort === "name" ? [{ firstName: "asc" }, { id: "asc" }] : [{ createdAt: "desc" }, { id: "desc" }],
-      take: days ? BIRTHDAY_READ : take,
-      select: {
-        id: true, firstName: true, lastName: true, company: true, isCompany: true, suburb: true, city: true,
-        phone: true, whatsapp: true, email: true, birthDay: true, birthMonth: true, marketingOptOut: true, createdAt: true, fleetId: true,
-        owner: { select: { name: true } },
-        tags: { select: { name: true } },
-        _count: { select: { leads: { where: openLead } } },
-      },
-    }),
-  ]);
-  const page = days
-    ? [...found].sort((a, b) => (dayOrder.get(`${a.birthMonth}-${a.birthDay}`) ?? 99) - (dayOrder.get(`${b.birthMonth}-${b.birthDay}`) ?? 99)).slice(0, take)
-    : found;
+  const select = {
+    id: true, firstName: true, lastName: true, company: true, isCompany: true, suburb: true, city: true,
+    phone: true, whatsapp: true, email: true, birthDay: true, birthMonth: true, marketingOptOut: true, createdAt: true, fleetId: true,
+    owner: { select: { name: true } },
+    tags: { select: { name: true } },
+    _count: { select: { leads: { where: openLead } } },
+  } as const;
+  const orderBy = args.sort === "name" ? [{ firstName: "asc" as const }, { id: "asc" as const }] : [{ createdAt: "desc" as const }, { id: "desc" as const }];
+  const total = await prisma.contact.count({ where });
+  // A BIRTHDAY WINDOW IS RANKED BY THE DAY, across every match (review of #1103: reading the newest 500 first could
+  // leave out an older customer whose birthday is today). One query per day of the window, in day order, as
+  // /birthdays does — at most 32 — until the list is full.
+  let page: Prisma.ContactGetPayload<{ select: typeof select }>[] = [];
+  if (days) {
+    for (const d of days) {
+      if (page.length >= take) break;
+      page.push(...(await prisma.contact.findMany({
+        where: { AND: [where, { OR: birthdayKeys([d]).map((k) => ({ birthMonth: k.month, birthDay: k.day })) }] },
+        orderBy: [{ firstName: "asc" }, { id: "asc" }],
+        take: take - page.length,
+        select,
+      })));
+    }
+  } else {
+    page = await prisma.contact.findMany({ where, orderBy, take, select });
+  }
   const fleetNames = fleetsOpen
     ? new Map((await prisma.fleet.findMany({
         where: { tenantId, id: { in: [...new Set(page.map((c) => c.fleetId).filter((id): id is string => !!id))] } },
@@ -92,7 +102,7 @@ export async function customersLookup(user: PermissionUser, args: Args): Promise
   const shown = page.map((c) => ({
     customer: contactName(c),
     link: `/contacts/${c.id}`,
-    kind: c.fleetId ? "fleet" : c.isCompany ? "business" : "individual",
+    kind: fleetsOpen && c.fleetId ? "fleet" : c.isCompany ? "business" : "individual",
     area: [c.suburb, c.city].filter(Boolean).join(", ") || null,
     ...(fleetsOpen && c.fleetId ? { fleet: fleetNames.get(c.fleetId) ?? null } : {}),
     tags: c.tags.map((t) => t.name),

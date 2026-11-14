@@ -75,6 +75,19 @@ async function main() {
   // The owner's: a birthday in three days, added in September; and one on the Pearl Valley fleet, added in October.
   await contact("Owen", a.ownerUserId, { birthDay: inThree.day, birthMonth: inThree.month, createdAt: new Date("2026-09-10T10:00:00+02:00") });
   await contact("Fleur", a.ownerUserId, { isCompany: true, fleetId: fleet.id, createdAt: new Date("2026-10-20T10:00:00+02:00") });
+  // The REP's own fleet member — the rep has no fleet access, so must never learn it is on a fleet (review of #1103).
+  await contact("Fiona", rep.id, { isCompany: true, fleetId: fleet.id, createdAt: new Date("2026-08-01T10:00:00+02:00") });
+  // BIRTHDAY RANKING (review of #1103): 505 newer customers with a birthday in five days, and the OLDEST-created
+  // customer with a birthday today — it must lead, not be lost behind the newest 500.
+  const BULK = `Bulk${SFX}`;
+  const inFive = nextDays(6)[5];
+  await basePrisma.contact.createMany({
+    data: Array.from({ length: 505 }, (_, i) => ({
+      tenantId: A, firstName: `B${String(i).padStart(3, "0")}`, lastName: SFX, suburb: BULK, ownerId: a.ownerUserId, createdById: a.ownerUserId,
+      birthDay: inFive.day, birthMonth: inFive.month, createdAt: new Date(Date.now() - i * 60_000),
+    })),
+  });
+  await contact("Oldest", a.ownerUserId, { suburb: BULK, birthDay: today.day, birthMonth: today.month, createdAt: new Date("2020-01-01T10:00:00+02:00") });
   // The same area in the OTHER workspace.
   await contact("Other", b.ownerUserId, {}, B);
 
@@ -88,9 +101,9 @@ async function main() {
 
     console.log("\nWho sees what");
     const all = await rows(A, ownerA, { area: AREA, limit: 60 });
-    check("the owner sees all three in the area", all[0].total === 3 && names(all).length === 3, JSON.stringify(all[0]));
+    check("the owner sees all four in the area", all[0].total === 4 && names(all).length === 4, JSON.stringify(all[0]));
     const mine = await rows(A, rep, { area: AREA, limit: 60 });
-    check("a rep who may open only their own sees only theirs", mine[0].total === 1 && names(mine)[0] === `Rina ${SFX}`, JSON.stringify(names(mine)));
+    check("a rep who may open only their own sees only theirs", mine[0].total === 2 && JSON.stringify(names(mine).sort()) === JSON.stringify([`Fiona ${SFX}`, `Rina ${SFX}`]), JSON.stringify(names(mine)));
     const other = await rows(B, ownerB, { area: AREA, limit: 60 });
     check("the other workspace sees only its own", other[0].total === 1 && names(other)[0] === `Other ${SFX}`, JSON.stringify(names(other)));
     const refused = await rows(A, noCustomers, { area: AREA });
@@ -103,15 +116,31 @@ async function main() {
     const todayOnly = await rows(A, ownerA, { area: AREA, birthdayWithinDays: 0 });
     check("birthdays today: only today's", JSON.stringify(names(todayOnly)) === JSON.stringify([`Rina ${SFX}`]), JSON.stringify(names(todayOnly)));
     const october = await rows(A, ownerA, { area: AREA, createdFrom: "2026-10-01", createdTo: "2026-10-31" });
-    check("added in October: two, not September's", october[0].total === 2 && !names(october).includes(`Owen ${SFX}`), JSON.stringify(names(october)));
+    check("added in October: two, not September's or August's", october[0].total === 2 && !names(october).includes(`Owen ${SFX}`) && !names(october).includes(`Fiona ${SFX}`), JSON.stringify(names(october)));
     const vip = await rows(A, ownerA, { area: AREA, tag: `VIP ${SFX}` });
     check("by tag", JSON.stringify(names(vip)) === JSON.stringify([`Rina ${SFX}`]));
     const noDeal = await rows(A, ownerA, { area: AREA, openDeal: false });
-    check("no open deal: the two without one", noDeal[0].total === 2 && !names(noDeal).includes(`Rina ${SFX}`), JSON.stringify(names(noDeal)));
-    const onFleet = await rows(A, ownerA, { fleet: `Pearl Valley ${SFX}` });
-    check("by fleet, named on the row", onFleet[0].total === 1 && onFleet[1]?.fleet === `Pearl Valley ${SFX}`, JSON.stringify(onFleet));
+    check("no open deal: the three without one", noDeal[0].total === 3 && !names(noDeal).includes(`Rina ${SFX}`), JSON.stringify(names(noDeal)));
+    const onFleet = await rows(A, ownerA, { fleet: `Pearl Valley ${SFX}`, limit: 60 });
+    check("by fleet, named on the row", onFleet[0].total === 2 && onFleet.slice(1).every((r) => r.fleet === `Pearl Valley ${SFX}`), JSON.stringify(onFleet));
+    const fleetKind = await rows(A, ownerA, { area: AREA, kind: "fleet" });
+    check("kind fleet, with fleet access", fleetKind[0].total === 2, JSON.stringify(names(fleetKind)));
+
+    console.log("\nFleet membership without fleet access");
     const repFleet = await rows(A, rep, { fleet: `Pearl Valley ${SFX}` });
     check("a rep without fleet access can't list by fleet", /don't have access to fleets/.test(repFleet[0].note ?? ""), JSON.stringify(repFleet));
+    const repFleetKind = await rows(A, rep, { area: AREA, kind: "fleet" });
+    check("…nor by kind fleet", /don't have access to fleets/.test(repFleetKind[0].note ?? ""), JSON.stringify(repFleetKind));
+    const repRows = (await run(A, rep, { area: AREA, limit: 60 })).data as (Row & { kind?: string })[];
+    const fiona = repRows.find((r) => r.customer === `Fiona ${SFX}`);
+    check("their own fleet member is shown as a business, with no fleet named", fiona?.kind === "business" && !("fleet" in (fiona ?? {})), JSON.stringify(fiona));
+    check("…and no row says fleet anywhere", !/fleet|Pearl Valley/i.test(JSON.stringify(repRows)), JSON.stringify(repRows));
+    const repBusiness = await rows(A, rep, { area: AREA, kind: "business" });
+    check("kind business includes their fleet member (leaving it out would give it away)", names(repBusiness).includes(`Fiona ${SFX}`), JSON.stringify(names(repBusiness)));
+
+    console.log("\nBirthdays ranked across every match");
+    const ranked = await rows(A, ownerA, { area: BULK, birthdayWithinDays: 7, limit: 5 });
+    check("506 match, and the OLDEST-created customer, whose birthday is today, leads", ranked[0].total === 506 && names(ranked)[0] === `Oldest ${SFX}` && names(ranked).length === 5, JSON.stringify({ total: ranked[0].total, first: names(ranked).slice(0, 2) }));
     check("nothing sensitive in a row", !/vatNumber|research|notes/.test(JSON.stringify(all)));
   } finally {
     __setTenantEnforcingForTests(null);

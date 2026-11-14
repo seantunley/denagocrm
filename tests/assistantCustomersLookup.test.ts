@@ -23,6 +23,16 @@ test("customers: the customers page's own rule, ANDed, in the named workspace", 
   // Fleets: Automotive and fleets.view/manage, as /fleets.
   assert.match(src, /\(await isModuleEnabled\("automotive"\)\) && \(await hasAnyPermission\(user, "fleets\.view", "fleets\.manage"\)\)/);
   assert.match(src, /prisma\.fleet\.findMany\(\{ where: \{ tenantId, name: fuzzy\(args\.fleet\) \}/);
+  // Fleet MEMBERSHIP is fleet data (review of #1103): kind fleet refused, rows never say fleet, business includes members.
+  assert.match(src, /if \(\(args\.fleet \|\| args\.kind === "fleet"\) && !fleetsOpen\) return note\(/);
+  assert.match(src, /kind: fleetsOpen && c\.fleetId \? "fleet" : c\.isCompany \? "business" : "individual",/);
+  assert.match(src, /args\.kind === "business" \? \[fleetsOpen \? \{ isCompany: true, fleetId: null \} : \{ isCompany: true \}\]/);
+});
+
+test("customers: a birthday window is ranked by the day across every match, not the newest few (review of #1103)", () => {
+  assert.match(src, /for \(const d of days\) \{\s*if \(page\.length >= take\) break;/);
+  assert.match(src, /where: \{ AND: \[where, \{ OR: birthdayKeys\(\[d\]\)/);
+  assert.doesNotMatch(src, /BIRTHDAY_READ|dayOrder/);
 });
 
 test("customers: never ID or VAT numbers, notes or research, and nothing logged", () => {
