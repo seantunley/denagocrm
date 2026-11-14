@@ -1166,6 +1166,9 @@ model AssistantTurn {
   /// (assistantOutcomeRules.proposedCards) — counted beside what was confirmed in Settings → Assistant.
   /// Null: not an askCrm answer, or one from before 2026-11-02.
   proposed   Json?
+  /// The drafts (draft_message cards) this answer offered, word for word — deal, subject, body, Cc
+  /// (assistantDraftRules.StoredDraft) — so a later "change only the greeting" edits the exact text. Null: none.
+  drafts     Json?
   createdAt  DateTime  @default(now())
 
   @@index([tenantId, userId, createdAt])

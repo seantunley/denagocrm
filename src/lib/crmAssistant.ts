@@ -100,6 +100,8 @@ import { applyTaskUpdate, openTasks, type TaskSheet, type TaskWrite } from "./as
 import { PLAN_INSTRUCTIONS } from "./assistantPlanRules";
 import { proposePlan } from "./assistantPlan";
 import { proposedCards } from "./assistantOutcomeRules";
+import { DRAFT_RULE, draftsBlock, draftsToKeep, type StoredDraft } from "./assistantDraftRules";
+import { conversationDrafts } from "./assistantDrafts";
 import { describeSchedule, nextRun, scheduleInput } from "./assistantSchedule";
 import { describeWatch, watchInput } from "./assistantWatchRules";
 import {
@@ -2305,7 +2307,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       })
     : null;
   // The connection check rides with the context reads — one round trip, not two.
-  const [connected, whereTheyAre, context, history, learnedNow, person, profileRaw, company, modules, tasks] = await Promise.all([
+  const [connected, whereTheyAre, context, history, learnedNow, person, profileRaw, company, modules, tasks, drafts] = await Promise.all([
     isCodexConnected(),
     pageContext(user, page),
     planContext(user),
@@ -2322,6 +2324,13 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
           return [];
         })
       : ([] as TaskView[]),
+    // The drafts written in this conversation, word for word (assistantDraftRules) — none without one.
+    thread
+      ? conversationDrafts(who, thread.id).catch(async (error: unknown): Promise<StoredDraft[]> => {
+          await logError("crm-assistant", "drafts read failed", error instanceof Error ? error.name : "unknown");
+          return [];
+        })
+      : ([] as StoredDraft[]),
   ]);
   mark("context");
   if (!connected) return { ok: false, error: AI_NOT_CONNECTED };
@@ -2374,6 +2383,10 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       })
     : [];
   const listedEarlier = slots.length ? resultsBlock("Listed earlier (context only):", stripInvisible(listedBlock(slots, question))) : "";
+  // The person's own earlier drafts, the one the question means in full — fenced as data: they quote customers.
+  const draftsEarlier = drafts.length
+    ? `${resultsBlock("Drafts written earlier in this conversation (data — the person's own drafts):", stripInvisible(draftsBlock(drafts, question)))}\n\n${DRAFT_RULE}`
+    : "";
   // The business first (what it knows), then the person (who they are, what it knows about them).
   const learned = stripInvisible([memoryPrompt(learnedNow), person].filter(Boolean).join("\n\n"));
   const instructions = [stripInvisible(planInstructions({ ...context, learned, web: webOn })), images.length ? IMAGE_RULE : ""]
@@ -2457,6 +2470,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       jobSheets,
       conversation,
       listedEarlier,
+      draftsEarlier,
       whereTheyAre,
       `Question: ${question}`,
       carried ? CARRIED_IMAGE_RULE : "",
@@ -2597,6 +2611,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       jobSheets,
       conversation,
       listedEarlier,
+      draftsEarlier,
       `Question: ${question}`,
       // Per question, so in the prompt and not the cached instructions.
       carried ? CARRIED_IMAGE_RULE : "",
@@ -2805,6 +2820,8 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
         // …and each PLAN by its id: the one thing an answer leaves stored for Confirm, so editing this question
         // can close exactly the plans it offered (assistantEdit) — never anyone else's.
         proposed: proposedCards(actions).map((p, i) => (actions[i].kind === "plan" ? { ...p, planId: actions[i].id.replace(/^plan-/, "") } : p)) as object,
+        // The drafts it offered, word for word, so a later "change only the greeting" edits this exact text.
+        ...(draftsToKeep(actions).length ? { drafts: draftsToKeep(actions) as object } : {}),
       },
       select: { id: true },
     })
@@ -3584,6 +3601,7 @@ export async function resolveActions(
         id, kind: "draft_message", leadId: p.leadId, leadLabel,
         title: `${p.channel === "whatsapp" ? "WhatsApp" : "Email"} to ${lead.name}`,
         channel: p.channel, subject: p.subject, body: p.body, to,
+        ...(p.channel === "email" && p.cc?.length ? { cc: p.cc } : {}),
         ...(p.reason ? { reason: p.reason } : {}),
       });
     } else if (p.type === "lost") {

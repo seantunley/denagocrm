@@ -1001,7 +1001,7 @@ export async function runAssistantAction(
  * the timeline). The recipient is read again here from the lead — never taken
  * from the browser — so an edited card can't redirect it.
  */
-export async function sendAssistantDraft(input: { leadId: string; channel: "whatsapp" | "email"; subject?: string; body: string; compositionId: string }): Promise<{ ok: boolean; error?: string; success?: string }> {
+export async function sendAssistantDraft(input: { leadId: string; channel: "whatsapp" | "email"; subject?: string; body: string; cc?: string; compositionId: string }): Promise<{ ok: boolean; error?: string; success?: string }> {
   return withActingStaffScope(async () => {
     const user = await requireAnyPermission(...ASSISTANT_PERMISSIONS);
     if (!(await isModuleEnabled("automation"))) {
@@ -1032,6 +1032,9 @@ export async function sendAssistantDraft(input: { leadId: string; channel: "what
       const subject = String(input.subject ?? "").trim().slice(0, 150);
       if (!subject) return { ok: false, error: "Add a subject first." };
       form.set("to", to);
+      // As the card showed it, and as the person left it — the composer checks every address (parseAddressList).
+      const cc = String(input.cc ?? "").trim().slice(0, 800);
+      if (cc) form.set("cc", cc);
       form.set("subject", subject);
       form.set("bodyHtml", body.split(/\n{2,}/).map((p) => `<p>${escapeHtml(p).replace(/\n/g, "<br>")}</p>`).join(""));
       form.set("revalidate", `/leads/${input.leadId}`);
