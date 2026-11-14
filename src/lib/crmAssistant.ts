@@ -1,6 +1,7 @@
 import "server-only";
 import { randomBytes, randomUUID } from "node:crypto";
 import { z } from "zod";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "./db";
 import { logError } from "./errorLog";
 import { logAudit } from "./audit";
@@ -274,10 +275,14 @@ export async function findLeads(user: User, raw: z.infer<typeof leadArgs>): Prom
       ? { OR: [{ name: fuzzy(args.search) }, { title: fuzzy(args.search) }, { email: fuzzy(args.search) }] }
       : {}),
   };
-  const [leads, matching, reasons] = await Promise.all([
-    prisma.lead.findMany({
-      where,
-      orderBy: { createdAt: "desc" },
+  // BY THE DAY IT CLOSED, read from the database in that order (review of #1101): read newest-CREATED first, 500
+  // newer deals lost early in the month pushed out an older one lost on its last day. "Any" status reads the lost and
+  // the won each by their own date, then takes the latest of both.
+  const byClosed = (args.sort ?? (Object.keys(closedAt).length && !args.noContactDays ? "closed" : null)) === "closed";
+  const closedOrder = (field: "lostAt" | "wonAt"): Prisma.LeadOrderByWithRelationInput[] => [{ [field]: { sort: "desc", nulls: "last" } }, { id: "asc" }];
+  const read = (extra: Prisma.LeadWhereInput, orderBy: Prisma.LeadOrderByWithRelationInput[]) => prisma.lead.findMany({
+      where: { AND: [where, extra] },
+      orderBy,
       take: CANDIDATES,
       select: {
         id: true, title: true, name: true, status: true, valueCents: true, currency: true, source: true,
@@ -294,7 +299,16 @@ export async function findLeads(user: User, raw: z.infer<typeof leadArgs>): Prom
           select: { type: true, doneAt: true, availabilityBlock: true },
         },
       },
-    }),
+    });
+  const readLeads = async () => {
+    if (!byClosed) return read({}, [{ createdAt: "desc" }]);
+    if (args.status === "lost") return read({}, closedOrder("lostAt"));
+    if (args.status === "won") return read({}, closedOrder("wonAt"));
+    const [lost, won] = await Promise.all([read({ status: "lost" }, closedOrder("lostAt")), read({ status: "won" }, closedOrder("wonAt"))]);
+    return [...lost, ...won].sort((a, b) => (closedOn(b)?.getTime() ?? 0) - (closedOn(a)?.getTime() ?? 0)).slice(0, CANDIDATES);
+  };
+  const [leads, matching, reasons] = await Promise.all([
+    readLeads(),
     // The real count — not capped at the CANDIDATES read above.
     prisma.lead.count({ where }),
     // "Why did we lose them": every lost reason across ALL the matches, not just the ones listed.
@@ -341,15 +355,21 @@ export async function findLeads(user: User, raw: z.infer<typeof leadArgs>): Prom
 
   // "Gone quiet" is worked out on the newest CANDIDATES only, so past that it is a floor.
   const total = cutoff === null ? matching : leads.length === CANDIDATES ? `at least ${filtered.length}` : filtered.length;
+  // The reasons describe EXACTLY the deals the total counts (review of #1101): every match from the database, or —
+  // with "no contact for N days", which is worked out here — the ones left after it, counted the same way as the total.
+  const reasonCounts = cutoff === null
+    ? reasons.map((r) => [r.lostReason, r._count._all] as const)
+    : [...Map.groupBy(filtered, ({ lead }) => lead.lostReason?.trim() || null)].map(([reason, rows]) => [reason, rows.length] as const);
+  const lostReasons = [...Map.groupBy(reasonCounts, ([reason]) => reason?.trim() || "no reason recorded")]
+    .map(([reason, rows]) => ({ reason, count: rows.reduce((n, [, c]) => n + c, 0) }))
+    .sort((a, b) => b.count - a.count);
   const moneyFmt = await getRegionalSettings();
   return {
     truncated: sorted.length > take || leads.length === CANDIDATES,
     data: [{
       total,
       listed: page.length,
-      ...(args.status === "lost"
-        ? { lostReasons: reasons.map((r) => ({ reason: r.lostReason?.trim() || "no reason recorded", count: r._count._all })).sort((a, b) => b.count - a.count) }
-        : {}),
+      ...(args.status === "lost" ? { lostReasons } : {}),
     }, ...page.map(({ lead, lastContact }) => ({
       id: lead.id,
       link: `/leads/${lead.id}`,

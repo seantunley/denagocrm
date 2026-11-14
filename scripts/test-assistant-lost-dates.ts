@@ -64,6 +64,21 @@ async function main() {
   // 30 more lost in October with one reason: more than the old 25 cap.
   for (let i = 0; i < 30; i++) await lead(`Bulk ${i}`, "lost", "2026-08-01", "2026-10-12", "Timing");
 
+  // REVIEW OF #1101, 1: more than 500 lost in September, all made more recently than the one lost LAST — made in 2025.
+  await basePrisma.lead.createMany({
+    data: Array.from({ length: 510 }, (_, i) => ({
+      tenantId: A, stageId: a.rows.stageId, status: "lost", name: `Sept bulk ${i} ${SFX}`, title: "Rover XL", valueCents: 1_000_000,
+      createdById: a.ownerUserId, createdAt: at("2026-08-20"), lostAt: at("2026-09-02"), lostReason: "Bulk",
+    })),
+  });
+  await lead("Made 2025, lost 30 Sept", "lost", "2025-01-10", "2026-09-30", "Finance");
+  await lead("Won 29 Sept, made 2025", "won", "2025-02-01", "2026-09-29");
+
+  // REVIEW OF #1101, 2: two lost in July — one contacted two days ago, one never. "No contact for 30 days" is one.
+  const touched = await lead("July lost, contacted", "lost", "2026-06-01", "2026-07-10", "Price");
+  await lead("July lost, untouched", "lost", "2026-06-02", "2026-07-12", "Timing");
+  await basePrisma.communication.create({ data: { tenantId: A, type: "whatsapp", direction: "inbound", body: `Still keen ${SFX}`, leadId: touched.id, userId: a.ownerUserId, occurredAt: new Date(Date.now() - 2 * 86_400_000) } });
+
   const run = (tenantId: string, u: PermissionUser, args: Record<string, unknown>) =>
     runInTenantScope({ tenantId, system: false }, () => findLeads(u, leadArgs.parse(args)));
   const rows = (out: { data: unknown[] }) => out.data as Row[];
@@ -97,11 +112,26 @@ async function main() {
     const either = rows(await run(A, ownerA, { status: "any", closedFrom: "2026-10-01", closedTo: "2026-10-31", limit: 60 }));
     check("any status: closed either way in October (33 lost + 1 won)", either[0].total === 34, JSON.stringify(either[0]));
 
+    console.log("\nMore than 500 matches: read by the day they closed (review of #1101)");
+    const sept = rows(await run(A, ownerA, { status: "lost", closedFrom: "2026-09-01", closedTo: "2026-09-30", sort: "closed", limit: 60 }));
+    check("the deal lost LAST, though made in 2025, leads the list", mine(sept)[0]?.customer === `Made 2025, lost 30 Sept ${SFX}`, JSON.stringify(mine(sept)[0]));
+    check("…the total counts all 511", sept[0].total === 511, String(sept[0].total));
+    const septAny = rows(await run(A, ownerA, { status: "any", closedFrom: "2026-09-01", closedTo: "2026-09-30", limit: 60 }));
+    check("any status: the latest of both — lost 30 Sept, then won 29 Sept", mine(septAny)[0]?.customer === `Made 2025, lost 30 Sept ${SFX}` && mine(septAny)[1]?.customer === `Won 29 Sept, made 2025 ${SFX}`, JSON.stringify(mine(septAny).slice(0, 2).map((r) => r.customer)));
+
+    console.log("\nReasons describe exactly the deals counted (review of #1101)");
+    const quiet = rows(await run(A, ownerA, { status: "lost", closedFrom: "2026-07-01", closedTo: "2026-07-31", noContactDays: 30, limit: 60 }));
+    check("no contact for 30 days: only the untouched one", quiet[0].total === 1 && mine(quiet).map((r) => r.customer).join() === `July lost, untouched ${SFX}`, JSON.stringify(quiet[0]));
+    check("…and its reasons are only that one's: Timing 1, no Price", JSON.stringify(quiet[0].lostReasons) === JSON.stringify([{ reason: "Timing", count: 1 }]), JSON.stringify(quiet[0].lostReasons));
+    const july = rows(await run(A, ownerA, { status: "lost", closedFrom: "2026-07-01", closedTo: "2026-07-31" }));
+    check("without the filter: both, and both reasons", july[0].total === 2 && (july[0].lostReasons ?? []).length === 2, JSON.stringify(july[0]));
+
     console.log("\nThe other workspace");
     const other = rows(await run(b.tenantId, memberB, { status: "lost", closedFrom: "2026-10-01", closedTo: "2026-10-31", limit: 60 }));
     check("nothing of A's", !JSON.stringify(other).includes(SFX));
   } finally {
     __setTenantEnforcingForTests(null);
+    await basePrisma.communication.deleteMany({ where: { tenantId: A, body: `Still keen ${SFX}` } }).catch(() => 0);
     await basePrisma.lead.deleteMany({ where: { tenantId: A, name: { endsWith: SFX } } }).catch(() => 0);
     await teardown(fixture);
   }
