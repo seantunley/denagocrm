@@ -273,7 +273,7 @@ export async function setMyOpeningLine(on: boolean) {
         });
         revalidatePath("/assistant");
       }
-      return { success: on === true ? "On — DAX says what's new when you open a new chat" : "Off" };
+      return { success: on === true ? "On — what's new is said when you open a new chat" : "Off" };
     }),
   );
 }
