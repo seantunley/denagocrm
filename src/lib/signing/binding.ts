@@ -44,11 +44,10 @@ export type GoverningBinding =
  * to the underlying deal.
  */
 export function governingBinding(request: RequestBinding): GoverningBinding | null {
-  if (request.quoteId) return { kind: "quote", id: request.quoteId };
-  // Sean 2026-11-14: a rep must not see the delivery note on another rep's deal. It carries the customer and the
-  // generated document too, so without this its customer's visibility decided it.
-  const noteQuote = deliveryNoteQuote(request);
-  if (noteQuote) return { kind: "quote", id: noteQuote };
+  // Sean 2026-11-14: a rep must not see the delivery note on another rep's deal — its quote is in subjectId. It
+  // carries the customer and the generated document too, so without this its customer's visibility decided it.
+  const quote = request.quoteId ?? deliveryNoteQuote(request);
+  if (quote) return { kind: "quote", id: quote };
   if (request.jobCardId) return { kind: "jobcard", id: request.jobCardId };
   if (request.documentId) return { kind: "document", id: request.documentId };
   if (request.contactId) return { kind: "contact", id: request.contactId };
