@@ -115,7 +115,6 @@ import {
   planSaysAnswerNext,
   decisionArgs,
   lookupStatus,
-  isSmallTalk,
   resultsBlock,
   waitingBlock,
   planInstructions,
@@ -130,6 +129,7 @@ import {
   type PriorTurn,
   type ToolStep,
 } from "./crmAssistantPlan";
+import { FOLLOW_UP_CODE, WORDING_EDIT_RULE, followUpRoute } from "./assistantFollowUp";
 
 /**
  * "Ask the CRM" — a sales colleague that answers from the workspace's own
@@ -1797,6 +1797,11 @@ async function runTool(user: User, step: ToolStep): Promise<ToolOutput> {
 
 /* ── The conversation ────────────────────────────────────────────────────── */
 
+/** The same shape with nothing read — for a route that never researches (assistantFollowUp). */
+async function quietContext(user: User): Promise<Awaited<ReturnType<typeof planContext>>> {
+  return { today: johannesburgDateKey(new Date()), userName: user.name || "the user", stages: [], staff: [], activityTypes: [] };
+}
+
 /** The workspace facts the research step needs to map names to real values. */
 async function planContext(user: User) {
   const [stages, staff, types] = await Promise.all([
@@ -2304,11 +2309,17 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
         return null;
       })
     : null;
+  // WHICH WAY IT GOES, before anything is read (assistantFollowUp): a thank-you, a wording-only edit or small talk never
+  // researches, so it skips the CRM context only research and the fast path read — the page's record, the
+  // workspace's stages/staff/activity types, the re-check of listed records. Numbers only in the timings.
+  const route = followUpRoute(question, Boolean(opts.images?.length));
+  const light = route !== "full";
+  timings.followUp = FOLLOW_UP_CODE[route];
   // The connection check rides with the context reads — one round trip, not two.
   const [connected, whereTheyAre, context, history, learnedNow, person, profileRaw, company, modules, tasks] = await Promise.all([
     isCodexConnected(),
-    pageContext(user, page),
-    planContext(user),
+    light ? "" : pageContext(user, page),
+    light ? quietContext(user) : planContext(user),
     thread ? conversationTurns(who, thread.id).then(withListed) : recentTurns(user.id),
     loadLearned(user.id),
     personContext(user).catch(() => ""),
@@ -2367,7 +2378,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   // "The fourth one": the latest list an answer here showed, each record checked against what this person may open
   // NOW (assistantListed) — fenced as data: its labels are customer names.
   const earlierList = history.findLast((t) => t.listed?.length)?.listed ?? [];
-  const slots: ListedSlot[] = earlierList.length
+  const slots: ListedSlot[] = earlierList.length && !light
     ? await listedNow(user, earlierList).catch(async (error: unknown) => {
         await logError("crm-assistant", "listed records check failed", error instanceof Error ? error.name : "unknown");
         return [];
@@ -2430,7 +2441,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   };
   // A question plain enough to need no research step (assistantFastPath): its
   // lookup runs now. Not with an image — the picture may change what it means.
-  const fast = images.length ? null : fastPath(question, { userName: user.name || "", pageLead: pageLeadFromHint(whereTheyAre) });
+  const fast = images.length || light ? null : fastPath(question, { userName: user.name || "", pageLead: pageLeadFromHint(whereTheyAre) });
   if (fast) timings.fastPath = 1;
   // ChatGPT failing again and again (assistantBreaker): answer from the CRM
   // alone where a lookup needs no model to choose it, else say so at once.
@@ -2465,9 +2476,10 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       `Rounds left: ${budget().maxSteps - step}. Lookups left: ${budget().maxLookups - observations.length}.`,
       insist ? PLAN_INSIST : "",
     ].filter(Boolean).join("\n\n");
-  // Small talk ("thanks", 👍, "who are you?") skips research — it would only say
-  // done — and so does a fast-path question, whose lookup is already known.
-  const research = !(isSmallTalk(question) && !images.length) && !fast;
+  // A thank-you, a wording-only edit and small talk ("thanks", 👍, "who are you?") skip research — it would only say
+  // done — and so does a fast-path question, whose lookup is already known. A fresh photo is always "full".
+  // ponytail: a photo CARRIED from the last question no longer turns "thanks" into research; ask about it and it does.
+  const research = !light && !fast;
   if (fast) await runLookups(fast, 1);
   // The keyword detector is the floor; the fast path and small talk stay quick, so they answer exactly as before.
   depth = startingDepth(question, research);
@@ -2605,6 +2617,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       observations.length
         ? resultsBlock("What the CRM returned:", observations.map(observationText).join("\n\n"))
         : "No lookup was needed for this question.",
+      route === "wording" ? WORDING_EDIT_RULE : "",
       // Per question (only when the answer will be spoken), so in the prompt and not the cached instructions.
       opts.spoken ? SPOKEN_RULE : "",
     ].filter(Boolean).join("\n\n"),
