@@ -405,6 +405,35 @@ export function parseSteps(text: string): AssistantStep[] | null {
   return steps.length ? [{ tool: "done" }] : null;
 }
 
+/** How many earlier answers, and lookups in all, are run again to check figures an answer restates. */
+export const RECHECK_TURNS = 3;
+export const RECHECK_STEPS = 6;
+/** Never run again just to check a figure: each reads a file or picture with the AI, or goes to the internet. */
+const NOT_RECHECKED = new Set<string>(["read_document", "web"]);
+
+/**
+ * The lookups earlier answers ran (AssistantTurn.tools, newest answer first) that may run AGAIN, now, as this person,
+ * to check figures the new answer restates (Sean, 2026-11-14: "put that in a table" flagged every amount, because
+ * DAX's own earlier answer is never evidence). Each re-validated against today's schema; each once; plain CRM reads only.
+ */
+export function stepsToRecheck(earlierTools: unknown[]): ToolStep[] {
+  const seen = new Set<string>();
+  const out: ToolStep[] = [];
+  for (const tools of earlierTools) {
+    if (!Array.isArray(tools)) continue;
+    for (const raw of tools) {
+      const parsed = assistantStep.safeParse(raw);
+      if (!parsed.success || parsed.data.tool === "done" || NOT_RECHECKED.has(parsed.data.tool)) continue;
+      const key = JSON.stringify(parsed.data);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(parsed.data);
+      if (out.length >= RECHECK_STEPS) return out;
+    }
+  }
+  return out;
+}
+
 /** The reply's JSON object (a code fence or a stray sentence around it tolerated), or null. */
 export function stepObject(text: string): Record<string, unknown> | null {
   const start = text.indexOf("{");

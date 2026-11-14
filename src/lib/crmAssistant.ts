@@ -102,6 +102,8 @@ import {
   leadArgs,
   leadBriefArgs,
   parseSteps,
+  RECHECK_TURNS,
+  stepsToRecheck,
   planSaysAnswerNext,
   decisionArgs,
   lookupStatus,
@@ -1786,6 +1788,22 @@ async function recentTurns(userId: string): Promise<PriorTurn[]> {
   return withListed(turns.reverse());
 }
 
+/**
+ * The lookups the last few answers in this conversation ran, run again now as this person (stepsToRecheck says
+ * which), and their fresh results. The answer being written isn't saved yet, so it is never among them.
+ */
+async function earlierLookupsAgain(user: User, tenantId: string, conversationId: string | null): Promise<unknown[]> {
+  const turns = await prisma.assistantTurn.findMany({
+    where: { tenantId, userId: user.id, ...(conversationId ? { conversationId } : { createdAt: { gte: new Date(Date.now() - CONVERSATION_WINDOW_MS) } }) },
+    orderBy: { createdAt: "desc" },
+    take: RECHECK_TURNS,
+    select: { tools: true },
+  });
+  const steps = stepsToRecheck(turns.map((t) => t.tools));
+  const outputs = await Promise.all(steps.map((step) => runTool(user, step).catch(() => null)));
+  return outputs.flatMap((output) => (output ? [output.data] : []));
+}
+
 /** The records each answer listed travel apart from its working memory (assistantListedRules). */
 function withListed(turns: { question: string; answer: string; state: unknown }[]): PriorTurn[] {
   return turns.map((t) => {
@@ -2547,7 +2565,17 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   // DAX's own earlier answers or working memory: a figure it made up last turn
   // must not vouch for itself this turn. Checked WITH its [[/link]] citations:
   // a sentence citing a quote is checked against that quote (Phase 2).
-  const flagged = unsupportedFigures(reply.answer, [question, ...history.map((t) => t.question), ...observations.map((o) => o.output.data)]);
+  const evidenceNow = [question, ...history.map((t) => t.question), ...observations.map((o) => o.output.data)];
+  let flagged = unsupportedFigures(reply.answer, evidenceNow);
+  // LOOKED UP AGAIN, NOT TAKEN ON TRUST (Sean, 2026-11-14): a figure restated from an earlier answer ("put that in a
+  // table") is checked against that answer's lookups run again NOW — fresh records, never the earlier answer's words.
+  if (flagged.length && history.length) {
+    const again = await earlierLookupsAgain(user, who.tenantId, thread?.id ?? null).catch(async (error: unknown) => {
+      await logError("crm-assistant", "figure re-check failed", error instanceof Error ? error.name : "unknown");
+      return [] as unknown[];
+    });
+    if (again.length) flagged = unsupportedFigures(reply.answer, [...evidenceNow, ...again]);
+  }
   const note = flagged.length ? `\n\n${unsupportedNote(flagged)}` : "";
   // A check-back is not a task to confirm: it is taken out here and saved below (setCheckBacks), so it never
   // becomes a card and never counts as a task that "came to nothing".
