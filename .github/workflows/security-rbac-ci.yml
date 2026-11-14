@@ -769,6 +769,12 @@ jobs:
       - name: Assistant -- updates to a linked phone are claimed, released and never lost
         run: npm run test:assistant-updates-whatsapp
 
+      # Sean, 2026-11-14: "DAX must have knowledge of those things, permission based". Parts: Automotive and
+      # parts.view, the cost only with parts.manage. Fleets: Automotive and fleets.view, open deals and job cards
+      # counted only where the person may open them, never the VAT number; the other workspace nothing.
+      - name: DAX parts and fleets -- each held to its page's own rule
+        run: npm run test:assistant-parts-fleets
+
       # "Whose number is this?" is raw SQL, so the soft-delete filter is not
       # applied for it. A number on a lead binned months earlier still matched:
       # that person's messages were filed on the deleted lead, where nobody sees

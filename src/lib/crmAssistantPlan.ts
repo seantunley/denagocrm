@@ -232,6 +232,9 @@ export const customersArgs = z
 /** One deal's file, and the suppliers (assistantDealFileLookup) — each held to its page's own rule. */
 export const dealFileArgs = z.object({ deal: name }).strict();
 export const suppliersArgs = z.object({ supplier: name.optional(), missing: z.boolean().optional(), orders: z.boolean().optional() }).strict();
+/** Parts stock and fleet accounts (assistantPartsFleetsLookup) — each held to its page's own rule. */
+export const partsArgs = z.object({ search: name.optional(), lowStock: z.boolean().optional(), limit: upTo(60).optional() }).strict();
+export const fleetsArgs = z.object({ fleet: name.optional(), limit: upTo(60).optional() }).strict();
 /** Notes ADDED on a day or a period, across everything the person may open, with who added each (assistantNotesLookup). */
 export const notesArgs = z.object({ from: isoDay, to: isoDay.optional(), by: name.optional(), limit: z.number().int().min(1).max(40).optional() }).strict();
 /** What the business knows: products, prices, approved answers, competitors. */
@@ -280,6 +283,8 @@ export const assistantStep = z.discriminatedUnion("tool", [
   z.object({ tool: z.literal("customers"), args: customersArgs.default({}) }),
   z.object({ tool: z.literal("deal_file"), args: dealFileArgs }),
   z.object({ tool: z.literal("suppliers"), args: suppliersArgs.default({}) }),
+  z.object({ tool: z.literal("parts"), args: partsArgs.default({}) }),
+  z.object({ tool: z.literal("fleets"), args: fleetsArgs.default({}) }),
   z.object({ tool: z.literal("notes"), args: notesArgs }),
   z.object({ tool: z.literal("stuck_deals"), args: z.object({}).strict().default({}) }),
   z.object({ tool: z.literal("knowledge"), args: knowledgeArgs }),
@@ -355,6 +360,8 @@ export function planInstructions(ctx: PlanContext): string {
     '- customers: {"area":"<suburb, city, province or estate>","fleet":"<fleet name>","tag":"<tag>","owner":"<person>","kind":"individual|business|fleet","birthdayWithinDays":<0-31, 0 = today>,"createdFrom":"YYYY-MM-DD","createdTo":"YYYY-MM-DD","openDeal":true|false,"sort":"newest|name","limit":<1-60>} — CUSTOMERS AS A LIST, only those the person may open: the TOTAL that match, then each with area, fleet, tags, owner, open deals, birthday, phone, email, whether they opted out of marketing, and a link. Run it for "customers in Constantia", "birthdays this week", "customers added last month", "who is on the Pearl Valley fleet", "customers tagged VIP with no open deal". To find ONE customer by name use search_everything or lead_brief.',
     '- deal_file: {"deal":"<customer, lead title or Q-number>" (required)} — ONE DEAL\'S FILE, as the deal page shows it: its quotes, the checklist (each item done or missing, and why), what is still MISSING, the papers on file by type, signing requests, handover photo count, and — with Suppliers on — the suppliers on the deal and which of their papers are missing. Run it for "what paperwork is missing on X\'s deal", "is X\'s deal file complete", "has the supplier invoice come in for Q-1031".',
     '- suppliers: {"supplier":"<supplier name>","missing":true (deals still missing supplier papers),"orders":true (their purchase orders)} — SUPPLIERS (workspace owner only, Suppliers module on): each supplier with kind, contact, terms and how many deals, papers and orders; with a supplier named, its purchase orders and the deals still missing its papers. Run it for "which deals are missing supplier invoices", "what have we ordered from Denago", "who are our suppliers". No bank details are ever in it.',
+    '- parts: {"search":"<part name, code or model words>","lowStock":true (only parts at or below their reorder level),"limit":<1-60>} — WORKSHOP PARTS as the Parts page lists them: each part with its code, shelf, how many are in stock, its reorder level, whether it is low, and its sell price (the cost only for someone who may manage parts). Every word must match, so "brake pads XL" finds "Brake pads — Rover XL". Run it for "do we have brake pads for the XL", "what parts are low on stock". The total is the real count.',
+    '- fleets: {"fleet":"<fleet name>","limit":<1-60>} — FLEET ACCOUNTS (estates, golf courses, lodges, businesses) as the Fleets page shows them: type, area, the fleet manager, how many customers and vehicles, and its OPEN DEALS and OPEN JOB CARDS — counted and named only where the person may open them. Run it for "tell me about the Pearl Valley fleet", "which fleets have open job cards". No registration, VAT or billing details.',
     '- lost_alive: {"mine":true (only their own deals and unassigned ones)} — deals marked LOST in the last 90 days for a went-quiet or timing reason ("gone cold", "stopped responding", "buying later") where the customer has since messaged or opened a quote: each with when and why it was lost and what the customer did since. Run it for "which lost deals are still alive", "any lost deals worth another look", "lost but not really lost"; it answers on its own ("then":"answer"), offering a nurture or reopen card for each.',
     '- stuck_deals: {} — THEIR most-stuck open deals (the three furthest past their stage\'s time limit), each with its top reason from the stuck check and its link — and, for someone who sees a team\'s deals, the team\'s worst five. Run it for "which of my deals are stuck", "my stuck deals", and the Monday brief; it answers on its own ("then":"answer").',
     '- knowledge: {"topic":"<what to look up>" (required)} — the business\'s own knowledge: products and prices (each with its productId), approved answers (finance, warranty, policies…), company details, competitor intelligence. ALWAYS run this when the person asks for a quote or names a product to quote — a quote can only be built from products found here.',
@@ -518,6 +525,8 @@ const LOOKUP_STATUS: Record<string, string> = {
   customers: "Listing customers",
   deal_file: "Opening the deal file",
   suppliers: "Checking suppliers",
+  parts: "Checking parts stock",
+  fleets: "Looking at fleets",
   notes: "Reading the notes added",
   stuck_deals: "Finding your most-stuck deals",
   find_activities: "Checking activities",
