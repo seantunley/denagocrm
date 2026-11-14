@@ -757,6 +757,12 @@ jobs:
       - name: Assistant -- editing a question withdraws only what that answer offered
         run: npm run test:assistant-edit
 
+      # DAX_Conversational_Upgrades §1: a draft four turns back comes back word for word — full body, deal, subject,
+      # Cc — and an email stays (Cc and all) beside its WhatsApp variant; never a colleague's, another conversation's
+      # or another workspace's.
+      - name: Assistant -- earlier drafts come back word for word, only this person's in this conversation
+        run: npm run test:assistant-drafts
+
       # DAX report PDFs (review of #1093): with tenant enforcement OFF, the same person's answer from another
       # workspace is "not found" — never printed under this workspace's name and logo.
       - name: Assistant -- a report PDF only from an answer in this workspace
