@@ -10,6 +10,7 @@ import { DaxIcon } from "@/components/DaxIcon";
 import { shrinkToJpeg } from "@/components/shrinkImage";
 import { ASK_STOPPED, askStreaming, newRunKey, stopAsking } from "@/components/askStream";
 import { chatQueue, emptyChatQueue, type ChatItem } from "@/components/chatQueue";
+import { useApplyCorrection } from "@/components/useApplyCorrection";
 import { IMAGE_MAX_SIDE, MAX_IMAGE_BYTES } from "@/lib/assistantImage";
 import { transcribeQuestion } from "@/app/actions/voice";
 import type { AssistantRow } from "@/lib/crmAssistant";
@@ -351,6 +352,9 @@ export default function AssistantChat({
     setNotice(putBack ? "Stopped. Your question is back in the box — fix it and send." : "Stopped — nothing from that answer was kept.");
   };
 
+  // "Actually, Scout 4" queued while answering: offered as a correction of the running question (useApplyCorrection).
+  const correction = useApplyCorrection({ chat, dispatch, flight, name, setNotice });
+
   // A queued question taken back into the box to edit (anything already typed stays, before it).
   const editQueued = (item: ChatItem<Blob>) => {
     dispatch({ type: "remove", id: item.id });
@@ -559,6 +563,11 @@ export default function AssistantChat({
             <li key={item.id} className="flex items-center gap-2 rounded-lg border border-dashed border-border bg-card px-3 py-1 text-sm">
               <span className="shrink-0 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Queued</span>
               <span className="min-w-0 flex-1 truncate">{item.image ? `📎 ${item.text || "Image"}` : item.text}</span>
+              {correction.offer(item) && (
+                <button type="button" onClick={() => void correction.apply(item)} disabled={chat.stopping} className="h-9 shrink-0 rounded-md px-2 text-xs font-medium text-primary hover:bg-muted disabled:opacity-60" title="Stop this answer and ask again with your correction" aria-label={`Apply correction: ${item.text}`}>
+                  Apply correction
+                </button>
+              )}
               <button type="button" onClick={() => editQueued(item)} className="h-9 shrink-0 rounded-md px-2 text-xs font-medium text-primary hover:bg-muted" aria-label={`Edit queued message: ${item.text || "image"}`}>
                 Edit
               </button>
