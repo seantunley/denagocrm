@@ -71,7 +71,8 @@ test("a lookup asking for a little too much is adjusted, not thrown away", () =>
   assert.equal(one('{"tool":"catch_up","args":{"since":"2026-11-12T00:00"}}')?.args.since, "2026-11-12", "a date with a time → the date");
   assert.equal(one('{"tool":"schedule","args":{"person":"Sean","from":"2026-12-01","days":31}}')?.args.days, 31, "a month ahead");
   assert.equal(one('{"tool":"schedule","args":{"days":90}}')?.args.days, 31);
-  assert.equal(one('{"tool":"find_leads","args":{"limit":100}}')?.args.limit, 25);
+  // find_leads: up to 60, a report's full list (2026-11-14).
+  assert.equal(one('{"tool":"find_leads","args":{"limit":100}}')?.args.limit, 60);
 });
 
 test("WhatsApp gets the words, not the CRM link", () => {

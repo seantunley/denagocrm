@@ -38,7 +38,14 @@ test("anything outside the schema is refused, not guessed at", () => {
     assert.equal(parseStep(reply), null, reply);
   }
   // A little too much is ADJUSTED, not thrown away (2026-11-13: DAX answered without looking): the cap still holds.
-  assert.deepEqual(parseStep('{"tool":"find_leads","args":{"limit":5000}}'), { tool: "find_leads", args: { limit: 25 } });
+  // find_leads lists up to 60 (a report's full list, 2026-11-14); other lists keep 25.
+  assert.deepEqual(parseStep('{"tool":"find_leads","args":{"limit":5000}}'), { tool: "find_leads", args: { limit: 60 } });
+  assert.deepEqual(parseStep('{"tool":"find_quotes","args":{"limit":5000}}'), { tool: "find_quotes", args: { limit: 25 } });
+  // Lost IN a month is the day it was lost, not the day it came in.
+  assert.deepEqual(
+    parseStep('{"tool":"find_leads","args":{"status":"lost","closedFrom":"2026-10-01","closedTo":"2026-10-31T23:59","sort":"closed"}}'),
+    { tool: "find_leads", args: { status: "lost", closedFrom: "2026-10-01", closedTo: "2026-10-31", sort: "closed" } },
+  );
   assert.deepEqual(parseStep('{"tool":"find_activities","args":{}}'), { tool: "find_activities", args: { when: "upcoming" } });
 });
 

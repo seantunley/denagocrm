@@ -152,7 +152,8 @@ const OBSERVATION_CHARS = 7000;
  * (capped by the tools themselves, so the cut lands between messages or pages,
  * not mid-JSON) — this is the ceiling with their dates, ids and facts around it.
  */
-const OBSERVATION_BUDGET: Partial<Record<string, number>> = { search_messages: 12_000, search_everything: 12_000, open_message: 11_000, read_document: 11_000 };
+// find_leads: room for a report's full list (LEAD_LIST_MAX rows) — at 7 000 a list was cut near 20 (2026-11-14).
+const OBSERVATION_BUDGET: Partial<Record<string, number>> = { search_messages: 12_000, search_everything: 12_000, open_message: 11_000, read_document: 11_000, find_leads: 24_000 };
 
 export type AssistantRow = { label: string; detail: string; href: string };
 export type AssistantResult =
@@ -234,7 +235,11 @@ export const quoteFacts = (q: { status: string; signedAt: Date | null }, s?: Sig
 
 /* ── Tools ───────────────────────────────────────────────────────────────── */
 
-async function findLeads(user: User, raw: z.infer<typeof leadArgs>): Promise<ToolOutput> {
+/** The day a deal was won or lost (its lifecycle date, set once), or null while it is open. */
+const closedOn = (lead: { status: string; wonAt: Date | null; lostAt: Date | null }) =>
+  lead.status === "lost" ? lead.lostAt : lead.status === "won" ? lead.wonAt : null;
+
+export async function findLeads(user: User, raw: z.infer<typeof leadArgs>): Promise<ToolOutput> {
   if (!(await hasAnyPermission(user, "leads.view_all", "leads.view_owned"))) return refused("leads");
   const args = leadArgs.parse(raw);
   const ids = await getAccessibleLeadIds(user);
@@ -244,7 +249,18 @@ async function findLeads(user: User, raw: z.infer<typeof leadArgs>): Promise<Too
     ...(args.createdFrom ? { gte: new Date(`${args.createdFrom}T00:00:00+02:00`) } : {}),
     ...(args.createdTo ? { lt: new Date(new Date(`${args.createdTo}T00:00:00+02:00`).getTime() + DAY) } : {}),
   };
+  // The day it was WON OR LOST (lifecycle dates, set once): lost → lostAt, won → wonAt, otherwise either.
+  const closedAt = {
+    ...(args.closedFrom ? { gte: new Date(`${args.closedFrom}T00:00:00+02:00`) } : {}),
+    ...(args.closedTo ? { lt: new Date(new Date(`${args.closedTo}T00:00:00+02:00`).getTime() + DAY) } : {}),
+  };
+  const closed = !Object.keys(closedAt).length
+    ? {}
+    : args.status === "lost" ? { lostAt: closedAt }
+      : args.status === "won" ? { wonAt: closedAt }
+        : { AND: [{ OR: [{ lostAt: closedAt }, { wonAt: closedAt }] }] };
   const where = {
+    ...closed,
     deletedAt: null,
     ...(ids === null ? {} : { id: { in: ids } }),
     ...(args.status === "any" ? {} : { status: args.status ?? "open" }),
@@ -258,14 +274,14 @@ async function findLeads(user: User, raw: z.infer<typeof leadArgs>): Promise<Too
       ? { OR: [{ name: fuzzy(args.search) }, { title: fuzzy(args.search) }, { email: fuzzy(args.search) }] }
       : {}),
   };
-  const [leads, matching] = await Promise.all([
+  const [leads, matching, reasons] = await Promise.all([
     prisma.lead.findMany({
       where,
       orderBy: { createdAt: "desc" },
       take: CANDIDATES,
       select: {
         id: true, title: true, name: true, status: true, valueCents: true, currency: true, source: true,
-        createdAt: true, stageEnteredAt: true, contactId: true,
+        createdAt: true, stageEnteredAt: true, contactId: true, wonAt: true, lostAt: true, lostReason: true,
         stage: { select: { name: true, order: true, pipelineId: true } },
         product: { select: { name: true } },
         assignedTo: { select: { name: true } },
@@ -281,6 +297,8 @@ async function findLeads(user: User, raw: z.infer<typeof leadArgs>): Promise<Too
     }),
     // The real count — not capped at the CANDIDATES read above.
     prisma.lead.count({ where }),
+    // "Why did we lose them": every lost reason across ALL the matches, not just the ones listed.
+    args.status === "lost" ? prisma.lead.groupBy({ by: ["lostReason"], where, _count: { _all: true } }) : Promise.resolve([]),
   ]);
 
   // Last contact = the latest message either way, call or meeting. Not an
@@ -315,8 +333,9 @@ async function findLeads(user: User, raw: z.infer<typeof leadArgs>): Promise<Too
     oldest_contact: (a, b) => (a.lastContact?.getTime() ?? 0) - (b.lastContact?.getTime() ?? 0),
     stage_age: (a, b) => a.lead.stageEnteredAt.getTime() - b.lead.stageEnteredAt.getTime(),
     newest: (a, b) => b.lead.createdAt.getTime() - a.lead.createdAt.getTime(),
+    closed: (a, b) => (closedOn(b.lead)?.getTime() ?? 0) - (closedOn(a.lead)?.getTime() ?? 0),
   };
-  const sorted = [...filtered].sort(sorters[args.sort ?? (cutoff ? "oldest_contact" : "newest")]);
+  const sorted = [...filtered].sort(sorters[args.sort ?? (cutoff ? "oldest_contact" : Object.keys(closedAt).length ? "closed" : "newest")]);
   const take = args.limit ?? 10;
   const page = sorted.slice(0, take);
 
@@ -325,7 +344,13 @@ async function findLeads(user: User, raw: z.infer<typeof leadArgs>): Promise<Too
   const moneyFmt = await getRegionalSettings();
   return {
     truncated: sorted.length > take || leads.length === CANDIDATES,
-    data: [{ total, listed: page.length }, ...page.map(({ lead, lastContact }) => ({
+    data: [{
+      total,
+      listed: page.length,
+      ...(args.status === "lost"
+        ? { lostReasons: reasons.map((r) => ({ reason: r.lostReason?.trim() || "no reason recorded", count: r._count._all })).sort((a, b) => b.count - a.count) }
+        : {}),
+    }, ...page.map(({ lead, lastContact }) => ({
       id: lead.id,
       link: `/leads/${lead.id}`,
       lead: lead.title,
@@ -339,6 +364,8 @@ async function findLeads(user: User, raw: z.infer<typeof leadArgs>): Promise<Too
       lastContact: dateKey(lastContact),
       daysInStage: daysAgo(lead.stageEnteredAt),
       created: dateKey(lead.createdAt),
+      ...(lead.status === "won" || lead.status === "lost" ? { closed: dateKey(closedOn(lead)) } : {}),
+      ...(lead.status === "lost" ? { lostReason: lead.lostReason?.trim() || "no reason recorded" } : {}),
     }))],
     rows: page.map(({ lead, lastContact }) => ({
       label: `${lead.name} — ${lead.title}`,
