@@ -125,6 +125,8 @@ export const REQUEST_BINDING_SELECT = {
   contactId: true,
   documentId: true,
   createdById: true,
+  subjectType: true,
+  subjectId: true,
 } as const;
 
 /**

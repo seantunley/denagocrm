@@ -7,13 +7,21 @@
  * cannot be loaded from a test at all.
  */
 
+import { DELIVERY_NOTE } from "./subject";
+
 export type RequestBinding = {
   quoteId: string | null;
   jobCardId: string | null;
   contactId: string | null;
   documentId: string | null;
   createdById: string | null;
+  /** A delivery note names its QUOTE here (subject.ts), not in quoteId — and that quote governs it. */
+  subjectType: string | null;
+  subjectId: string | null;
 };
+
+/** The quote a delivery note is about, or null for any other request. */
+const deliveryNoteQuote = (r: RequestBinding) => (r.subjectType === DELIVERY_NOTE && r.subjectId ? r.subjectId : null);
 
 export type GoverningBinding =
   | { kind: "quote"; id: string }
@@ -37,6 +45,10 @@ export type GoverningBinding =
  */
 export function governingBinding(request: RequestBinding): GoverningBinding | null {
   if (request.quoteId) return { kind: "quote", id: request.quoteId };
+  // Sean 2026-11-14: a rep must not see the delivery note on another rep's deal. It carries the customer and the
+  // generated document too, so without this its customer's visibility decided it.
+  const noteQuote = deliveryNoteQuote(request);
+  if (noteQuote) return { kind: "quote", id: noteQuote };
   if (request.jobCardId) return { kind: "jobcard", id: request.jobCardId };
   if (request.documentId) return { kind: "document", id: request.documentId };
   if (request.contactId) return { kind: "contact", id: request.contactId };
@@ -67,13 +79,17 @@ export type AccessibleRecordIds = {
 export function accessibleRequestWhere(ids: AccessibleRecordIds) {
   // "Bound to one of this kind, and it is one they may open."
   const among = (list: string[] | null) => (list === null ? { not: null } : { in: list });
+  // "Not a delivery note with a quote", NULLs named: a NOT over the nullable column would also drop every request
+  // with no subject at all.
+  const notNote = { OR: [{ subjectType: null }, { subjectType: { not: DELIVERY_NOTE } }, { subjectId: null }] };
   return {
     OR: [
       { quoteId: among(ids.quoteIds) },
-      { quoteId: null, jobCardId: among(ids.jobCardIds) },
-      { quoteId: null, jobCardId: null, documentId: among(ids.documentIds) },
-      { quoteId: null, jobCardId: null, documentId: null, contactId: among(ids.contactIds) },
-      { quoteId: null, jobCardId: null, documentId: null, contactId: null, createdById: ids.userId },
+      { quoteId: null, subjectType: DELIVERY_NOTE, subjectId: among(ids.quoteIds) },
+      { quoteId: null, ...notNote, jobCardId: among(ids.jobCardIds) },
+      { quoteId: null, ...notNote, jobCardId: null, documentId: among(ids.documentIds) },
+      { quoteId: null, ...notNote, jobCardId: null, documentId: null, contactId: among(ids.contactIds) },
+      { quoteId: null, ...notNote, jobCardId: null, documentId: null, contactId: null, createdById: ids.userId },
     ],
   };
 }
