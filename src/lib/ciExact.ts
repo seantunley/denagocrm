@@ -57,6 +57,8 @@ const TARGETS = {
   // assistant's quote builder (lib/catalogueLookup.ts). With ILIKE, a `_` or `%`
   // in a name would match other products and could put the wrong one on a quote.
   productName: { table: "Product", column: "name", fold: "lower" },
+  // "Has invoice XINV-0042 gone to Xero?" (assistantInvoicesLookup): the WHOLE Xero reference, never a pattern.
+  quoteXeroInvoiceNumber: { table: "Quote", column: "xeroInvoiceNumber", fold: "upper" },
 } as const;
 
 export type CiExactTarget = keyof typeof TARGETS;

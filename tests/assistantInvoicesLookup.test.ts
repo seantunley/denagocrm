@@ -2,6 +2,20 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { parseSteps, invoicesArgs } from "../src/lib/crmAssistantPlan";
+import { parseInvoiceNumber } from "../src/lib/invoiceNumber";
+
+test("an invoice number names ONE invoice: the CRM's exactly, else a whole Xero reference, else none (review of #1109)", () => {
+  assert.deepEqual(parseInvoiceNumber("INV-000123"), { crm: 123 });
+  assert.deepEqual(parseInvoiceNumber("inv123"), { crm: 123 });
+  assert.deepEqual(parseInvoiceNumber("123"), { crm: 123 });
+  // Not the first run of digits: the whole reference, for Xero.
+  assert.deepEqual(parseInvoiceNumber("XERO-2026-00142"), { xero: "XERO-2026-00142" });
+  assert.deepEqual(parseInvoiceNumber("XINV-ABC"), { xero: "XINV-ABC" });
+  // Nothing parseable: no invoice — never "no filter".
+  assert.equal(parseInvoiceNumber("%"), null);
+  assert.equal(parseInvoiceNumber(""), null);
+  assert.equal(parseInvoiceNumber("a".repeat(40)), null);
+});
 
 const code = (rel: string) => readFileSync(new URL(`../${rel}`, import.meta.url), "utf8");
 
@@ -27,6 +41,13 @@ test("invoices are held to the Invoices page's own rule, and read only", () => {
   // Never a payment reference, bank detail or Xero token; never a write; never logged.
   assert.doesNotMatch(lib, /reference: true|bankAccount|bankName|accountNumber|iban|xeroDepositPaymentId|accessToken|refreshToken/i);
   assert.doesNotMatch(lib, /\.(create|update|upsert|delete)(Many)?\(|logError|console\./);
+  // A Xero reference: exact and case-folded via ciExact (never ILIKE), ANDed into the guarded query.
+  assert.match(lib, /await ciExactIdFilter\("quoteXeroInvoiceNumber", asked\.xero\)/);
+  assert.match(code("src/lib/ciExact.ts"), /quoteXeroInvoiceNumber: \{ table: "Quote", column: "xeroInvoiceNumber", fold: "upper" \}/);
+  assert.doesNotMatch(lib, /match\(\/\\d\+\/\)/, "never the first run of digits");
+  // Ages and date filters in SA calendar days.
+  assert.match(lib, /const issued = johannesburgDateKey\(statementInvoiceDate\(quote\)\);\s*const age = today - dayOrdinal\(issued\);/);
+  assert.match(lib, /if \(args\.olderThanDays && r\.age < args\.olderThanDays\) return false;/);
   // Owing per currency, never added across.
   assert.match(lib, /formatTotals\(totalsByCurrency\(matches, \(r\) => \(\{ cents: r\.owing, currency: r\.quote\.currency \}\)/);
   const plan = code("src/lib/crmAssistantPlan.ts");

@@ -6,11 +6,13 @@ import { isModuleEnabled } from "./modules/enabled";
 import { getRegionalSettings } from "./settings";
 import { formatZAR } from "./format";
 import { formatTotals, totalsByCurrency, withCurrency } from "./currencyRules";
-import { formatInvoiceNumber } from "./invoiceNumber";
+import { formatInvoiceNumber, parseInvoiceNumber } from "./invoiceNumber";
 import { receivedCents, statementInvoiceDate } from "./accountStatement";
 import { payableTotalCents } from "./pricing";
 import { loadBillToFleets, quoteBillTo } from "./quoteBillTo";
 import { xeroStatusLabel } from "./xeroInvoice";
+import { johannesburgDateKey } from "./activityDay";
+import { ciExactIdFilter } from "./ciExact";
 
 /**
  * INVOICES (Sean, 2026-11-14: "DAX must have knowledge of those things, permission based") — what /invoices holds,
@@ -36,7 +38,10 @@ export type InvoicesArgs = {
 type Output = { rows: { label: string; detail: string; href: string }[]; data: unknown[]; truncated: boolean };
 const DAY = 86_400_000;
 const note = (text: string): Output => ({ rows: [], data: [{ note: text }], truncated: false });
-const saDay = (d: Date) => new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Johannesburg" }).format(d);
+const saDay = johannesburgDateKey;
+/** A South African calendar day as a day count — ages are whole calendar days, not 24-hour periods (review of #1109). */
+const dayOrdinal = (key: string) => Date.UTC(Number(key.slice(0, 4)), Number(key.slice(5, 7)) - 1, Number(key.slice(8, 10))) / DAY;
+
 
 export async function invoicesLookup(user: PermissionUser, args: InvoicesArgs): Promise<Output> {
   if (!(await hasAnyPermission(user, "deliveries.view", "deliveries.manage"))) return note("This person can't open Invoices.");
@@ -44,7 +49,10 @@ export async function invoicesLookup(user: PermissionUser, args: InvoicesArgs): 
   const tenantId = ownedWriteTenantId();
   const quoteIds = await getAccessibleQuoteIds(user);
   if (quoteIds !== null && quoteIds.length === 0) return note("There are no invoices this person can open.");
-  const wantedNumber = args.number?.match(/\d+/)?.[0];
+  const asked = args.number === undefined ? undefined : parseInvoiceNumber(args.number);
+  if (asked === null) return note(`There is no invoice numbered "${args.number}" — that isn't an invoice number (INV-000123) or a Xero reference.`);
+  // Exact, whole, case-folded — ids from ciExact (never ILIKE), then ANDed into the guarded query below.
+  const byNumber = !asked ? null : "crm" in asked ? { invoiceNumber: asked.crm } : await ciExactIdFilter("quoteXeroInvoiceNumber", asked.xero);
   const quotes = await prisma.quote.findMany({
     where: {
       tenantId,
@@ -54,7 +62,7 @@ export async function invoicesLookup(user: PermissionUser, args: InvoicesArgs): 
       // AND, never spread: the access list must not be replaced by what was asked for.
       AND: [
         ...(quoteIds === null ? [] : [{ id: { in: quoteIds } }]),
-        ...(wantedNumber ? [{ OR: [{ invoiceNumber: Number(wantedNumber) }, { xeroInvoiceNumber: { contains: wantedNumber } }] }] : []),
+        ...(byNumber ? [byNumber] : []),
       ],
     },
     // Only what the page shows — never payment references, banking or anything of Xero's beyond its number and status.
@@ -72,9 +80,7 @@ export async function invoicesLookup(user: PermissionUser, args: InvoicesArgs): 
     : [];
   const fleets = await loadBillToFleets(prisma, quotes.map((q) => q.fleetId));
   const moneyFmt = await getRegionalSettings();
-  const now = Date.now();
-  const from = args.from ? new Date(`${args.from}T00:00:00+02:00`).getTime() : null;
-  const to = args.to ? new Date(`${args.to}T00:00:00+02:00`).getTime() + DAY : null;
+  const today = dayOrdinal(johannesburgDateKey(new Date()));
   const words = (args.customer ?? "").toLowerCase().split(/\s+/).filter(Boolean);
 
   const all = quotes.map((quote) => {
@@ -82,16 +88,19 @@ export async function invoicesLookup(user: PermissionUser, args: InvoicesArgs): 
     const total = Math.round(payableTotalCents(quote));
     const received = receivedCents(quote, payments.filter((p) => p.quoteId === quote.id));
     const billTo = quoteBillTo(quote, fleets.get(quote.fleetId ?? "") ?? null);
-    const issued = statementInvoiceDate(quote);
-    return { quote, total, received, owing: Math.max(0, total - received), who: billTo.name || "—", issued };
+    // Its SA calendar day, and its age in whole calendar days — the same day the dates filter and the answer use.
+    const issued = johannesburgDateKey(statementInvoiceDate(quote));
+    const age = today - dayOrdinal(issued);
+    return { quote, total, received, owing: Math.max(0, total - received), who: billTo.name || "—", issued, age };
   });
-  const status = args.status ?? "unpaid";
+  // One invoice asked for by its number is found paid or not; a list defaults to what is still owing.
+  const status = args.status ?? (asked ? "any" : "unpaid");
   const matches = all.filter((r) => {
     if (status === "unpaid" && r.owing <= 0) return false;
     if (status === "paid" && r.owing > 0) return false;
-    if (from !== null && r.issued.getTime() < from) return false;
-    if (to !== null && r.issued.getTime() >= to) return false;
-    if (args.olderThanDays && now - r.issued.getTime() < args.olderThanDays * DAY) return false;
+    if (args.from && r.issued < args.from) return false;
+    if (args.to && r.issued > args.to) return false;
+    if (args.olderThanDays && r.age < args.olderThanDays) return false;
     if (args.xero === "not_sent" && (r.quote.xeroInvoiceId || r.quote.xeroExcludedAt)) return false;
     if (args.xero === "sent" && !r.quote.xeroInvoiceId) return false;
     if (args.xero === "excluded" && !r.quote.xeroExcludedAt) return false;
@@ -113,17 +122,18 @@ export async function invoicesLookup(user: PermissionUser, args: InvoicesArgs): 
         total: matches.length,
         listed: page.length,
         outstanding,
+        ...(asked && !matches.length ? { noInvoice: `No invoice numbered "${args.number}" that this person can open.` } : {}),
         note: "Invoices carry no due date in the CRM: 'days since invoiced' is the age, not days overdue. Owing = total less the deposit and payments recorded.",
       },
-      ...page.map(({ quote, total, received, owing, who, issued }) => {
+      ...page.map(({ quote, total, received, owing, who, issued, age }) => {
         const fmt = withCurrency(moneyFmt, quote.currency);
         return {
           invoice: formatInvoiceNumber(quote.invoiceNumber),
           quote: `Q-${quote.number}`,
           link: `/quotes/${quote.id}`,
           customer: who,
-          invoiced: saDay(issued),
-          daysSinceInvoiced: Math.floor((now - issued.getTime()) / DAY),
+          invoiced: issued,
+          daysSinceInvoiced: age,
           total: formatZAR(total, fmt),
           received: formatZAR(received, fmt),
           owing: formatZAR(owing, fmt),

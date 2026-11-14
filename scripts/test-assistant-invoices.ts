@@ -67,20 +67,20 @@ async function main() {
       for (const key of keys) await basePrisma.$executeRaw`INSERT INTO "RolePermission" ("roleId","permissionKey","tenantId") VALUES (${role}, ${key}, ${A})`;
       await basePrisma.$executeRaw`INSERT INTO "UserRole" ("id","userId","roleId","tenantId") VALUES (${crypto.randomUUID()}, ${holder.id}, ${role}, ${A})`;
     }
-    const contact = async (first: string, tenantId = A, ownerId: string | null = null) => {
-      const c = await basePrisma.contact.create({ data: { tenantId, firstName: first, lastName: `Inv${SFX}`, ownerId }, select: { id: true } });
+    const contact = async (first: string, tenantId = A, ownerId: string | null = null, lastName = `Inv${SFX}`) => {
+      const c = await basePrisma.contact.create({ data: { tenantId, firstName: first, lastName, ownerId }, select: { id: true } });
       contactIds.push(c.id);
       return c.id;
     };
-    const invoice = async (opts: { tenantId?: string; contactId: string; createdById: string; cents: number; currency?: string | null; depositCents?: number; xero?: boolean }) => {
+    const invoice = async (opts: { tenantId?: string; contactId: string; createdById: string; cents: number; currency?: string | null; depositCents?: number; xero?: boolean; xeroNumber?: string; invoiceNumber?: number; invoicedAt?: Date }) => {
       const q = await basePrisma.quote.create({
         data: {
           tenantId: opts.tenantId ?? A, number: invNo(), status: "accepted", contactId: opts.contactId, createdById: opts.createdById,
-          invoiceNumber: invNo(), invoicedAt: new Date(Date.now() - 40 * 86_400_000), taxInclusive: true, currency: opts.currency ?? null,
+          invoiceNumber: opts.invoiceNumber ?? invNo(), invoicedAt: opts.invoicedAt ?? new Date(Date.now() - 40 * 86_400_000), taxInclusive: true, currency: opts.currency ?? null,
           ...(opts.depositCents ? { depositPaidAt: new Date(), depositPaidCents: opts.depositCents } : {}),
-          ...(opts.xero ? { xeroInvoiceId: `x-${SFX}`, xeroInvoiceNumber: `XINV-${SFX}`, xeroStatus: "AUTHORISED", xeroSentAt: new Date() } : {}),
+          ...(opts.xero || opts.xeroNumber ? { xeroInvoiceId: `x-${crypto.randomUUID()}`, xeroInvoiceNumber: opts.xeroNumber ?? `XINV-${SFX}`, xeroStatus: "AUTHORISED", xeroSentAt: new Date() } : {}),
         },
-        select: { id: true, number: true },
+        select: { id: true, number: true, invoiceNumber: true },
       });
       quoteIds.push(q.id);
       await basePrisma.quoteItem.createMany({ data: [{ quoteId: q.id, tenantId: opts.tenantId ?? A, description: `Rover ${SFX}`, qty: 1, unitPriceCents: opts.cents }] });
@@ -94,6 +94,18 @@ async function main() {
     const usd = await invoice({ contactId: await contact("Dollarcust"), createdById: a.ownerUserId, cents: 500_000, currency: "USD" });
     // Paid in full by its deposit.
     await invoice({ contactId: await contact("Paidcust"), createdById: a.ownerUserId, cents: 3_000_000, depositCents: 3_000_000 });
+    // REVIEW OF #1109, numbers: a year-prefixed Xero number, one that starts the same, and two CRM numbers sharing digits.
+    const base = 100_000 + crypto.randomInt(800_000);
+    // Their own surname (Num…), so the totals above for "Inv…" customers are untouched.
+    const num = (first: string) => contact(first, A, null, `Num${SFX}`);
+    const yearXero = await invoice({ contactId: await num("Yearcust"), createdById: a.ownerUserId, cents: 1_000_000, xeroNumber: `XERO-2026-${SFX}` });
+    await invoice({ contactId: await num("Longercust"), createdById: a.ownerUserId, cents: 1_000_000, xeroNumber: `XERO-2026-${SFX}-2` });
+    const short = await invoice({ contactId: await num("Shortcust"), createdById: a.ownerUserId, cents: 1_000_000, invoiceNumber: base });
+    await invoice({ contactId: await num("Longcust"), createdById: a.ownerUserId, cents: 1_000_000, invoiceNumber: base * 10 + 1 });
+    // REVIEW OF #1109, ages: invoiced 40 SA calendar days ago at 23:59 — later in the day than any report time.
+    const saToday = new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Johannesburg" }).format(new Date());
+    const fortyAgo = new Date(new Date(`${saToday}T23:59:00+02:00`).getTime() - 40 * 86_400_000);
+    await invoice({ contactId: await num("Latecust"), createdById: a.ownerUserId, cents: 1_000_000, invoicedAt: fortyAgo });
     // The other workspace's own invoice.
     await invoice({ tenantId: b.tenantId, contactId: await contact("Othercust", b.tenantId), createdById: b.ownerUserId, cents: 7_000_000 });
 
@@ -121,6 +133,30 @@ async function main() {
     const notSent = await run(A, ownerA, { status: "any", xero: "not_sent", customer: `Inv${SFX}` });
     check("xero not sent: the other two", notSent[0].total === 2);
     check("a payment reference never appears", !JSON.stringify([owner, unpaid, sent]).includes(`SECRETREF${SFX}`));
+
+    console.log("\ninvoices — a number names exactly one invoice (review of #1109)");
+    const names = (rows: Row[]) => rows.slice(1).map((r) => r.customer?.split(" ")[0]);
+    const year = await run(A, ownerA, { number: `XERO-2026-${SFX}` });
+    check("a year-prefixed Xero number: only that invoice, not the one that starts the same", year[0].total === 1 && names(year)[0] === "Yearcust", JSON.stringify(names(year)));
+    const lower = await run(A, ownerA, { number: `xero-2026-${SFX}` });
+    check("…matched whatever the case", lower[0].total === 1 && names(lower)[0] === "Yearcust");
+    const alpha = await run(A, ownerA, { number: `XINV-${SFX}` });
+    check("an alphanumeric Xero number: that one invoice", alpha[0].total === 1 && names(alpha)[0] === "Repcust", JSON.stringify(names(alpha)));
+    const none = await run(A, ownerA, { number: "NOPE-ABC" });
+    check("a letters-only number that doesn't exist: nothing — never everything", none[0].total === 0 && none.length === 1 && /No invoice numbered/.test(String((none[0] as Record<string, unknown>).noInvoice)), JSON.stringify(none[0]));
+    const junk = await run(A, ownerA, { number: "%_%" });
+    check("something that can't be an invoice number: refused, never everything", junk.length === 1 && /no invoice numbered/i.test(junk[0].note ?? ""), JSON.stringify(junk));
+    const exact = await run(A, ownerA, { number: `INV-${String(short.invoiceNumber).padStart(6, "0")}` });
+    check("two CRM numbers sharing digits: only the exact one", exact[0].total === 1 && names(exact)[0] === "Shortcust", JSON.stringify(names(exact)));
+    const paidByNumber = await run(A, ownerA, { number: String(yearXero.invoiceNumber) });
+    check("asked by number, found whether paid or not (status defaults to any)", paidByNumber[0].total === 1);
+
+    console.log("\ninvoices — ages in SA calendar days (review of #1109)");
+    const lateRow = (await run(A, ownerA, { customer: "Latecust", status: "any" })).slice(1)[0] as Row & { daysSinceInvoiced?: number };
+    check("invoiced 40 calendar days ago at 23:59: 40 days old, whatever the time now", lateRow?.daysSinceInvoiced === 40, String(lateRow?.daysSinceInvoiced));
+    const older40 = await run(A, ownerA, { customer: "Latecust", olderThanDays: 40 });
+    const older41 = await run(A, ownerA, { customer: "Latecust", olderThanDays: 41 });
+    check("olderThanDays agrees with the age shown: 40 includes it, 41 doesn't", older40[0].total === 1 && older41[0].total === 0, `${older40[0].total}/${older41[0].total}`);
 
     console.log("\ninvoices — a rep who may open only their own");
     const repView = await run(A, rep, { status: "any", limit: 60 });
