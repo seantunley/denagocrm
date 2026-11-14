@@ -769,6 +769,11 @@ jobs:
       - name: Assistant -- updates to a linked phone are claimed, released and never lost
         run: npm run test:assistant-updates-whatsapp
 
+      - name: DAX invoices -- held to the Invoices page's rule, owing per currency, never a payment reference
+        # Sean, 2026-11-14: "DAX must have knowledge of those things, permission based". deliveries.view + Automotive,
+        # only quotes the person may open; outstanding per currency; Xero filter; no reference; read-only.
+        run: npm run test:assistant-invoices
+
       # "Whose number is this?" is raw SQL, so the soft-delete filter is not
       # applied for it. A number on a lead binned months earlier still matched:
       # that person's messages were filed on the deleted lead, where nobody sees
