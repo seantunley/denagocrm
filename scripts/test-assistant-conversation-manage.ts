@@ -48,7 +48,9 @@ async function main() {
   const me = { tenantId: A, userId: a.memberUserId };
   const owner = { tenantId: A, userId: a.ownerUserId };
   const other = { tenantId: b.tenantId, userId: b.memberUserId };
-  const inA = <T>(fn: () => Promise<T>) => runInTenantScope({ tenantId: A, system: false }, fn);
+  // AWAITED inside the scope (review of #1115): a Prisma call is lazy, so one returned un-awaited would run after the
+  // scope had ended and the guarded client would see no workspace.
+  const inA = <T>(fn: () => Promise<T>) => runInTenantScope({ tenantId: A, system: false }, async () => await fn());
   const convIds: string[] = [];
 
   const conversation = async (who: { tenantId: string; userId: string }, title: string, said: string, opts: { deletedAt?: Date; updatedAt?: Date } = {}) => {

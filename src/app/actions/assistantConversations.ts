@@ -53,7 +53,7 @@ export async function renameAssistantConversation(id: string, formData: FormData
         // Its place in the list, and whether the next question continues it, is when it last MOVED — not this.
         data: { title, updatedAt: conversation.updatedAt },
       });
-      await logAudit({ action: "assistant.conversation_renamed", summary: "Renamed a DAX conversation", user, entityType: "AssistantConversation", entityId: conversation.id });
+      await logAudit({ action: "assistant.conversation_renamed", summary: "Renamed an assistant conversation", user, entityType: "AssistantConversation", entityId: conversation.id });
       revalidatePath("/assistant");
       return { success: "Renamed" };
     }),
@@ -69,7 +69,7 @@ export async function deleteAssistantConversation(id: string) {
         where: { id: conversation.id, tenantId: conversation.tenantId, userId: user.id, deletedAt: null },
         data: { deletedAt: new Date(), updatedAt: conversation.updatedAt },
       });
-      await logAudit({ action: "assistant.conversation_deleted", summary: "Deleted a DAX conversation", user, entityType: "AssistantConversation", entityId: conversation.id });
+      await logAudit({ action: "assistant.conversation_deleted", summary: "Deleted an assistant conversation", user, entityType: "AssistantConversation", entityId: conversation.id });
       revalidatePath("/assistant");
       return { success: `Deleted — you can restore it for ${TRASH_DAYS} days` };
     }),
@@ -85,7 +85,7 @@ export async function restoreAssistantConversation(id: string) {
         where: { id: conversation.id, tenantId: conversation.tenantId, userId: user.id, deletedAt: { not: null } },
         data: { deletedAt: null, updatedAt: conversation.updatedAt },
       });
-      await logAudit({ action: "assistant.conversation_restored", summary: "Restored a DAX conversation", user, entityType: "AssistantConversation", entityId: conversation.id });
+      await logAudit({ action: "assistant.conversation_restored", summary: "Restored an assistant conversation", user, entityType: "AssistantConversation", entityId: conversation.id });
       revalidatePath("/assistant");
       return { success: "Restored" };
     }),

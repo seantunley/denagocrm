@@ -45,8 +45,18 @@ test("search: the person's OWN live conversations only, bounded, newest first", 
   const search = lib.slice(lib.indexOf("export async function searchConversations"), lib.indexOf("/** What DAX sent on its own"));
   assert.match(search, /if \(q\.length < 2\) return \[\];/);
   assert.equal((search.match(/where: \{ tenantId: who\.tenantId, userId: who\.userId,/g) ?? []).length, 3, "all three queries name the workspace and the person");
-  assert.match(search, /take: SEARCH_TURNS/);
+  // One matching turn per live conversation, so a busy conversation can't crowd an older match out (review of #1115).
+  assert.match(search, /AND: \[live, \{ OR: \[\{ question: has \}, \{ answer: has \}\] \}\] \},\s*orderBy: \{ createdAt: "desc" \},\s*distinct: \["conversationId"\],\s*take: SEARCH_RESULTS,/);
+  assert.match(search, /const live = await liveTurnsWhere\(who\.tenantId, who\.userId\);/);
   assert.match(search, /\.sort\(\(a, b\) => b\.updatedAt\.getTime\(\) - a\.updatedAt\.getTime\(\)\)\s*\.slice\(0, SEARCH_RESULTS\)/);
+});
+
+test("?c=<id> opens that conversation even beyond the 20 recent chips — only the person's own, live (review of #1115)", () => {
+  const lib = src("src/lib/assistantConversation.ts");
+  assert.match(lib, /export async function liveConversation\(who: Who, id: string\) \{\s*return prisma\.assistantConversation\.findFirst\(\{\s*where: \{ id, tenantId: who\.tenantId, userId: who\.userId, deletedAt: null \},/);
+  const page = src("src/app/(app)/assistant/page.tsx");
+  assert.match(page, /c && !special \? liveConversation\(who, c\) : Promise\.resolve\(null\)/);
+  assert.match(page, /const picked = special && c \? c : asked\?\.id \?\? defaultConversation\(recent\);/);
 });
 
 test("rename, delete and restore: by id AND person AND workspace, audited without the title, time kept", () => {
@@ -58,7 +68,7 @@ test("rename, delete and restore: by id AND person AND workspace, audited withou
     assert.match(body, /await ownConversation\(id, user\.id, (true|false)\)/, `${name} checks the row is theirs`);
     assert.match(body, /where: \{ id: conversation\.id, tenantId: conversation\.tenantId, userId: user\.id,/);
     assert.match(body, /updatedAt: conversation\.updatedAt/, `${name} doesn't move it to the top or make it the current one`);
-    assert.match(body, /logAudit\(\{ action: "assistant\.conversation_\w+", summary: "\w+ a DAX conversation"/);
+    assert.match(body, /logAudit\(\{ action: "assistant\.conversation_\w+", summary: "\w+ an assistant conversation"/, "never a hard-coded assistant name: a workspace may rename it");
   }
 });
 

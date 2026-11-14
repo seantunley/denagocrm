@@ -27,8 +27,6 @@ export const NEW_TITLE = "New conversation";
 const SUMMARY_MAX = 1500;
 const DAY_MS = 86_400_000;
 const SEARCH_RESULTS = 20;
-/** Matching exchanges read per search — newest first; enough for the 20 conversations shown. */
-const SEARCH_TURNS = 200;
 
 export type Conversation = { id: string; summary: string | null };
 type Who = { tenantId: string; userId: string };
@@ -172,6 +170,18 @@ export async function recentConversations(who: Who, take = 20) {
   });
 }
 
+/**
+ * One of the person's OWN live conversations by id, wherever it is in their history — what ?c=<id> opens (review of
+ * #1115: a search result older than the 20 recent chips opened a different conversation). Anyone else's, another
+ * workspace's or a deleted one is null — the same answer as no such id, so nothing is revealed.
+ */
+export async function liveConversation(who: Who, id: string) {
+  return prisma.assistantConversation.findFirst({
+    where: { id, tenantId: who.tenantId, userId: who.userId, deletedAt: null },
+    select: { id: true, title: true, updatedAt: true, leadId: true, contactId: true },
+  });
+}
+
 /** Their deleted conversations still in the 60 days they can be restored — newest deletion first. */
 export async function deletedConversations(who: Who, take = 20) {
   return prisma.assistantConversation.findMany({
@@ -205,6 +215,7 @@ export async function searchConversations(who: Who, query: string) {
   if (q.length < 2) return [];
   const has = { contains: q, mode: "insensitive" as const };
   // ponytail: ILIKE over one person's turns (the tenant/user index narrows to those); full-text if people keep years.
+  const live = await liveTurnsWhere(who.tenantId, who.userId);
   const [titled, turns] = await Promise.all([
     prisma.assistantConversation.findMany({
       where: { tenantId: who.tenantId, userId: who.userId, deletedAt: null, title: has },
@@ -213,9 +224,12 @@ export async function searchConversations(who: Who, query: string) {
       select: { id: true, title: true, updatedAt: true },
     }),
     prisma.assistantTurn.findMany({
-      where: { tenantId: who.tenantId, userId: who.userId, conversationId: { not: null }, OR: [{ question: has }, { answer: has }] },
+      // The newest matching turn of EACH live conversation (review of #1115): sampling the newest N turns let one busy
+      // conversation's matches crowd an older matching one out of the results.
+      where: { tenantId: who.tenantId, userId: who.userId, conversationId: { not: null }, AND: [live, { OR: [{ question: has }, { answer: has }] }] },
       orderBy: { createdAt: "desc" },
-      take: SEARCH_TURNS,
+      distinct: ["conversationId"],
+      take: SEARCH_RESULTS,
       select: { conversationId: true, question: true, answer: true },
     }),
   ]);

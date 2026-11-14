@@ -7,7 +7,7 @@ import { isCodexConnected } from "@/lib/codex";
 import { getSetting } from "@/lib/settings";
 import { isTenantOwner } from "@/lib/auth";
 import { ASSISTANT_PROFILE_KEY, parseProfile } from "@/lib/assistantSoul";
-import { conversationHistory, defaultConversation, deletedConversations, recentConversations, searchConversations, updatesHistory } from "@/lib/assistantConversation";
+import { conversationHistory, defaultConversation, deletedConversations, liveConversation, recentConversations, searchConversations, updatesHistory } from "@/lib/assistantConversation";
 import { TITLE_MAX, TRASH_DAYS } from "@/lib/assistantConversationRules";
 import { deleteAssistantConversation, renameAssistantConversation, restoreAssistantConversation } from "@/app/actions/assistantConversations";
 import { ownedWriteTenantId } from "@/lib/tenantWrite";
@@ -62,7 +62,7 @@ type Deleted = Awaited<ReturnType<typeof deletedConversations>>;
  * search is a plain GET form, so a result is a link like any other; rename and delete show only when a conversation
  * of theirs is open; deleted ones wait under "Recently deleted" for 60 days.
  */
-function ConversationTools({ picked, title, query, found, deleted }: { picked: string; title: string | null; query: string; found: Found | null; deleted: Deleted }) {
+function ConversationTools({ name, picked, title, query, found, deleted }: { name: string; picked: string; title: string | null; query: string; found: Found | null; deleted: Deleted }) {
   return (
     <div className="space-y-2 text-sm">
       <div className="flex flex-wrap items-center gap-3">
@@ -83,7 +83,7 @@ function ConversationTools({ picked, title, query, found, deleted }: { picked: s
             <ConfirmActionDialog
               trigger={<button type="button" className="text-xs text-muted-foreground hover:text-destructive">Delete</button>}
               title="Delete this conversation?"
-              description={`It leaves your list and DAX stops remembering it. You can restore it under "Recently deleted" for ${TRASH_DAYS} days; after that it is gone for good. Nothing in the CRM changes.`}
+              description={`It leaves your list and ${name} stops remembering it. You can restore it under "Recently deleted" for ${TRASH_DAYS} days; after that it is gone for good. Nothing in the CRM changes.`}
               confirmLabel="Delete"
               destructive
               onConfirm={deleteAssistantConversation.bind(null, picked)}
@@ -118,7 +118,7 @@ function ConversationTools({ picked, title, query, found, deleted }: { picked: s
                 <ConfirmActionDialog
                   trigger={<button type="button" className="shrink-0 text-muted-foreground hover:text-foreground">Restore</button>}
                   title="Restore this conversation?"
-                  description="It comes back to your list, and DAX remembers it again."
+                  description={`It comes back to your list, and ${name} remembers it again.`}
                   confirmLabel="Restore"
                   onConfirm={restoreAssistantConversation.bind(null, conv.id)}
                 />
@@ -175,14 +175,17 @@ export default async function AssistantPage({ searchParams }: { searchParams: Pr
   const who = { tenantId: ownedWriteTenantId(), userId: user.id };
   const { c, q } = await searchParams;
   const query = (q ?? "").trim().slice(0, 100);
-  const [conversations, found, deleted] = await Promise.all([
+  const special = c === "new" || c === "updates" || c === "earlier";
+  const [recent, found, deleted, asked] = await Promise.all([
     recentConversations(who),
     query ? searchConversations(who, query) : Promise.resolve(null),
     deletedConversations(who),
+    // ?c=<id> beyond the recent chips (an older search result): theirs, live, or nothing.
+    c && !special ? liveConversation(who, c) : Promise.resolve(null),
   ]);
-  const picked = c === "new" || c === "updates" || c === "earlier"
-    ? c
-    : conversations.find((conv) => conv.id === c)?.id ?? defaultConversation(conversations);
+  // An older conversation opened by id joins the chips, so it shows as picked and Rename/Delete find it.
+  const conversations = asked && !recent.some((conv) => conv.id === asked.id) ? [...recent, asked] : recent;
+  const picked = special && c ? c : asked?.id ?? defaultConversation(recent);
   const historyFor = picked === "new" ? Promise.resolve([])
     : picked === "updates" ? updatesHistory(who)
       : conversationHistory(who, picked === "earlier" ? null : picked);
@@ -266,6 +269,7 @@ export default async function AssistantPage({ searchParams }: { searchParams: Pr
       {connected && <ConversationPicker conversations={conversations} picked={picked} />}
       {connected && (
         <ConversationTools
+          name={profile.name}
           picked={picked}
           title={conversations.find((conv) => conv.id === picked)?.title ?? null}
           query={query}
