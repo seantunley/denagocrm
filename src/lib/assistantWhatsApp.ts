@@ -7,6 +7,7 @@ import { fetchWhatsAppMedia, matchByPhone, sendWhatsAppAudioId, sendWhatsAppButt
 import { sendWhatsAppDocument } from "./whatsapp";
 import { quotePdf } from "./quotePdf";
 import { quotePdfFileName } from "./quoteEmail";
+import { isWrittenAsReport, wantsReport } from "./assistantReport";
 import { getCompanyProfile } from "./companyProfile";
 import { transcribeVoice, transcribeVoiceDetailed } from "./transcribe";
 import { askCrm } from "./crmAssistant";
@@ -469,6 +470,8 @@ export async function handleStaffWhatsApp(
     // the text goes as before — never nothing. The full answer is kept on their Ask page either way.
     const spoke = voiceBack && answer ? await sendVoiceAnswer(user.id, waId, answer, heard, script) : false;
     await sendPlan(waId, spoke ? voiceReplyExtras(choices) : plan);
+    // A REPORT ASKED FOR HERE COMES WITH ITS PDF (Sean, 2026-11-14: "why can't it deliver the PDF reports to WhatsApp?").
+    if (answer && wantsReport(q) && isWrittenAsReport(answer)) await sendReportPdf(tenantId, user, waId, q, answer);
   } finally {
     clearInterval(renew);
   }
@@ -900,6 +903,34 @@ async function sendQuotePdfToStaff(tenantId: string, userId: string, waId: strin
   }).catch(() => {});
   return null;
 }
+/**
+ * The report DAX has just written in this chat, as its PDF, to the same chat: the person who asked, never a customer
+ * (sent with no `record`, so nothing lands on a customer's timeline). Made from the answer itself — nothing is looked
+ * up again. A failure is said once; the PDF button under the answer on their Ask page still makes it.
+ */
+async function sendReportPdf(
+  tenantId: string,
+  user: NonNullable<Awaited<ReturnType<typeof assistantUserFor>>>,
+  waId: string,
+  question: string,
+  answer: string,
+): Promise<void> {
+  try {
+    // Loaded only when a report goes out: every other WhatsApp message never starts the PDF engine.
+    const { renderAssistantReportPdf } = await import("./assistantReportPdf");
+    const { pdf, fileName, title } = await renderAssistantReportPdf({ tenantId, preparedFor: user.name ?? "", question, answer, answeredAt: new Date() });
+    const sent = await sendWhatsAppDocument(waId, { content: pdf, filename: fileName, contentType: "application/pdf" }, `${title} — the PDF, for you.`);
+    if (sent.ok) {
+      await logAudit({ action: "assistant.report_pdf_to_staff", summary: "Sent a DAX report PDF to the linked WhatsApp of the person who asked for it", user, entityType: "User", entityId: user.id }).catch(() => {});
+      return;
+    }
+    await logError("assistant-whatsapp", "report PDF send failed").catch(() => {});
+  } catch (error) {
+    await logError("assistant-whatsapp", "report PDF could not be made", error instanceof Error ? error.name : "unknown").catch(() => {});
+  }
+  await sendWhatsAppText(waId, "I couldn't send the PDF just now. It's under this answer on your Ask page in the CRM — press PDF there.").catch(() => {});
+}
+
 const OUT_OF_TIME = Symbol("out of time");
 
 /**

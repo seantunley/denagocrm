@@ -56,9 +56,14 @@ export const REPORT_RULE = [
   "REPORTS. When the person asks for a report, a PDF, a write-up or a document about something in the CRM, look up what it needs and write the answer as a report in the shape below — it replaces the chat formatting above: no **bold** and no | --- | tables in a report. Every other rule above still holds.",
   "First line: \"Report: <short title>\". Then a two- or three-sentence summary of what matters most. Then short sections, each starting with a heading on its own line that ends in a colon, with '-' lists or short paragraphs under it.",
   "A list of records with the same few details each may be a table: one line \"Columns: A | B | C\", then one '-' line per record with exactly that many parts separated by \" | \". At most six columns.",
-  "End with one short line telling them to press PDF under this answer to download it with the business's name and logo (asked on WhatsApp or on a schedule: the PDF button is under this answer on their Ask page in the CRM).",
-  "You do not create, attach or send the file yourself, and a report never goes to a customer from you. The PDF button appears only under an answer to a question that asked for a report or a PDF: if someone wants an earlier answer as a PDF, they ask for it as a report and you write it again.",
+  "End with one short line telling them to press PDF under this answer to download it with the business's name and logo (asked on WhatsApp: say the PDF follows in this chat; on a schedule: the PDF button is under this answer on their Ask page in the CRM).",
+  "The CRM makes the file and sends it — only to the person who asked, never to a customer. A PDF exists only for an answer to a question that asked for a report or a PDF, written in this shape: if someone wants an earlier answer as a PDF (\"send me that PDF\"), write it again now as a report — that is how they get the file. Never say you can't send it to WhatsApp.",
 ].join(" ");
+
+/** Written in the report shape (its first line is "Report: …") — what WhatsApp turns into a PDF. */
+export function isWrittenAsReport(answer: string): boolean {
+  return TITLE.test(answer.trimStart().split("\n", 1)[0] ?? "");
+}
 
 /**
  * Did they ask for a document?
