@@ -797,6 +797,12 @@ jobs:
         # only quotes the person may open; outstanding per currency; Xero filter; no reference; read-only.
         run: npm run test:assistant-invoices
 
+      - name: DAX log a call -- filed only on Confirm, on deals and customers the rep may open
+        # Sean, 2026-11-14: "Record or dictate a call, and DAX writes the summary, files it and proposes the
+        # follow-up". The card writes nothing; Confirm files the call, its notes and the follow-up; never another
+        # rep's deal or customer, never the other workspace.
+        run: npm run test:assistant-log-call
+
       # "Whose number is this?" is raw SQL, so the soft-delete filter is not
       # applied for it. A number on a lead binned months earlier still matched:
       # that person's messages were filed on the deleted lead, where nobody sees

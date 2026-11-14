@@ -51,6 +51,20 @@ export const proposedAction = z.discriminatedUnion("type", [
     summary: shown(120).optional(),
     reason,
   }).strict(),
+  // A CALL (or visit) THAT ALREADY HAPPENED, written up: a completed call on the deal or customer, its notes on the
+  // timeline, and — when one was agreed — the follow-up, all on one Confirm (Sean, 2026-11-14: "Record or dictate a
+  // call, and DAX writes the summary, files it and proposes the follow-up"). Saved by the Log a call button's own action.
+  z.object({
+    type: z.literal("log_call"),
+    leadId: leadId.optional(),
+    contactId: leadId.optional(),
+    activity: z.enum(["call", "meeting"]).default("call"),
+    summary: shown(120),
+    notes: text.max(4000).optional(),
+    followUp: at.optional(),
+    nextStep: shown(160).optional(),
+    reason,
+  }).strict(),
   // pin: keeps the note at the top of the timeline — only when the person asks for it pinned.
   // attachImage: the photo or screenshot sent WITH THIS question goes on the note (Sean, 2026-11-02: "DAX must be able
   // to pin screenshots to leads or contacts"). The card builder takes it from the question, never from the model.
@@ -482,10 +496,28 @@ export const TEST_DRIVE_RULE =
   "branch is where, in their words (\"at the Atlantic Beach showroom\"); left out, the card uses a demo vehicle's branch or where they last booked one, and asks only if there is neither. " +
   "Never refuse, stall or ask for a demo vehicle because none was named, and never pick one they didn't ask for.";
 
+/** What a log_call card files, line by line, as the person reads it before confirming. `followUpLabel`: its SA time. */
+export function logCallDetail(c: { activity: "call" | "meeting"; notes: string; nextStep?: string; followUpLabel?: string }): string {
+  return [
+    c.notes || "(no notes)",
+    ...(c.nextStep ? [`Next step: ${c.nextStep}`] : []),
+    c.followUpLabel ? `Follow-up call booked: ${c.followUpLabel}` : "No follow-up booked.",
+    `Filed as a completed ${c.activity === "call" ? "call" : "visit"} — the customer is not contacted.`,
+  ].join("\n");
+}
+
+/** A call that already happened (Sean, 2026-11-14): written up and filed, with its follow-up, on one Confirm. */
+export const LOG_CALL_RULE =
+  '- log_call: a call or visit that ALREADY HAPPENED, which they tell you about or send as a voice note ("log a call with Marcel: he wants the XL in white, call him back Friday") → ' +
+  '{"type":"log_call","leadId":"<the deal>","summary":"<what happened, one line>","notes":"• <fact>\\n• <fact>","nextStep":"<the agreed next action>","followUp":"YYYY-MM-DD or YYYY-MM-DDTHH:MM"}. ' +
+  'contactId instead of leadId for a customer with no deal in question; when the customer has more than one open deal, ask which. activity "meeting" for a visit. ' +
+  "Notes: 2–6 short facts — who was on it, what the customer wants, decisions, objections, prices or dates said, what was promised — only what they said, never invented. " +
+  "followUp only when a next contact was agreed or is obvious; leave it out otherwise. One log_call files the call AND books its follow-up — never a separate follow_up for the same call. A call still to make is a follow_up, not a log_call.";
+
 export const ACTION_INSTRUCTIONS = [
   "TASKS. You can't change anything yourself, but you can PROPOSE up to 4 tasks for the person to confirm with one click. Propose when they ask you to do something (\"remind me…\", \"give it to Donovan\", \"draft a message…\", \"book Anna a test drive\"), or offer one when you recommend a concrete next step.",
   'Put them under "actions" in the reply block:',
-  '"actions":[{"type":"follow_up","leadId":"<id>","when":"YYYY-MM-DDTHH:MM","activity":"call|whatsapp|email|meeting|todo","summary":"...","reason":"why this helps"},{"type":"note","leadId":"<id>","text":"...","pin":false},{"type":"customer_note","contactId":"<id>","text":"...","pin":false},{"type":"create_customer","firstName":"...","lastName":"...","phone":"+27...","email":"...","company":"..."},{"type":"create_lead","contactId":"<id>","product":"<as the catalogue lists it>","notes":"..."},{"type":"update_customer","contactId":"<id>","phone":"..."},{"type":"attach_file","vehicleId":"<id>","label":"<a document type, optional>"},{"type":"record_payment","quote":"Q-1030","amount":50000,"method":"eft|card|cash|finance","receivedOn":"YYYY-MM-DD","reference":"..."},{"type":"assign","leadId":"<id>","to":"<person>"},{"type":"stage","leadId":"<id>","stage":"<stage>"},{"type":"draft_message","leadId":"<id>","channel":"whatsapp|email","subject":"<email only>","body":"..."},{"type":"meeting","leadId":"<id>","when":"YYYY-MM-DDTHH:MM","minutes":60,"with":["<colleague>"],"summary":"..."},{"type":"test_drive","leadId":"<id of the deal — or contactId for a customer with no deal>","when":"YYYY-MM-DDTHH:MM","minutes":60,"product":"<the model, as the catalogue names it — optional>","branch":"<where, in their words — optional>","vehicle":"<a demo vehicle from stock — ONLY if they name one>"},{"type":"reschedule","activityId":"<id>","when":"YYYY-MM-DDTHH:MM"},{"type":"cancel_activity","activityId":"<id>"},{"type":"lost","leadId":"<id>","reason":"..."},{"type":"nurture","leadId":"<id>","because":"product|timing|budget|customer|other","interest":"...","trigger":"...","reviewOn":"YYYY-MM-DD"},{"type":"quote","leadId":"<id>"},{"type":"quote_build","contactId":"<the contactId of a CUSTOMER — a quote for the customer, on no deal>","lines":[{"productId":"<id>","qty":1,"discountPct":0,"colour":"<optional>"}]},{"type":"quote_build","leadId":"<the leadId of a DEAL — a quote for that deal; give no contactId>","lines":[{"productId":"<id>","qty":1,"colour":"<as the catalogue lists it>"}],"fees":[{"label":"Delivery — Hermanus","amount":6500,"delivery":true}]},{"type":"quote_add","quote":"Q-1030","fees":[{"label":"Delivery fee","amount":5000,"delivery":true}],"lines":[{"productId":"<id>","qty":1}]},{"type":"quote_change","quote":"Q-1030","fees":[{"fee":"Delivery Fee","label":"Delivery Fee - Hermanus"}],"lines":[{"line":"<product on the quote>","qty":3}]},{"type":"quote_pdf","quote":"Q-1030"},{"type":"schedule","question":"...","cadence":"once|daily|weekdays|weekly","weekday":1,"timeOfDay":"HH:MM","onDate":"YYYY-MM-DD"},{"type":"watch","kind":"quote_viewed|quote_unsigned|lead_quiet|test_drive_no_follow_up|delivery_deposit_due","quoteId":"Q-1042","leadId":"<id>","product":"<product>","thresholdHours":48,"thresholdDays":3}]',
+  '"actions":[{"type":"follow_up","leadId":"<id>","when":"YYYY-MM-DDTHH:MM","activity":"call|whatsapp|email|meeting|todo","summary":"...","reason":"why this helps"},{"type":"log_call","leadId":"<id>","summary":"...","notes":"...","nextStep":"...","followUp":"YYYY-MM-DD"},{"type":"note","leadId":"<id>","text":"...","pin":false},{"type":"customer_note","contactId":"<id>","text":"...","pin":false},{"type":"create_customer","firstName":"...","lastName":"...","phone":"+27...","email":"...","company":"..."},{"type":"create_lead","contactId":"<id>","product":"<as the catalogue lists it>","notes":"..."},{"type":"update_customer","contactId":"<id>","phone":"..."},{"type":"attach_file","vehicleId":"<id>","label":"<a document type, optional>"},{"type":"record_payment","quote":"Q-1030","amount":50000,"method":"eft|card|cash|finance","receivedOn":"YYYY-MM-DD","reference":"..."},{"type":"assign","leadId":"<id>","to":"<person>"},{"type":"stage","leadId":"<id>","stage":"<stage>"},{"type":"draft_message","leadId":"<id>","channel":"whatsapp|email","subject":"<email only>","body":"..."},{"type":"meeting","leadId":"<id>","when":"YYYY-MM-DDTHH:MM","minutes":60,"with":["<colleague>"],"summary":"..."},{"type":"test_drive","leadId":"<id of the deal — or contactId for a customer with no deal>","when":"YYYY-MM-DDTHH:MM","minutes":60,"product":"<the model, as the catalogue names it — optional>","branch":"<where, in their words — optional>","vehicle":"<a demo vehicle from stock — ONLY if they name one>"},{"type":"reschedule","activityId":"<id>","when":"YYYY-MM-DDTHH:MM"},{"type":"cancel_activity","activityId":"<id>"},{"type":"lost","leadId":"<id>","reason":"..."},{"type":"nurture","leadId":"<id>","because":"product|timing|budget|customer|other","interest":"...","trigger":"...","reviewOn":"YYYY-MM-DD"},{"type":"quote","leadId":"<id>"},{"type":"quote_build","contactId":"<the contactId of a CUSTOMER — a quote for the customer, on no deal>","lines":[{"productId":"<id>","qty":1,"discountPct":0,"colour":"<optional>"}]},{"type":"quote_build","leadId":"<the leadId of a DEAL — a quote for that deal; give no contactId>","lines":[{"productId":"<id>","qty":1,"colour":"<as the catalogue lists it>"}],"fees":[{"label":"Delivery — Hermanus","amount":6500,"delivery":true}]},{"type":"quote_add","quote":"Q-1030","fees":[{"label":"Delivery fee","amount":5000,"delivery":true}],"lines":[{"productId":"<id>","qty":1}]},{"type":"quote_change","quote":"Q-1030","fees":[{"fee":"Delivery Fee","label":"Delivery Fee - Hermanus"}],"lines":[{"line":"<product on the quote>","qty":3}]},{"type":"quote_pdf","quote":"Q-1030"},{"type":"schedule","question":"...","cadence":"once|daily|weekdays|weekly","weekday":1,"timeOfDay":"HH:MM","onDate":"YYYY-MM-DD"},{"type":"watch","kind":"quote_viewed|quote_unsigned|lead_quiet|test_drive_no_follow_up|delivery_deposit_due","quoteId":"Q-1042","leadId":"<id>","product":"<product>","thresholdHours":48,"thresholdDays":3}]',
   "- Add a short \"reason\" (under 160 characters) on any proposal when you know why it helps — the card shows it so the person sees the point before confirming. Skip it when the title already says everything.",
   "- watch: when they say \"tell me when / let me know if\" something happens — quote_viewed (quoteId: the customer opens that quote), quote_unsigned (viewed but not signed after thresholdHours, or its email bounced; one quoteId or all theirs), lead_quiet (no customer contact for thresholdDays; one leadId, or every open lead for a product), test_drive_no_follow_up (a test drive done thresholdHours ago with nothing planned next), delivery_deposit_due (delivery within thresholdHours and no deposit). Only the fields that kind uses. It only ever tells THEM — it never contacts a customer. Offer one yourself when it would help (\"I can tell you when Anna opens it\").",
   "- schedule: a question for you to answer on your own LATER or REPEATEDLY (\"every Monday at 7 tell me which deals went quiet\", \"Friday at 9, has Anna signed?\"). weekday (0 = Sunday … 6 = Saturday) only with weekly; onDate only with once. Schedules run on the hour or half past, so timeOfDay is always HH:00 or HH:30 — if they ask for 07:10, propose 07:00 and say it runs on the half hour. It runs later with no conversation, so the question must stand alone — name the customer or thing (\"Has Anna Jacobs signed her quote?\"), never \"her\" or \"that deal\". No leadId. A plain reminder to do something with a lead (\"remind me to call Anna Friday\") is a follow_up, not a schedule.",
@@ -499,6 +531,7 @@ export const ACTION_INSTRUCTIONS = [
   QUOTE_PDF_RULE,
   "- note goes on a lead. customer_note goes on a CUSTOMER — use it when they say \"customer\" or \"contact\", or when the person has no lead (lead_brief lists matching customers with their contactId when no lead matches). If several customers match, ask which one before proposing. pin:true only when they ask for the note to be pinned; it keeps it at the top of the timeline. " +
     "attachImage:true puts the photo or screenshot on the note — the one sent with this message, or with the message just before when this is the reply about it — only when they ask to save, attach or pin it. With no image in front of you there is nothing to attach: ask them to send it again, with the instruction as its caption.",
+  LOG_CALL_RULE,
   CREATE_CUSTOMER_RULE,
   FILE_AND_PAYMENT_RULE,
   DELIVERY_RULE,
@@ -855,6 +888,8 @@ export type ActionCard =
   | (CalendarCard & { kind: "follow_up"; when: string; activity: string; summary?: string })
   // `image`: the photo sent with the question, as a cleaned JPEG data: URL — shown on the card, uploaded at Confirm by the note form's own action.
   | (LeadCard & { kind: "note"; text: string; pin?: boolean; image?: string; detail?: string })
+  // A call that happened: on a deal (leadId) or a customer (contactId, leadId null). `detail`: everything Confirm files.
+  | { id: string; kind: "log_call"; leadId: string | null; contactId?: string; leadLabel: string; title: string; activity: "call" | "meeting"; summary: string; notes: string; followUp?: string; nextStep?: string; detail: string; reason?: string }
   // leadId null and leadLabel the customer's name: the same shape an activity with no lead has.
   | { id: string; kind: "customer_note"; contactId: string; leadId: null; leadLabel: string; title: string; text: string; pin?: boolean; image?: string; detail?: string; reason?: string }
   // A new customer record: `detail` is every field as the person reads it before confirming. Confirm checks for a duplicate again.

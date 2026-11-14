@@ -4,6 +4,11 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
 
 /** Long enough for a call debrief; short enough to keep uploads small. */
 export const MAX_RECORDING_SECONDS = 180;
+/** A recorded phone call (Log a call → Record the call). At 32 kbps that is ≈ 3.6 MB. */
+export const CALL_RECORDING_SECONDS = 15 * 60;
+
+/** `maxSeconds` / `bitsPerSecond` are read when a recording STARTS, so a caller may change them between recordings. */
+export type RecorderOptions = { maxSeconds?: number; bitsPerSecond?: number };
 
 const noSubscribe = () => () => {};
 
@@ -13,16 +18,18 @@ const noSubscribe = () => () => {};
  * never leaves this hook except as the Blob handed to `onDone`, and nothing
  * stores it: callers transcribe it and drop it.
  */
-export function useVoiceRecorder(onDone: (audio: Blob) => void) {
+export function useVoiceRecorder(onDone: (audio: Blob) => void, options: RecorderOptions = {}) {
   const [recording, setRecording] = useState(false);
   const [seconds, setSeconds] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const recorder = useRef<MediaRecorder | null>(null);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
   const done = useRef(onDone);
+  const opts = useRef(options);
   useEffect(() => {
     done.current = onDone;
-  }, [onDone]);
+    opts.current = options;
+  });
 
   // false on the server and in the first client render, then the real answer —
   // reading `window` during render would make server and client HTML disagree.
@@ -43,7 +50,8 @@ export function useVoiceRecorder(onDone: (audio: Blob) => void) {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const chunks: Blob[] = [];
-      const rec = new MediaRecorder(stream);
+      const { maxSeconds = MAX_RECORDING_SECONDS, bitsPerSecond } = opts.current;
+      const rec = new MediaRecorder(stream, bitsPerSecond ? { audioBitsPerSecond: bitsPerSecond } : undefined);
       rec.ondataavailable = (event) => {
         if (event.data.size) chunks.push(event.data);
       };
@@ -59,7 +67,7 @@ export function useVoiceRecorder(onDone: (audio: Blob) => void) {
       setRecording(true);
       timer.current = setInterval(() => {
         setSeconds((s) => {
-          if (s + 1 >= MAX_RECORDING_SECONDS) stop();
+          if (s + 1 >= maxSeconds) stop();
           return s + 1;
         });
       }, 1000);

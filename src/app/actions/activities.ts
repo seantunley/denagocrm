@@ -645,13 +645,15 @@ async function scheduleFollowUpBody(data: {
 }
 
 /**
- * Save a spoken call/visit debrief the person has checked: a COMPLETED activity
- * (it already happened — so no schedule lock or clash check, which is for
- * bookings), its notes on the lead's timeline, and — only if they kept one — the
- * follow-up it agreed. Drafted by draftVoiceDebrief; saved only on their Save.
+ * Save a call or visit the person has checked — recorded, dictated, typed, or proposed by DAX: a COMPLETED activity
+ * (it already happened — so no schedule lock or clash check, which is for bookings), its notes on the timeline, and —
+ * only if they kept one — the follow-up it agreed. On a deal (`leadId`) or on a customer with no deal in question
+ * (`contactId`), never both. Drafted by draftVoiceDebrief / draftTypedDebrief or a DAX log_call card; saved only on
+ * their Save or Confirm. `followUpDate` is YYYY-MM-DD (09:00) or YYYY-MM-DDTHH:MM.
  */
 export async function logVoiceDebrief(data: {
-  leadId: string;
+  leadId?: string | null;
+  contactId?: string | null;
   type: "call" | "meeting";
   summary: string;
   notes: string;
@@ -662,15 +664,25 @@ export async function logVoiceDebrief(data: {
     () =>
       withActingStaffScope(async () => {
         const user = await requirePermission("activities.manage");
-        await assertLinks(user, { leadId: data.leadId });
+        if (Boolean(data.leadId) === Boolean(data.contactId)) refuse("Log it on one deal or one customer.");
+        await assertLinks(user, { leadId: data.leadId, contactId: data.contactId });
         const summary = data.summary.trim().slice(0, 200);
         if (!summary) refuse("Add a one-line summary.");
         if (data.type !== "call" && data.type !== "meeting") refuse("Pick call or visit.");
+        if (data.followUpDate && !/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?$/.test(data.followUpDate)) refuse("Pick a valid follow-up date.");
         const notes = data.notes.trim().slice(0, 8000);
-        const lead = await prisma.lead.findUnique({ where: { id: data.leadId }, select: { contactId: true } });
-        if (!lead) refuse("That lead is no longer there.");
-        const contactId = lead.contactId;
-        const tenantId = await customerRecordTenantId({ contactId, leadId: data.leadId });
+        let contactId: string | null;
+        if (data.leadId) {
+          const lead = await prisma.lead.findUnique({ where: { id: data.leadId }, select: { contactId: true } });
+          if (!lead) refuse("That lead is no longer there.");
+          contactId = lead.contactId;
+        } else {
+          const contact = await prisma.contact.findFirst({ where: { id: data.contactId!, deletedAt: null }, select: { id: true } });
+          if (!contact) refuse("That customer is no longer there.");
+          contactId = contact.id;
+        }
+        const leadId = data.leadId ?? null;
+        const tenantId = await customerRecordTenantId({ contactId, leadId });
         const now = new Date();
         await prisma.activity.create({
           data: {
@@ -681,7 +693,7 @@ export async function logVoiceDebrief(data: {
             endDate: now,
             status: "done",
             doneAt: now,
-            leadId: data.leadId,
+            leadId,
             contactId,
             assignedToId: user.id,
             createdById: user.id,
@@ -695,7 +707,7 @@ export async function logVoiceDebrief(data: {
               direction: "outbound",
               subject: `🎙 ${data.type === "call" ? "Call" : "Visit"}: ${summary}`,
               body: notes,
-              leadId: data.leadId,
+              leadId,
               contactId,
               userId: user.id,
               tenantId,
@@ -704,25 +716,26 @@ export async function logVoiceDebrief(data: {
         }
         await logAudit({
           action: "activity.logged",
-          summary: `Logged a ${data.type === "call" ? "call" : "visit"} by voice: “${summary}”`,
-          leadId: data.leadId,
+          summary: `Logged a ${data.type === "call" ? "call" : "visit"}: “${summary}”`,
+          leadId,
           contactId,
           user,
         });
+        const page = leadId ? `/leads/${leadId}` : `/contacts/${contactId}`;
         if (data.followUpDate) {
           const followUp = await scheduleFollowUpBody({
-            leadId: data.leadId,
+            leadId,
             contactId,
             type: "call",
-            when: `${data.followUpDate}T09:00`,
+            when: data.followUpDate.includes("T") ? data.followUpDate : `${data.followUpDate}T09:00`,
             summary: data.nextStep?.trim() || undefined,
           });
           if (!followUp.ok) {
-            revalidatePath(`/leads/${data.leadId}`);
+            revalidatePath(page);
             return { ok: false, error: `Saved the ${data.type}, but the follow-up wasn't booked: ${followUp.error}` };
           }
         }
-        revalidatePath(`/leads/${data.leadId}`);
+        revalidatePath(page);
         revalidatePath("/activities");
         revalidatePath("/");
         return { ok: true };

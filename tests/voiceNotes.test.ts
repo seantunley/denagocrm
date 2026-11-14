@@ -43,7 +43,12 @@ test("recordings are transcribed and dropped — never stored, never logged", ()
   for (const call of voice.match(/logError\([^)]*\)/g) ?? []) {
     assert.doesNotMatch(call, /heard|text|transcript|prompt/, call);
   }
-  assert.match(voice, /const user = await requirePermission\("activities\.manage"\);[\s\S]*canAccessLead\(user, leadId\)/);
+  // Each draft: the permission, then access to THIS deal or customer (callTarget), before any audio or text is sent.
+  assert.match(voice, /callTarget[\s\S]*\(leadId \? await canAccessLead\(user, leadId\) : await canAccessContact\(user, contactId\)\)/);
+  for (const name of ["draftVoiceDebrief", "draftTypedDebrief"]) {
+    const body = voice.slice(voice.indexOf(`export async function ${name}`));
+    assert.match(body, /const user = await requirePermission\("activities\.manage"\);\s*if \(!\(await callTarget\(user, formData\)\)\)/, name);
+  }
 });
 
 test("asking by voice is behind the assistant's module, checked before any audio is sent", () => {
@@ -54,11 +59,13 @@ test("asking by voice is behind the assistant's module, checked before any audio
   assert.ok(gate < body.indexOf("hear(formData)"), "before the recording reaches ElevenLabs");
 });
 
-test("saving a debrief is a completed activity on a lead the user may touch", () => {
+test("saving a call is a completed activity on a deal or customer the user may touch", () => {
   const actions = code("src/app/actions/activities.ts");
   const body = actions.slice(actions.indexOf("export async function logVoiceDebrief"), actions.indexOf("export async function cancelActivity"));
   assert.match(body, /requirePermission\("activities\.manage"\)/);
-  assert.match(body, /assertLinks\(user, \{ leadId: data\.leadId \}\)/);
+  assert.match(body, /if \(Boolean\(data\.leadId\) === Boolean\(data\.contactId\)\) refuse\(/, "one deal or one customer, never both or neither");
+  assert.match(body, /assertLinks\(user, \{ leadId: data\.leadId, contactId: data\.contactId \}\)/);
+  assert.match(body, /prisma\.contact\.findFirst\(\{ where: \{ id: data\.contactId!, deletedAt: null \}/, "never a customer in the bin");
   assert.match(body, /status: "done",\s*doneAt: now/);
   assert.match(body, /logAudit\(/);
   // A logged call already happened: no schedule lock or clash check here.

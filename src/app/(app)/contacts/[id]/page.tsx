@@ -15,6 +15,7 @@ import XeroInvoiceControl from "@/components/XeroInvoiceControl";
 import DocumentsPanel from "@/components/DocumentsPanel";
 import PortalUploadsList, { type PortalUploadRow } from "@/components/PortalUploadsList";
 import ActivityPanel from "@/components/ActivityPanel";
+import VoiceDebriefButton from "@/components/VoiceDebriefButton";
 import EmailComposer from "@/components/EmailComposer";
 import { customerTimelineWhere, type DealOption } from "@/lib/customerTimeline";
 import { composerQuotes } from "@/lib/composerQuotes";
@@ -538,13 +539,16 @@ export default async function ContactDetailPage({
                 label: "Activities",
                 count: activities.filter((a) => a.status === "planned").length,
                 content: (
-                  <ActivityPanel
-                    activities={activities}
-                    users={users}
-                    currentUserId={user.id}
-                    contactId={contact.id}
-                    revalidate={path}
-                  />
+                  <div className="space-y-3">
+                    {canBookTestDrive && <VoiceDebriefButton contactId={contact.id} openDeals={openDeals} />}
+                    <ActivityPanel
+                      activities={activities}
+                      users={users}
+                      currentUserId={user.id}
+                      contactId={contact.id}
+                      revalidate={path}
+                    />
+                  </div>
                 ),
               },
               ...(automotiveOn ? [{

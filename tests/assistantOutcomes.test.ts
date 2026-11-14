@@ -47,7 +47,7 @@ test("each kind of card counts in one family; anything new or unknown is Other, 
   const expect: Record<string, string> = {
     follow_up: "follow_ups", reschedule: "follow_ups",
     draft_message: "messages",
-    note: "notes", customer_note: "notes",
+    note: "notes", customer_note: "notes", log_call: "notes",
     stage: "stage", assign: "stage", nurture: "stage",
     quote: "quotes", quote_build: "quotes", quote_add: "quotes", quote_change: "quotes", quote_pdf: "quotes",
     meeting: "meetings", test_drive: "meetings",
@@ -63,7 +63,7 @@ test("each kind of card counts in one family; anything new or unknown is Other, 
   assert.deepEqual(
     FAMILIES.map((f) => [f.label, f.outcome]),
     [
-      ["Follow-ups & reminders", "reply"], ["Messages drafted", "reply"], ["Notes", "reply"], ["Stage & assignment", "progress"],
+      ["Follow-ups & reminders", "reply"], ["Messages drafted", "reply"], ["Notes & calls logged", "reply"], ["Stage & assignment", "progress"],
       ["Quotes", "quote"], ["Meetings & test drives", "reply"], ["Other", null],
     ],
   );

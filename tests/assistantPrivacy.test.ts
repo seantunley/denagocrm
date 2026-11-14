@@ -158,9 +158,13 @@ test("voice is behind a per-person limit before any audio leaves", () => {
   const voice = code("src/app/actions/voice.ts");
   const ask = voice.slice(voice.indexOf("export async function transcribeQuestion"), voice.indexOf("export async function draftVoiceDebrief"));
   assert.ok(ask.indexOf("assistantVoiceAllowed(user.id)") > 0 && ask.indexOf("assistantVoiceAllowed(user.id)") < ask.indexOf("return hear(formData)"));
-  const debrief = voice.slice(voice.indexOf("export async function draftVoiceDebrief"));
-  assert.ok(debrief.indexOf("assistantVoiceAllowed(user.id)") > 0 && debrief.indexOf("assistantVoiceAllowed(user.id)") < debrief.indexOf("await hear(formData)"));
-  assert.match(debrief, /if \(!\(await isModuleEnabled\("automation"\)\) \|\| !\(await isCodexConnected\(\)\)\)/, "no ChatGPT summary with the module off");
+  const debrief = voice.slice(voice.indexOf("export async function draftVoiceDebrief"), voice.indexOf("export async function draftTypedDebrief"));
+  assert.ok(debrief.indexOf("assistantVoiceAllowed(user.id)") > 0 && debrief.indexOf("assistantVoiceAllowed(user.id)") < debrief.indexOf("await hear(formData"));
+  // Typed call notes reach ChatGPT too: the same limit, before the write-up.
+  const typed = voice.slice(voice.indexOf("export async function draftTypedDebrief"));
+  assert.ok(typed.indexOf("assistantVoiceAllowed(user.id)") > 0 && typed.indexOf("assistantVoiceAllowed(user.id)") < typed.indexOf("return writeUp("));
+  const writeUp = voice.slice(voice.indexOf("async function writeUp"), voice.indexOf("export async function draftVoiceDebrief"));
+  assert.match(writeUp, /if \(!\(await isModuleEnabled\("automation"\)\) \|\| !\(await isCodexConnected\(\)\)\)/, "no ChatGPT summary with the module off");
 });
 
 test("the nightly tidy never sees anyone's profile, and what it merges reaches nobody until approved", () => {
