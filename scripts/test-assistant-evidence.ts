@@ -65,7 +65,14 @@ const C = { hendrik: cid(), hendrik2: cid(), strangers: cid() };
 const L = { mine: cid(), theirs: cid(), strangers: cid() };
 const CONV = cid();
 const M = { promise: cid(), askDate: cid(), bounced: cid(), long: cid(), theirDeal: cid(), phoned: cid(), otherTenant: cid(), unmatched: cid(), huge: cid(), waiting: cid(), photoMsg: cid(), theirPhoto: cid(), voice: cid() };
-const D = { contract: cid(), scan: cid(), long: cid(), photo: cid(), outsiders: cid(), otherTenant: cid(), strangers: cid(), longScan: cid(), drawn: cid(), sheet: cid(), word: cid(), msgPhoto: cid(), msgTheirs: cid() };
+const D = { contract: cid(), scan: cid(), long: cid(), photo: cid(), outsiders: cid(), otherTenant: cid(), strangers: cid(), longScan: cid(), drawn: cid(), sheet: cid(), word: cid(), msgPhoto: cid(), msgTheirs: cid(), hoVin: cid(), hoOdo: cid(), hoTheirs: cid() };
+// Delivery handover photos (2026-11-14): the rep's quote on Hendrik, and the stranger's on Petrus.
+const Q = { mine: cid(), strangers: cid() };
+const QN = { mine: 900_000_000 + Math.floor(Math.random() * 90_000_000), strangers: 990_000_000 + Math.floor(Math.random() * 9_000_000) };
+const TEMPLATE = cid();
+const RUN = { mine: `ev_run_${SFX}_m`, strangers: `ev_run_${SFX}_s` };
+let savedModules: string | null = null;
+let modulesSaved = false;
 const UPLOADS = path.join(process.cwd(), "storage", "uploads");
 const stored = (id: string) => `evidence-test-${SFX}-${id}`;
 const DAY = 86_400_000;
@@ -202,10 +209,41 @@ async function seed() {
   writeFileSync(path.join(UPLOADS, stored(D.msgPhoto)), await picture("jpeg"));
   writeFileSync(path.join(UPLOADS, stored(D.msgTheirs)), await picture("jpeg"));
   await basePrisma.document.create({ data: { id: D.otherTenant, tenantId: T2, fileName: "Rover XL sales agreement (signed).pdf", storedName: stored(D.otherTenant), mimeType: "application/pdf", sizeBytes: contract.length, contactId: C.hendrik2, uploadedById: otherOwner.id } });
+
+  // HANDOVER PHOTOS: Automotive on for the run (restored in cleanup); a delivery checklist on each quote.
+  savedModules = (await basePrisma.tenant.findUnique({ where: { id: T }, select: { modules: true } }))?.modules ?? null;
+  modulesSaved = true;
+  await basePrisma.tenant.update({ where: { id: T }, data: { modules: [...new Set([...(savedModules ?? "").split(","), "automotive"])].filter(Boolean).join(",") } });
+  await basePrisma.quote.createMany({
+    data: [
+      { id: Q.mine, tenantId: T, number: QN.mine, status: "accepted", contactId: C.hendrik, leadId: L.mine, createdById: rep.id },
+      { id: Q.strangers, tenantId: T, number: QN.strangers, status: "accepted", contactId: C.strangers, leadId: L.strangers, createdById: stranger.id },
+    ],
+  });
+  await basePrisma.checklistTemplate.create({ data: { id: TEMPLATE, tenantId: T, host: "quote.delivery", name: `Evidence handover ${SFX}`, active: true } });
+  await basePrisma.checklistTemplateRevision.create({ data: { tenantId: T, templateId: TEMPLATE, version: 1, items: [] } });
+  const handover: [string, string, [string, string, string][]][] = [
+    [RUN.mine, Q.mine, [["vin", "VIN / serial number", D.hoVin], ["odo", "Odometer", D.hoOdo]]],
+    [RUN.strangers, Q.strangers, [["vin", "VIN / serial number", D.hoTheirs]]],
+  ];
+  for (const [runId, hostId, entries] of handover) {
+    await basePrisma.checklistRun.create({ data: { id: runId, tenantId: T, templateId: TEMPLATE, templateVersion: 1, hostType: "quote.delivery", hostId, completedAt: new Date() } });
+    for (const [item, label, file] of entries) {
+      writeFileSync(path.join(UPLOADS, stored(file)), await picture("jpeg"));
+      await basePrisma.checklistEntry.create({ data: { id: `${runId}_${item}`, tenantId: T, runId, itemIdSnapshot: item, labelSnapshot: label, captureSnapshot: "photo", status: "done" } });
+      await basePrisma.checklistPhoto.create({ data: { id: `${runId}_${item}_p`, tenantId: T, entryId: `${runId}_${item}`, url: stored(file), capturedAt: new Date() } });
+    }
+  }
 }
 
 async function cleanup() {
   for (const id of Object.values(D)) rmSync(path.join(UPLOADS, stored(id)), { force: true });
+  // Runs first (their entries and photos go with them), then the template the runs pinned, then the quotes.
+  await basePrisma.checklistRun.deleteMany({ where: { id: { in: Object.values(RUN) } } });
+  await basePrisma.checklistTemplateRevision.deleteMany({ where: { templateId: TEMPLATE } });
+  await basePrisma.checklistTemplate.deleteMany({ where: { id: TEMPLATE } });
+  await basePrisma.quote.deleteMany({ where: { id: { in: Object.values(Q) } } });
+  if (modulesSaved) await basePrisma.tenant.update({ where: { id: T }, data: { modules: savedModules ?? "" } });
   await basePrisma.document.deleteMany({ where: { id: { in: Object.values(D) } } });
   await basePrisma.communication.deleteMany({ where: { id: { in: Object.values(M) } } });
   await basePrisma.conversation.deleteMany({ where: { id: CONV } });
@@ -388,6 +426,37 @@ async function main() {
     check("…while their own file reads", first(await inT(() => readDocument(stranger, { document: D.strangers }))).pages === 3);
     const refused = first(await inT(() => readDocument(noDocs, { document: D.contract })));
     check("no document access: refused", /don't have access to documents/.test(refused.note ?? ""));
+  }
+
+  console.log("\nread_document — delivery handover photos");
+  {
+    const sent: { count: number; about: string }[] = [];
+    __setPictureReaderForTests(async (images, about) => {
+      sent.push({ count: images.length, about });
+      return { ok: true, text: "VIN plate: VIN ABC123XYZ." };
+    });
+    const vin = first(await inT(() => readDocument(rep, { handover: hendrik, step: "VIN" })));
+    check("the VIN photo from Hendrik's handover is read", /VIN ABC123XYZ/.test(String(vin.text)) && sent.at(-1)?.count === 1 && /VIN \/ serial number/.test(sent.at(-1)?.about ?? ""), JSON.stringify(vin).slice(0, 300));
+    check("…naming the quote and the step read", vin.link === `/quotes/${Q.mine}` && JSON.stringify(vin.photosRead).includes("VIN / serial number"), JSON.stringify(vin).slice(0, 300));
+    const all = first(await inT(() => readDocument(rep, { handover: hendrik })));
+    check("no step: every photo of the handover, and the steps listed", sent.at(-1)?.count === 2 && JSON.stringify(all.stepsWithPhotos).includes("Odometer"), JSON.stringify(all).slice(0, 300));
+    const byNumber = first(await inT(() => readDocument(rep, { handover: `Q-${QN.mine}`, step: "serial" })));
+    check("by its Q-number, the same", /VIN ABC123XYZ/.test(String(byNumber.text)), JSON.stringify(byNumber).slice(0, 200));
+    const before = sent.length;
+    const noStep = first(await inT(() => readDocument(rep, { handover: hendrik, step: "tyres" })));
+    check("a step with no photo says which steps have photos — and nothing reaches the AI", /No handover photo/.test(noStep.note ?? "") && JSON.stringify(noStep.stepsWithPhotos).includes("Odometer") && sent.length === before, JSON.stringify(noStep).slice(0, 200));
+    const strangers = first(await inT(() => readDocument(rep, { handover: `Petrus ${SURNAME}`, step: "VIN" })));
+    check("NEVER a colleague's customer's handover", /No quote you can open/.test(strangers.note ?? "") && sent.length === before, strangers.note);
+    const strangersById = first(await inT(() => readDocument(rep, { handover: `Q-${QN.strangers}` })));
+    check("…not by its Q-number either", /No quote you can open/.test(strangersById.note ?? "") && sent.length === before, strangersById.note);
+    const otherWs = first(await inT2(() => readDocument(otherOwner, { handover: `Q-${QN.mine}` })));
+    check("NEVER from another workspace, even its owner", /No quote you can open|don't have access/.test(otherWs.note ?? "") && sent.length === before, otherWs.note);
+    const noQuotes = first(await inT(() => readDocument(noDocs, { handover: hendrik })));
+    check("no quote access: refused", /don't have access to quotes/.test(noQuotes.note ?? "") && sent.length === before, noQuotes.note);
+    await basePrisma.tenant.update({ where: { id: T }, data: { modules: (savedModules ?? "").split(",").filter((m) => m && m !== "automotive").join(",") } });
+    const off = first(await inT(() => readDocument(rep, { handover: hendrik, step: "VIN" })));
+    check("Automotive off: no handover photos", /no handover photos/.test(off.note ?? "") && sent.length === before, off.note);
+    __setPictureReaderForTests(null);
   }
 
   console.log(`\n${passed} passed, ${failed} failed`);
