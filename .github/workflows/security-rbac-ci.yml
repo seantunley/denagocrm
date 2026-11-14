@@ -786,6 +786,12 @@ jobs:
       - name: DAX test drives -- held to the test-drives page's own rule
         run: npm run test:assistant-test-drives
 
+      # DAX speaks first (Sean, 2026-11-14): a new chat opens with the person's own brief's top two items. A rep's line
+      # names only their own deals, never another rep's or another workspace's; nothing to say, nothing said; their own
+      # switch turns it off. No AI, nothing written.
+      - name: DAX opening line -- only the person's own brief, and switchable
+        run: npm run test:assistant-opening-line
+
       # A scheduled briefing going to a linked phone: what is waiting, claimed
       # before it is sent and released when it could not be, the template nudge
       # claimed once. No WhatsApp connection here, so nothing is ever sent.

@@ -163,6 +163,12 @@ function clip(text: string, max: number): string {
 export const briefPersonKey = (userId: string) => `ASSISTANT_BRIEF_AT:${userId}`;
 /** Each person's own "stuck deals on Mondays" in their morning brief (round 2 item 7): "on" | "off"; unset = off. */
 export const mondayStuckKey = (userId: string) => `ASSISTANT_MONDAY_STUCK_FOR:${userId}`;
+/**
+ * DAX SPEAKS FIRST (Sean, 2026-11-14): each person's own "say what's new when I open the chat". On until they switch
+ * it off — it is read only inside the app, uses no AI and contacts no one.
+ */
+export const openingLineKey = (userId: string) => `ASSISTANT_OPENING_LINE_FOR:${userId}`;
+export const openingLineOn = (value: string | null | undefined) => value !== "off";
 
 /**
  * CHATBOT PROBLEMS IN THE BRIEF (Sean, 2026-11-04): a workspace owner's brief says when chatbot steps failed in the

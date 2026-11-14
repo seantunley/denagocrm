@@ -4,7 +4,8 @@ import { PageHeader } from "@/components/page-header";
 import { requireAnyPermission } from "@/lib/permissions";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { isCodexConnected } from "@/lib/codex";
-import { getSetting } from "@/lib/settings";
+import { getSetting, getWorkspaceSetting } from "@/lib/settings";
+import { openingLineFor } from "@/lib/daxBrief";
 import { isTenantOwner } from "@/lib/auth";
 import { ASSISTANT_PROFILE_KEY, parseProfile } from "@/lib/assistantSoul";
 import { conversationHistory, defaultConversation, recentConversations, updatesHistory } from "@/lib/assistantConversation";
@@ -37,7 +38,7 @@ import { linkRefusalText, maskWaId } from "@/lib/assistantWhatsAppRules";
 import AssistantWhatsAppCard from "@/components/AssistantWhatsAppCard";
 import AssistantProactiveCard from "@/components/AssistantProactiveCard";
 import AssistantGoalsCard from "@/components/AssistantGoalsCard";
-import { ASSISTANT_PROACTIVE_KEY, BRIEF_DEFAULT, briefPersonKey, chatbotProblemsKey, chatbotProblemsOn, mondayStuckKey, parseBriefAt, proactiveOn, proactivePersonKey } from "@/lib/proactiveRules";
+import { ASSISTANT_PROACTIVE_KEY, BRIEF_DEFAULT, briefPersonKey, chatbotProblemsKey, chatbotProblemsOn, mondayStuckKey, openingLineKey, openingLineOn, parseBriefAt, proactiveOn, proactivePersonKey } from "@/lib/proactiveRules";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Ask the CRM" };
@@ -134,6 +135,9 @@ export default async function AssistantPage({ searchParams }: { searchParams: Pr
     // Being on this page is seeing them: the bubble's unread dot goes.
     markScheduledTurnsSeen(user.id),
   ]);
+  // DAX speaks first — only into an empty conversation (not DAX's own Updates); a failure never stops the page.
+  const opening = connected && picked !== "updates" && history.length === 0 ? await openingLineFor(user).catch(() => null) : null;
+  const openingOn = openingLineOn(await getWorkspaceSetting(who.tenantId, openingLineKey(user.id)).catch(() => null));
   const openSheets = tasks.filter((t) => t.status === "open");
   const pastSheets = tasks.filter((t) => t.status !== "open");
   // Multi-step plans: the person's own, from the last 30 days (assistantPlan).
@@ -189,6 +193,7 @@ export default async function AssistantPage({ searchParams }: { searchParams: Pr
           listen={listen}
           // Asking from "Updates" or "Earlier" carries on in the current conversation, as the default rule picks.
           conversation={picked === "updates" || picked === "earlier" ? null : picked}
+          opening={opening}
         />
       ) : (
         <p className="card p-5 text-sm text-muted-foreground">
@@ -343,7 +348,7 @@ export default async function AssistantPage({ searchParams }: { searchParams: Pr
         )}
       </section>
       <AssistantGoalsCard userId={user.id} name={profile.name} />
-      <AssistantProactiveCard name={profile.name} workspaceOn={proactiveWorkspace} on={proactiveMe} briefAt={briefAt} mondayStuck={mondayStuck} chatbotProblems={chatbotProblems} />
+      <AssistantProactiveCard name={profile.name} workspaceOn={proactiveWorkspace} on={proactiveMe} briefAt={briefAt} mondayStuck={mondayStuck} chatbotProblems={chatbotProblems} openingOn={openingOn} />
       {whatsapp &&<AssistantWhatsAppCard name={profile.name} linked={whatsapp.linked} refused={whatsapp.refused} updates={whatsapp.updates} />}
       <details className="card p-4 text-sm">
         <summary className="cursor-pointer font-medium">

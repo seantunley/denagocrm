@@ -1,6 +1,8 @@
 "use server";
 
 import { requireAnyPermission } from "@/lib/permissions";
+import { openingLineFor } from "@/lib/daxBrief";
+import type { OpeningLine } from "@/lib/daxBriefRules";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { customerClash, detailClash, pageTarget } from "@/lib/crmAssistant";
@@ -1180,7 +1182,7 @@ export async function rateAssistantAnswer(turnId: string, rating: "up" | "down",
  * are marked seen, so the unread dot goes on the next page.
  */
 export async function openAssistantBubble(page?: string | null): Promise<
-  { ok: true; name: string; connected: boolean; listen: boolean; history: { id: string; question: string; answer: string; source: string }[]; conversation: string | null } | { ok: false }
+  { ok: true; name: string; connected: boolean; listen: boolean; history: { id: string; question: string; answer: string; source: string }[]; conversation: string | null; opening: OpeningLine | null } | { ok: false }
 > {
   return withActingStaffScope(async () => {
     const user = await requireAnyPermission(...ASSISTANT_PERMISSIONS);
@@ -1198,6 +1200,8 @@ export async function openAssistantBubble(page?: string | null): Promise<
       markScheduledTurnsSeen(user.id),
       assistantVoiceRepliesOn().catch(() => false),
     ]);
-    return { ok: true, name: profile.name, connected, listen, history, conversation };
+    // DAX speaks first — only into an empty conversation; a failure here never stops the panel opening.
+    const opening = connected && history.length === 0 ? await openingLineFor(user).catch(() => null) : null;
+    return { ok: true, name: profile.name, connected, listen, history, conversation, opening };
   });
 }

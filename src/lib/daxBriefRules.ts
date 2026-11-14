@@ -350,6 +350,22 @@ export function buildBrief(input: BriefInput): DaxBrief {
   };
 }
 
+/** How many of the brief's items the opening line says: enough to feel like a colleague, short enough to read at once. */
+export const OPENING_FACTS = 2;
+
+export type OpeningLine = { facts: { text: string; href: string }[] };
+
+/**
+ * DAX SPEAKS FIRST (Sean, 2026-11-14): when a new conversation opens, the brief's top items — in Sean's order, from
+ * the same facts as the home card, so the two never disagree — as one short line. No AI. Null when there is nothing
+ * to say: silence, never a "nothing new" filler.
+ */
+export function openingLine(brief: Pick<DaxBrief, "items">): OpeningLine | null {
+  const top = brief.items.slice(0, OPENING_FACTS);
+  if (!top.length) return null;
+  return { facts: top.map((item) => ({ text: item.detail ? `${item.title} (${item.detail})` : item.title, href: item.href })) };
+}
+
 /** "Buying later · wants Rover XL · “When his bonus comes in March” · review 3 days overdue" — one parked deal. */
 export function nurtureReviewLine(r: Pick<NurtureReviewRow, "why" | "interest" | "trigger" | "daysPastReview">): string {
   const trigger = r.trigger?.trim().replace(/\s+/g, " ");
