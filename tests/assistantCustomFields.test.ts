@@ -21,7 +21,15 @@ test("permission based: the record type's own access list, ANDed; the workspace 
   }
   assert.match(lookup, /case: \{ ids: getAccessibleCaseIds, module: "support"/);
   assert.match(lookup, /vehicle: \{ ids: getAccessibleVehicleIds, module: "automotive"/);
-  assert.match(lookup, /AND: \[\.\.\.\(allowed === null \? \[\] : \[\{ recordId: \{ in: allowed \} \}\]\), \{ value: \{ not: null \} \}\]/);
+  assert.match(lookup, /AND: \[\.\.\.\(allowed === null \? \[\] : \[\{ recordId: \{ in: allowed \} \}\]\), \{ value: \{ not: null \} \}, \.\.\.valueWhere\]/);
+  // Review of #1105: the right to read the record type is checked BEFORE any definition is read or listed.
+  const body = lookup.slice(lookup.indexOf("export async function customFieldsLookup("));
+  const gate = body.indexOf("if (!(await hasAnyPermission(user, ...record.view))) return note(`You don't have access to ${record.name}.`);");
+  assert.ok(gate > 0 && gate < body.indexOf("getFieldDefs("), "permission before the definitions");
+  assert.ok(gate < body.indexOf("{ fields }"), "permission before any reply that lists fields");
+  // Bounded: at most SCAN_MAX values read; past that the total is "at least" and the result says it is partial.
+  assert.match(body, /take: SCAN_MAX \+ 1,/);
+  assert.match(body, /total: capped \? `at least \$\{live\.length\}` : live\.length,/);
   // Every value read names the workspace; only ACTIVE definitions (getFieldDefs' default); "Show only when" applied.
   assert.equal((lookup.match(/prisma\.customFieldValue\.findMany\(\{\s*where: \{\s*tenantId,/g) ?? []).length, 3);
   assert.match(lookup, /getFieldDefs\(entity, \{ tenantId \}\)/);

@@ -54,6 +54,18 @@ async function main() {
     await basePrisma.$executeRaw`INSERT INTO "RolePermission" ("roleId","permissionKey","tenantId") VALUES (${ROLE}, ${key}, ${A})`;
   }
   await basePrisma.$executeRaw`INSERT INTO "UserRole" ("id","userId","roleId","tenantId") VALUES (${crypto.randomUUID()}, ${rep.id}, ${ROLE}, ${A})`;
+  // Review of #1105: one who may not read leads at all, and one who may but has none yet.
+  const noLeads: PermissionUser = { id: crypto.randomUUID(), name: "No Leads", email: `noleads.${SFX}@harness.invalid`, role: "member" };
+  const emptyRep: PermissionUser = { id: crypto.randomUUID(), name: "Empty Rep", email: `empty.${SFX}@harness.invalid`, role: "member" };
+  const ROLE_NO_LEADS = crypto.randomUUID();
+  const ROLE_EMPTY = crypto.randomUUID();
+  for (const [u, role, keys] of [[noLeads, ROLE_NO_LEADS, ["contacts.view_owned"]], [emptyRep, ROLE_EMPTY, ["leads.view_owned"]]] as const) {
+    await basePrisma.$executeRaw`INSERT INTO "User" ("id","name","email","passwordHash","role","sessionVersion") VALUES (${u.id}, ${u.name}, ${u.email}, 'x', 'member', 0)`;
+    await basePrisma.$executeRaw`INSERT INTO "TenantMember" ("id","tenantId","userId") VALUES (${crypto.randomUUID()}, ${A}, ${u.id})`;
+    await basePrisma.$executeRaw`INSERT INTO "Role" ("id","tenantId","name","description","system","updatedAt") VALUES (${role}, ${A}, ${`Custom fields ${role.slice(0, 8)} ${SFX}`}, 'test', false, now())`;
+    for (const key of keys) await basePrisma.$executeRaw`INSERT INTO "RolePermission" ("roleId","permissionKey","tenantId") VALUES (${role}, ${key}, ${A})`;
+    await basePrisma.$executeRaw`INSERT INTO "UserRole" ("id","userId","roleId","tenantId") VALUES (${crypto.randomUUID()}, ${u.id}, ${role}, ${A})`;
+  }
 
   const lead = (tenantId: string, stageId: string, who: string, name: string) =>
     basePrisma.lead.create({ data: { tenantId, stageId, name: `${name} ${SFX}`, title: "Rover XL", assignedToId: who, createdById: who }, select: { id: true } });
@@ -118,6 +130,23 @@ async function main() {
     const names = ((fields.data[0] as Data).fields ?? []).map((f) => f.field);
     check("no field named: the fields there are, never a switched-off one", names.includes(L("Expo")) && !names.includes(L("Old field")), JSON.stringify(names));
 
+    console.log("\ncustom_fields — no right to read leads: refused, and nothing about the fields");
+    const leak = (out: { data: unknown[] }) => {
+      const text = JSON.stringify(out);
+      return text.includes(SFX) || /Paarl|Stellenbosch|"fields"|options|shownOnlyWhen/.test(text);
+    };
+    const schema = await inA(() => customFieldsLookup(noLeads, { record: "lead" }));
+    check("the field list: refused, no labels, no options", /You don't have access to leads\./.test(String((schema.data[0] as Data).note)) && !leak(schema), JSON.stringify(schema.data));
+    const unknown = await inA(() => customFieldsLookup(noLeads, { record: "lead", field: "nonexistent" }));
+    check("an unknown field: refused, with no list of the fields there are", /You don't have access to leads\./.test(String((unknown.data[0] as Data).note)) && !leak(unknown), JSON.stringify(unknown.data));
+    const search = await inA(() => customFieldsLookup(noLeads, { record: "lead", field: L("Expo"), value: "Paarl" }));
+    check("a search: refused, nothing listed", /You don't have access to leads\./.test(String((search.data[0] as Data).note)) && !leak(search), JSON.stringify(search.data));
+    console.log("\ncustom_fields — may read leads but has none yet: the fields, as the lead form shows them; no records");
+    const emptySchema = await inA(() => customFieldsLookup(emptyRep, { record: "lead" }));
+    check("the field list is shown", ((emptySchema.data[0] as Data).fields ?? []).some((f) => f.field === L("Expo")), JSON.stringify(emptySchema.data));
+    const emptySearch = await inA(() => customFieldsLookup(emptyRep, { record: "lead", field: L("Expo"), value: "Paarl" }));
+    check("…but a search lists nothing of anyone else's", !JSON.stringify(emptySearch).includes("/leads/"), JSON.stringify(emptySearch.data));
+
     console.log("\nThe other workspace");
     const other = await inB(() => customFieldsLookup(memberB, { record: "lead", field: L("Expo"), value: "Paarl" }));
     check("only its own lead, never A's", JSON.stringify(listed(other)) === JSON.stringify([`/leads/${bLead.id}`]), JSON.stringify(other.data));
@@ -128,10 +157,10 @@ async function main() {
     await basePrisma.customFieldDef.deleteMany({ where: { key: { endsWith: SFX } } }).catch(() => 0);
     await basePrisma.lead.deleteMany({ where: { name: { endsWith: SFX } } }).catch(() => 0);
     await basePrisma.contact.deleteMany({ where: { id: ownersCustomer.id } }).catch(() => 0);
-    await basePrisma.$executeRaw`DELETE FROM "UserRole" WHERE "roleId" = ${ROLE}`.catch(() => 0);
+    await basePrisma.$executeRaw`DELETE FROM "UserRole" WHERE "roleId" IN (${ROLE}, ${ROLE_NO_LEADS}, ${ROLE_EMPTY})`.catch(() => 0);
     await teardown(fixture);
-    await basePrisma.$executeRaw`DELETE FROM "TenantMember" WHERE "userId" = ${rep.id}`.catch(() => 0);
-    await basePrisma.$executeRaw`DELETE FROM "User" WHERE "id" = ${rep.id}`.catch(() => 0);
+    await basePrisma.$executeRaw`DELETE FROM "TenantMember" WHERE "userId" IN (${rep.id}, ${noLeads.id}, ${emptyRep.id})`.catch(() => 0);
+    await basePrisma.$executeRaw`DELETE FROM "User" WHERE "id" IN (${rep.id}, ${noLeads.id}, ${emptyRep.id})`.catch(() => 0);
   }
   console.log(`\n${passed} passed, ${failed} failed`);
 }

@@ -8,6 +8,8 @@ import {
   getAccessibleLeadIds,
   getAccessibleQuoteIds,
   getAccessibleVehicleIds,
+  hasAnyPermission,
+  type PermissionKey,
   type PermissionUser,
 } from "./permissions";
 import { isModuleEnabled } from "./modules/enabled";
@@ -30,13 +32,13 @@ import { displayValue, isFieldShown, multiValues, type CustomEntity, type FieldD
 
 /** The record types DAX reads custom fields on, how a person's access to each is decided, and its page. */
 const RECORDS = {
-  lead: { ids: getAccessibleLeadIds, module: null, path: "leads" },
-  contact: { ids: getAccessibleContactIds, module: null, path: "contacts" },
-  quote: { ids: getAccessibleQuoteIds, module: null, path: "quotes" },
-  case: { ids: getAccessibleCaseIds, module: "support", path: "cases" },
-  vehicle: { ids: getAccessibleVehicleIds, module: "automotive", path: "vehicles" },
-  jobcard: { ids: getAccessibleJobCardIds, module: "automotive", path: "jobcards" },
-} as const satisfies Partial<Record<CustomEntity, { ids: (u: PermissionUser) => Promise<string[] | null>; module: ModuleId | null; path: string }>>;
+  lead: { ids: getAccessibleLeadIds, module: null, path: "leads", view: ["leads.view_all", "leads.view_owned"], name: "leads" },
+  contact: { ids: getAccessibleContactIds, module: null, path: "contacts", view: ["contacts.view_all", "contacts.view_owned"], name: "customers" },
+  quote: { ids: getAccessibleQuoteIds, module: null, path: "quotes", view: ["quotes.view_all", "quotes.view_owned"], name: "quotes" },
+  case: { ids: getAccessibleCaseIds, module: "support", path: "cases", view: ["cases.view_all", "cases.view_owned"], name: "help desk cases" },
+  vehicle: { ids: getAccessibleVehicleIds, module: "automotive", path: "vehicles", view: ["vehicles.view_all", "vehicles.view_owned"], name: "vehicles" },
+  jobcard: { ids: getAccessibleJobCardIds, module: "automotive", path: "jobcards", view: ["jobcards.view_all", "jobcards.view_owned"], name: "job cards" },
+} as const satisfies Partial<Record<CustomEntity, { ids: (u: PermissionUser) => Promise<string[] | null>; module: ModuleId | null; path: string; view: readonly PermissionKey[]; name: string }>>;
 export type CustomRecord = keyof typeof RECORDS;
 export const CUSTOM_RECORDS = Object.keys(RECORDS) as CustomRecord[];
 const BY_PATH = new Map<string, CustomRecord>(Object.entries(RECORDS).map(([entity, r]) => [r.path, entity as CustomRecord]));
@@ -145,7 +147,9 @@ export async function withCustomFields(user: PermissionUser, data: unknown[]): P
 
 /* ── custom_fields: list records by a custom field ─────────────────────────────────── */
 
-export type CustomFieldsArgs = { record: CustomRecord; field?: string; value?: string; limit?: number };
+/** At most this many values of one field are read for a custom_fields search. */
+export const SCAN_MAX = 1000;
+export type CustomFieldsArgs ={ record: CustomRecord; field?: string; value?: string; limit?: number };
 type Output = { rows: { label: string; detail: string; href: string }[]; data: unknown[]; truncated: boolean };
 const note = (text: string, extra: Record<string, unknown> = {}): Output => ({ truncated: false, rows: [], data: [{ note: text, ...extra }] });
 
@@ -184,6 +188,11 @@ export async function customFieldsLookup(user: PermissionUser, args: CustomField
   const tenantId = ownedWriteTenantId();
   const record = RECORDS[args.record];
   if (record.module && !(await isModuleEnabled(record.module))) return note(`${args.record === "case" ? "The help desk isn't" : "Vehicles aren't"} switched on for this workspace.`);
+  // ACCESS FIRST, before a single definition is read (review of #1105): no right to read this record type → refused,
+  // with no labels, types, options or rules. Allowed to read it but with no records yet → the fields, as the record
+  // form itself would show them.
+  if (!(await hasAnyPermission(user, ...record.view))) return note(`You don't have access to ${record.name}.`);
+  const allowed = await openable(user, args.record);
   const defs = await getFieldDefs(args.record, { tenantId });
   const fields = defs.map((d) => ({ field: d.label, type: d.type, ...(d.options.length ? { options: d.options } : {}), ...(d.showWhen ? { shownOnlyWhen: `${defs.find((x) => x.key === d.showWhen!.key)?.label ?? d.showWhen.key} ${d.showWhen.op.replace("_", " ")}${d.showWhen.value ? ` ${d.showWhen.value}` : ""}` } : {}) }));
   if (!defs.length) return note(`This workspace has no custom fields on ${args.record}s.`);
@@ -192,18 +201,27 @@ export async function customFieldsLookup(user: PermissionUser, args: CustomField
   const def = defs.find((d) => d.label.toLowerCase() === wanted) ?? defs.find((d) => d.label.toLowerCase().includes(wanted) || d.key === wanted);
   if (!def) return note(`No custom field on ${args.record}s is called "${args.field}".`, { fields });
 
-  const allowed = await openable(user, args.record);
-  if (allowed !== null && !allowed.length) return note(`You don't have access to any ${args.record}s.`);
-  const values = await prisma.customFieldValue.findMany({
+  if (allowed !== null && !allowed.length) return note(`You have no ${record.name} you can open.`);
+  // BOUNDED (review of #1105): the value is matched in the database where it can be (a checkbox by yes/no, anything
+  // else by its words), newest change first, and at most SCAN_MAX are read — past that the total is "at least".
+  const wantedValue = args.value?.trim();
+  const valueWhere = !wantedValue ? [] : def.type === "checkbox"
+    ? [{ value: /^(yes|true|ticked|y|1)$/i.test(wantedValue) ? "true" : "false" }]
+    : [{ value: { contains: wantedValue, mode: "insensitive" as const } }];
+  const read = await prisma.customFieldValue.findMany({
     where: {
       tenantId,
       defId: def.id,
       // AND, never spread: what was asked for must never replace the access filter.
-      AND: [...(allowed === null ? [] : [{ recordId: { in: allowed } }]), { value: { not: null } }],
+      AND: [...(allowed === null ? [] : [{ recordId: { in: allowed } }]), { value: { not: null } }, ...valueWhere],
     },
+    orderBy: { updatedAt: "desc" },
+    take: SCAN_MAX + 1,
     select: { recordId: true, value: true },
   });
-  // Every field of the matching records, so "Show only when…" can be judged as the page judges it.
+  const capped = read.length > SCAN_MAX;
+  const values = read.slice(0, SCAN_MAX);
+  // Every field of the matching records (at most SCAN_MAX), so "Show only when…" is judged as the page judges it.
   const all = values.length
     ? await prisma.customFieldValue.findMany({ where: { tenantId, defId: { in: defs.map((d) => d.id) }, recordId: { in: values.map((v) => v.recordId) } }, select: { defId: true, recordId: true, value: true } })
     : [];
@@ -218,9 +236,16 @@ export async function customFieldsLookup(user: PermissionUser, args: CustomField
   const take = Math.min(args.limit ?? 25, 50);
   const page = live.slice(0, take);
   return {
-    truncated: live.length > take,
+    truncated: capped || live.length > take,
     data: [
-      { record: args.record, field: def.label, ...(args.value ? { value: args.value } : {}), total: live.length, listed: page.length },
+      {
+        record: args.record,
+        field: def.label,
+        ...(args.value ? { value: args.value } : {}),
+        total: capped ? `at least ${live.length}` : live.length,
+        listed: page.length,
+        ...(capped ? { partial: `Only the ${SCAN_MAX} most recently changed values were read, so this is not every match — say so, and ask for a narrower value for the rest.` } : {}),
+      },
       ...page.map((v) => ({ link: `/${record.path}/${v.recordId}`, name: labels.get(v.recordId), [def.label]: displayValue(def, v.value, links) })),
     ],
     rows: page.map((v) => ({ label: labels.get(v.recordId) ?? args.record, detail: `${def.label}: ${displayValue(def, v.value, links)}`, href: `/${record.path}/${v.recordId}` })),
