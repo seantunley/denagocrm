@@ -758,6 +758,12 @@ jobs:
       - name: Assistant -- "the fourth one" is re-checked against what the person may open now
         run: npm run test:assistant-listed
 
+      # Sean, 2026-11-14: "DAX must have knowledge of those things, permission based". test_drives is held to the
+      # /test-drives page's own rule: Automotive on, activities.view, its booking scope; a won deal named only when the
+      # person may open it; never a licence number, emergency contact or incident report; the other workspace nothing.
+      - name: DAX test drives -- held to the test-drives page's own rule
+        run: npm run test:assistant-test-drives
+
       # A scheduled briefing going to a linked phone: what is waiting, claimed
       # before it is sent and released when it could not be, the template nudge
       # claimed once. No WhatsApp connection here, so nothing is ever sent.
