@@ -87,6 +87,7 @@
     "test:assistant-evidence": "tsx --tsconfig tsconfig.scripts.json scripts/test-assistant-evidence.ts",
     "test:assistant-edit": "tsx --tsconfig tsconfig.scripts.json scripts/test-assistant-edit.ts",
     "test:assistant-report-tenant": "tsx --tsconfig tsconfig.scripts.json scripts/test-assistant-report-tenant.ts",
+    "test:assistant-signing": "tsx --tsconfig tsconfig.harness.json scripts/test-assistant-signing.ts",
     "eval:evidence": "tsx --tsconfig tsconfig.scripts.json evals/runEvidenceEval.ts",
     "eval:follows-references": "tsx --tsconfig tsconfig.harness.json evals/runFollowsReferencesEval.ts",
     "test:assistant-why": "tsx --tsconfig tsconfig.harness.json scripts/test-assistant-why.ts",
