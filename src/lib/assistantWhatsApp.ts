@@ -904,6 +904,21 @@ async function sendQuotePdfToStaff(tenantId: string, userId: string, waId: strin
   return null;
 }
 /**
+ * Is `waId` STILL this person's phone, right now? The same tests sendUpdatesToLinkedPhone runs before a quote's PDF:
+ * a verified link for this person and this number, their sign-in unchanged since it was linked, still allowed to use
+ * the assistant, and the number on no customer record.
+ */
+async function staffPhoneStillSafe(tenantId: string, userId: string, waId: string): Promise<boolean> {
+  const link = await basePrisma.assistantPhoneLink.findFirst({ where: { tenantId, userId, waId, verifiedAt: { not: null } }, select: { sessionVersion: true } });
+  if (!link || link.sessionVersion === null) return false;
+  const security = await readUserSecurityStateStrict(userId);
+  if (!security || security.sessionVersion !== link.sessionVersion) return false;
+  if (!(await assistantUserFor(userId))) return false;
+  const customer = await matchByPhone(waId);
+  return !(customer.contactId || customer.leadId || customer.ambiguous);
+}
+
+/**
  * The report DAX has just written in this chat, as its PDF, to the same chat: the person who asked, never a customer
  * (sent with no `record`, so nothing lands on a customer's timeline). Made from the answer itself — nothing is looked
  * up again. A failure is said once; the PDF button under the answer on their Ask page still makes it.
@@ -919,6 +934,9 @@ async function sendReportPdf(
     // Loaded only when a report goes out: every other WhatsApp message never starts the PDF engine.
     const { renderAssistantReportPdf } = await import("./assistantReportPdf");
     const { pdf, fileName, title } = await renderAssistantReportPdf({ tenantId, preparedFor: user.name ?? "", question, answer, answeredAt: new Date() });
+    // RE-CHECKED NOW, after the answer and the render (review of #1098): the link could have been removed or the
+    // person signed out everywhere meanwhile. Nothing is sent, and nothing more is said, to a phone that fails it.
+    if (!(await staffPhoneStillSafe(tenantId, user.id, waId))) return;
     const sent = await sendWhatsAppDocument(waId, { content: pdf, filename: fileName, contentType: "application/pdf" }, `${title} — the PDF, for you.`);
     if (sent.ok) {
       await logAudit({ action: "assistant.report_pdf_to_staff", summary: "Sent a DAX report PDF to the linked WhatsApp of the person who asked for it", user, entityType: "User", entityId: user.id }).catch(() => {});

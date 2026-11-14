@@ -253,8 +253,18 @@ test("THE PDF GOES TO THE PERSON WHO ASKED — the only number it can reach is t
   const deliver = lib.slice(lib.indexOf("export async function sendUpdatesToLinkedPhone("), lib.indexOf("async function sendOneUpdate("));
   assert.ok(deliver.indexOf("matchByPhone(link.waId)") < deliver.indexOf("sendOneUpdate(tenantId, userId, link.waId, turn, outOfTime)"));
   assert.match(deliver, /if \(customer\.contactId \|\| customer\.leadId \|\| customer\.ambiguous\) return "not_safe";/);
-  // The one document send in the module: to `waId`, three arguments — no `record`, so no customer timeline.
-  assert.equal((lib.match(/sendWhatsAppDocument\(/g) ?? []).length, 1);
+  // TWO document sends in the module, each to `waId` with three arguments — no `record`, so no customer timeline:
+  // this quote PDF, and a report's PDF (sendReportPdf, #1098), which re-checks the phone itself before sending.
+  const docSends = lib.match(/sendWhatsAppDocument\([^;]*\);/g) ?? [];
+  assert.equal(docSends.length, 2, "the quote PDF and the report PDF");
+  for (const call of docSends) assert.match(call, /^sendWhatsAppDocument\(waId, \{ content: pdf, filename: [^}]+, contentType: "application\/pdf" \}, `[^`]*`\);$/, call);
+  const report = lib.slice(lib.indexOf("async function sendReportPdf("), lib.indexOf("const OUT_OF_TIME"));
+  assert.ok(report.indexOf("staffPhoneStillSafe(tenantId, user.id, waId)") > 0 && report.indexOf("staffPhoneStillSafe(") < report.indexOf("sendWhatsAppDocument("), "the report's phone re-checked before it is sent");
+  const safe = lib.slice(lib.indexOf("async function staffPhoneStillSafe("), lib.indexOf("async function sendReportPdf("));
+  assert.match(safe, /where: \{ tenantId, userId, waId, verifiedAt: \{ not: null \} \}/);
+  assert.match(safe, /security\.sessionVersion !== link\.sessionVersion/);
+  assert.match(safe, /assistantUserFor\(userId\)/);
+  assert.match(safe, /return !\(customer\.contactId \|\| customer\.leadId \|\| customer\.ambiguous\);/);
   assert.match(send, /await sendWhatsAppDocument\(waId, \{ content: pdf, filename: quotePdfFileName\(quote\.number, \(await getCompanyProfile\(tenantId\)\)\.name\), contentType: "application\/pdf" \}, `\$\{what\} Q-\$\{quote\.number\} — for you\. This copy was not sent to the customer\.`\)/);
   // In this workspace, still there — and theirs, or one they may open NOW (a colleague's
   // draft they added to, or a quote whose PDF they asked for: assistantQuoteAdd.test.ts).
