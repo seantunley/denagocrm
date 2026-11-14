@@ -250,11 +250,14 @@ test("the report is the stored answer and nothing else — no lookup runs to mak
 test("the header carries the business's name and logo on every page", () => {
   const doc = code("src/lib/pdf/AssistantReportDoc.tsx");
   assert.match(doc, /<View style=\{\[s\.header, [^\]]*\]\} fixed>/);
-  assert.match(doc, /meta\.logo \? <Image src=\{\{ data: meta\.logo, format: "png" \}\}/);
+  // Drawn as it is, or on a dark panel when it is light lettering on transparency (tests/logoTone.test.ts).
+  assert.match(doc, /<Image src=\{\{ data: meta\.logo, format: "png" \}\} style=\{s\.logoOnPanel\} \/>/);
+  assert.match(doc, /\) : meta\.logo \? \((?:\s|\/\/[^\n]*\n)*<Image src=\{\{ data: meta\.logo, format: "png" \}\} style=\{s\.logo\} \/>/);
   assert.match(doc, /\{meta\.companyName\}/);
   const pdf = code("src/lib/assistantReportPdf.tsx");
   assert.match(pdf, /companyName: company\.name/);
-  assert.match(pdf, /logo: await reportLogoPng\(tenantId, company\.logoUrl\)/);
+  assert.match(pdf, /const logo = await reportLogoPng\(tenantId, company\.logoUrl\);/);
+  assert.match(pdf, /\n\s*logo,\n/);
   // The footer too: who it was compiled for, and that it is a snapshot.
   assert.match(doc, /<View style=\{s\.footer\} fixed>/);
   assert.match(doc, /A snapshot: figures may have changed since/);

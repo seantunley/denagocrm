@@ -3,6 +3,7 @@ import { renderToBuffer } from "@react-pdf/renderer";
 import { ASSISTANT_PROFILE_KEY, parseProfile } from "@/lib/assistantSoul";
 import { buildReport, printable, reportFileName } from "@/lib/assistantReport";
 import { reportLogoPng } from "@/lib/assistantReportLogo";
+import { logoIsLight } from "@/lib/logoTone";
 import { getCompanyProfile } from "@/lib/companyProfile";
 import { brandForTenant } from "@/lib/tenantBrand";
 import { REGIONAL_KEYS, getWorkspaceSetting } from "@/lib/settings";
@@ -31,10 +32,13 @@ export async function renderAssistantReportPdf(input: {
   ]);
   const regional = regionalFrom(Object.fromEntries(fields.map((field, i) => [field, values[i]])));
   const report = buildReport(input.question, input.answer);
+  const logo = await reportLogoPng(tenantId, company.logoUrl);
   const meta = {
     companyName: company.name,
     tagline: company.tagline,
-    logo: await reportLogoPng(tenantId, company.logoUrl),
+    logo,
+    // A light logo on transparency (white lettering) goes on a dark panel; a failed check draws it as it is.
+    logoOnDark: logo ? await logoIsLight(logo).catch(() => false) : false,
     accent: brand.primary,
     assistantName: parseProfile(profileRaw).name,
     preparedFor: input.preparedFor || "a colleague",

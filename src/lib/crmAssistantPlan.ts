@@ -43,6 +43,8 @@ const upTo = (max: number) => z.number().int().min(1).transform((n) => Math.min(
 const days = upTo(365);
 const rands = z.number().nonnegative().max(1_000_000_000);
 const limit = upTo(25);
+/** find_leads lists up to this many: enough for a month's lost deals in a report. */
+export const LEAD_LIST_MAX = 60;
 const isoDay = z.string().trim().regex(/^\d{4}-\d{2}-\d{2}/).transform((s) => s.slice(0, 10));
 
 export const leadArgs = z
@@ -60,9 +62,13 @@ export const leadArgs = z
     /** Created on or after / on or before these days (South Africa) — calendar periods like "last month". */
     createdFrom: isoDay.optional(),
     createdTo: isoDay.optional(),
+    /** WON OR LOST on or after / on or before these days — the day the deal closed, not the day it came in (Sean, 2026-11-14: "lost leads in October"). */
+    closedFrom: isoDay.optional(),
+    closedTo: isoDay.optional(),
     search: name.optional(),
-    sort: z.enum(["value", "oldest_contact", "newest", "stage_age"]).optional(),
-    limit: limit.optional(),
+    sort: z.enum(["value", "oldest_contact", "newest", "stage_age", "closed"]).optional(),
+    /** Up to 60 — the higher end for a report or a full list; a chat answer keeps to a few. */
+    limit: upTo(LEAD_LIST_MAX).optional(),
   })
   .strict();
 
@@ -215,6 +221,9 @@ export const customFieldsArgs = z
     limit: upTo(50).optional(),
   })
   .strict();
+/** One deal's file, and the suppliers (assistantDealFileLookup) — each held to its page's own rule. */
+export const dealFileArgs = z.object({ deal: name }).strict();
+export const suppliersArgs = z.object({ supplier: name.optional(), missing: z.boolean().optional(), orders: z.boolean().optional() }).strict();
 /** Notes ADDED on a day or a period, across everything the person may open, with who added each (assistantNotesLookup). */
 export const notesArgs = z.object({ from: isoDay, to: isoDay.optional(), by: name.optional(), limit: z.number().int().min(1).max(40).optional() }).strict();
 /** What the business knows: products, prices, approved answers, competitors. */
@@ -261,6 +270,8 @@ export const assistantStep = z.discriminatedUnion("tool", [
   z.object({ tool: z.literal("surveys"), args: surveysArgs.default({}) }),
   z.object({ tool: z.literal("referrals"), args: referralsArgs.default({}) }),
   z.object({ tool: z.literal("custom_fields"), args: customFieldsArgs }),
+  z.object({ tool: z.literal("deal_file"), args: dealFileArgs }),
+  z.object({ tool: z.literal("suppliers"), args: suppliersArgs.default({}) }),
   z.object({ tool: z.literal("notes"), args: notesArgs }),
   z.object({ tool: z.literal("stuck_deals"), args: z.object({}).strict().default({}) }),
   z.object({ tool: z.literal("knowledge"), args: knowledgeArgs }),
@@ -308,7 +319,7 @@ export function planInstructions(ctx: PlanContext): string {
     // learned — comes last, so it never breaks the cached part before it.
     "You are the research step of a sales CRM assistant. Decide the ONE next lookup that best helps answer the question, or say done. Output JSON only — no prose, no code fence.",
     "Tools (args optional unless marked):",
-    '- find_leads: {"status":"open|nurture|won|lost|any" (default open; nurture = parked for a later follow-up, NOT lost),"stage":"<stage>","assignedTo":"<person>","product":"<text>","source":"<text>","minValue":<rands>,"noContactDays":<days since the last real contact — a message either way, a call or a meeting; internal notes and to-dos do not count>,"createdWithinDays":<days>,"createdFrom":"YYYY-MM-DD","createdTo":"YYYY-MM-DD","search":"<customer or lead name>","sort":"value|oldest_contact|newest|stage_age","limit":<1-25>} — the result starts with the TOTAL that match (not just the ones listed), so use it for "how many". "How many came in" counts every lead: status "any". A calendar period ("last month", "in September") is createdFrom/createdTo — last month is the previous calendar month, not the last 30 days.',
+    '- find_leads: {"status":"open|nurture|won|lost|any" (default open; nurture = parked for a later follow-up, NOT lost),"stage":"<stage>","assignedTo":"<person>","product":"<text>","source":"<text>","minValue":<rands>,"noContactDays":<days since the last real contact — a message either way, a call or a meeting; internal notes and to-dos do not count>,"createdWithinDays":<days>,"createdFrom":"YYYY-MM-DD","createdTo":"YYYY-MM-DD","closedFrom":"YYYY-MM-DD","closedTo":"YYYY-MM-DD" (the day it was WON or LOST — "lost in October" is status lost + closedFrom/closedTo, NOT createdFrom),"search":"<customer or lead name>","sort":"value|oldest_contact|newest|stage_age|closed","limit":<1-60; up to 60 only for a report or a full list>} — the result starts with the TOTAL that match (not just the ones listed), so use it for "how many"; for lost deals it also gives the count of EVERY lost reason across all of them, and each lost or won deal its closed date (and lost reason). "How many came in" counts every lead: status "any". A calendar period ("last month", "in September") is createdFrom/createdTo — last month is the previous calendar month, not the last 30 days.',
     "- pipeline_summary: {} — open leads counted and valued per stage.",
     "- daily_brief: {} — what needs this person's attention today, already prioritised (customers waiting for a reply, today's meetings and test drives, overdue follow-ups, Nurture deals whose review day has come, deals that look close, quotes needing attention, delivery problems, stalled deals) — and, for an owner or team manager, their team's; for someone who sees the workshop, a short workshop section (overdue services, stuck job cards, warranties ending). Use it for \"what needs my attention\", \"what should I do today\", \"plan my day\", \"where does my team need help\".",
     '- sales_stats: {"period":"this_month|last_month|last_30_days|last_90_days|this_quarter|this_year" (default this_month),"assignedTo":"<person>"} — the numbers behind "how are we doing / why are sales slower / who needs help": new leads, how many reach a quote, won and lost, win rate, quotes issued/opened/signed, lead sources, lost reasons, the open pipeline per stage with what is stalled, each salesperson\'s open deals, next steps, overdue work and quiet customers — each against the period before.',
@@ -334,6 +345,8 @@ export function planInstructions(ctx: PlanContext): string {
     '- surveys: {"from":"YYYY-MM-DD","to":"YYYY-MM-DD","survey":"<words of a survey title>"} — CUSTOMER SURVEYS sent in that period (default the last 30 days): per survey, sent, answered, response rate, NPS or average score, and the unhappy answers with what the customer said. Run it for "how are our NPS scores", "any unhappy customers in the surveys".',
     '- referrals: {"from":"YYYY-MM-DD","to":"YYYY-MM-DD","status":"pending|earned|redeemed"} — REFERRALS in that period (default the last 90 days): totals pending / earned-not-redeemed / redeemed, the top referrers, and the latest referrals. Run it for "how many referrals this quarter", "who refers the most", "which rewards are still owed".',
     '- custom_fields: {"record":"lead|contact|quote|case|vehicle|jobcard" (required),"field":"<the field\'s name>","value":"<words of the value>","limit":<1-50>} — the workspace\'s OWN CUSTOM FIELDS (fields it added itself, e.g. "Finance house", "Expo"). Without field: which custom fields that record type has, with their options. With field (and value): the records whose field matches, that the person may open. Leads, quotes, customers and vehicles that other lookups return already carry their filled custom fields as customFields — read those first. Run it for "which leads came from the Paarl expo", "customers financing with WesBank", "what custom fields do we have on quotes".',
+    '- deal_file: {"deal":"<customer, lead title or Q-number>" (required)} — ONE DEAL\'S FILE, as the deal page shows it: its quotes, the checklist (each item done or missing, and why), what is still MISSING, the papers on file by type, signing requests, handover photo count, and — with Suppliers on — the suppliers on the deal and which of their papers are missing. Run it for "what paperwork is missing on X\'s deal", "is X\'s deal file complete", "has the supplier invoice come in for Q-1031".',
+    '- suppliers: {"supplier":"<supplier name>","missing":true (deals still missing supplier papers),"orders":true (their purchase orders)} — SUPPLIERS (workspace owner only, Suppliers module on): each supplier with kind, contact, terms and how many deals, papers and orders; with a supplier named, its purchase orders and the deals still missing its papers. Run it for "which deals are missing supplier invoices", "what have we ordered from Denago", "who are our suppliers". No bank details are ever in it.',
     '- lost_alive: {"mine":true (only their own deals and unassigned ones)} — deals marked LOST in the last 90 days for a went-quiet or timing reason ("gone cold", "stopped responding", "buying later") where the customer has since messaged or opened a quote: each with when and why it was lost and what the customer did since. Run it for "which lost deals are still alive", "any lost deals worth another look", "lost but not really lost"; it answers on its own ("then":"answer"), offering a nurture or reopen card for each.',
     '- stuck_deals: {} — THEIR most-stuck open deals (the three furthest past their stage\'s time limit), each with its top reason from the stuck check and its link — and, for someone who sees a team\'s deals, the team\'s worst five. Run it for "which of my deals are stuck", "my stuck deals", and the Monday brief; it answers on its own ("then":"answer").',
     '- knowledge: {"topic":"<what to look up>" (required)} — the business\'s own knowledge: products and prices (each with its productId), approved answers (finance, warranty, policies…), company details, competitor intelligence. ALWAYS run this when the person asks for a quote or names a product to quote — a quote can only be built from products found here.',
@@ -495,6 +508,8 @@ const LOOKUP_STATUS: Record<string, string> = {
   surveys: "Reading the survey results",
   referrals: "Checking referrals",
   custom_fields: "Checking custom fields",
+  deal_file: "Opening the deal file",
+  suppliers: "Checking suppliers",
   notes: "Reading the notes added",
   stuck_deals: "Finding your most-stuck deals",
   find_activities: "Checking activities",
