@@ -212,6 +212,9 @@ export const campaignsArgs = z.object({ from: isoDay.optional(), to: isoDay.opti
 export const forecastArgs = z.object({ period: z.string().trim().regex(/^\d{4}-\d{2}$/).optional() }).strict();
 export const surveysArgs = z.object({ from: isoDay.optional(), to: isoDay.optional(), survey: name.optional() }).strict();
 export const referralsArgs = z.object({ from: isoDay.optional(), to: isoDay.optional(), status: z.enum(["pending", "earned", "redeemed"]).optional() }).strict();
+/** One deal's file, and the suppliers (assistantDealFileLookup) — each held to its page's own rule. */
+export const dealFileArgs = z.object({ deal: name }).strict();
+export const suppliersArgs = z.object({ supplier: name.optional(), missing: z.boolean().optional(), orders: z.boolean().optional() }).strict();
 /** Notes ADDED on a day or a period, across everything the person may open, with who added each (assistantNotesLookup). */
 export const notesArgs = z.object({ from: isoDay, to: isoDay.optional(), by: name.optional(), limit: z.number().int().min(1).max(40).optional() }).strict();
 /** What the business knows: products, prices, approved answers, competitors. */
@@ -257,6 +260,8 @@ export const assistantStep = z.discriminatedUnion("tool", [
   z.object({ tool: z.literal("forecast"), args: forecastArgs.default({}) }),
   z.object({ tool: z.literal("surveys"), args: surveysArgs.default({}) }),
   z.object({ tool: z.literal("referrals"), args: referralsArgs.default({}) }),
+  z.object({ tool: z.literal("deal_file"), args: dealFileArgs }),
+  z.object({ tool: z.literal("suppliers"), args: suppliersArgs.default({}) }),
   z.object({ tool: z.literal("notes"), args: notesArgs }),
   z.object({ tool: z.literal("stuck_deals"), args: z.object({}).strict().default({}) }),
   z.object({ tool: z.literal("knowledge"), args: knowledgeArgs }),
@@ -329,6 +334,8 @@ export function planInstructions(ctx: PlanContext): string {
     '- forecast: {"period":"YYYY-MM" (default this month)} — the SALES FORECAST for deals expected to close that month: open, weighted, commit, best case and pipeline totals in rands, and the biggest deals with probability, category, close date, stage and owner. Run it for "what\'s the forecast for this month", "what are we committing for December".',
     '- surveys: {"from":"YYYY-MM-DD","to":"YYYY-MM-DD","survey":"<words of a survey title>"} — CUSTOMER SURVEYS sent in that period (default the last 30 days): per survey, sent, answered, response rate, NPS or average score, and the unhappy answers with what the customer said. Run it for "how are our NPS scores", "any unhappy customers in the surveys".',
     '- referrals: {"from":"YYYY-MM-DD","to":"YYYY-MM-DD","status":"pending|earned|redeemed"} — REFERRALS in that period (default the last 90 days): totals pending / earned-not-redeemed / redeemed, the top referrers, and the latest referrals. Run it for "how many referrals this quarter", "who refers the most", "which rewards are still owed".',
+    '- deal_file: {"deal":"<customer, lead title or Q-number>" (required)} — ONE DEAL\'S FILE, as the deal page shows it: its quotes, the checklist (each item done or missing, and why), what is still MISSING, the papers on file by type, signing requests, handover photo count, and — with Suppliers on — the suppliers on the deal and which of their papers are missing. Run it for "what paperwork is missing on X\'s deal", "is X\'s deal file complete", "has the supplier invoice come in for Q-1031".',
+    '- suppliers: {"supplier":"<supplier name>","missing":true (deals still missing supplier papers),"orders":true (their purchase orders)} — SUPPLIERS (workspace owner only, Suppliers module on): each supplier with kind, contact, terms and how many deals, papers and orders; with a supplier named, its purchase orders and the deals still missing its papers. Run it for "which deals are missing supplier invoices", "what have we ordered from Denago", "who are our suppliers". No bank details are ever in it.',
     '- lost_alive: {"mine":true (only their own deals and unassigned ones)} — deals marked LOST in the last 90 days for a went-quiet or timing reason ("gone cold", "stopped responding", "buying later") where the customer has since messaged or opened a quote: each with when and why it was lost and what the customer did since. Run it for "which lost deals are still alive", "any lost deals worth another look", "lost but not really lost"; it answers on its own ("then":"answer"), offering a nurture or reopen card for each.',
     '- stuck_deals: {} — THEIR most-stuck open deals (the three furthest past their stage\'s time limit), each with its top reason from the stuck check and its link — and, for someone who sees a team\'s deals, the team\'s worst five. Run it for "which of my deals are stuck", "my stuck deals", and the Monday brief; it answers on its own ("then":"answer").',
     '- knowledge: {"topic":"<what to look up>" (required)} — the business\'s own knowledge: products and prices (each with its productId), approved answers (finance, warranty, policies…), company details, competitor intelligence. ALWAYS run this when the person asks for a quote or names a product to quote — a quote can only be built from products found here.',
@@ -489,6 +496,8 @@ const LOOKUP_STATUS: Record<string, string> = {
   forecast: "Working out the forecast",
   surveys: "Reading the survey results",
   referrals: "Checking referrals",
+  deal_file: "Opening the deal file",
+  suppliers: "Checking suppliers",
   notes: "Reading the notes added",
   stuck_deals: "Finding your most-stuck deals",
   find_activities: "Checking activities",

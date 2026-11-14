@@ -407,6 +407,12 @@ jobs:
         # number or quote view from lost_alive; one with quote access, and the owner, do; the other workspace nothing.
         run: npm run test:assistant-lost-alive
 
+      - name: DAX deal file and suppliers -- each held to its page's own rule
+        # Sean, 2026-11-14: "DAX must have knowledge of those things, permission based". deal_file needs quote access
+        # to the deal; suppliers the workspace owner and the Suppliers module; never a payment reference; never another
+        # workspace's.
+        run: npm run test:assistant-deal-file
+
       - name: DAX won/lost by the day they closed -- "lost in October" means lost then, with every reason
         # Sean, 2026-11-14: a report of October's lost leads listed leads CREATED in October, without dates or
         # reasons, 25 at most. closedFrom/closedTo read lostAt/wonAt; lostReasons counts every match; up to 60 listed.
