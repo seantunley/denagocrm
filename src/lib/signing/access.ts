@@ -119,6 +119,8 @@ export async function pendingApprovalsFor(user: PermissionUser) {
     },
     include: { request: { select: { id: true, title: true } } },
     orderBy: { createdAt: "asc" },
+    // A display limit: the oldest 100 this person may decide. An owner may decide every step, so for an owner it is the
+    // workspace's oldest 100 pending (#1114).
     take: 100,
   });
   return steps.filter((step) => canActOnStep(step, user));
