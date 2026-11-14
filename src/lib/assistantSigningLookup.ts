@@ -4,6 +4,7 @@ import { ownedWriteTenantId } from "./tenantWrite";
 import { getAccessibleQuoteIds, hasAnyPermission, type PermissionUser } from "./permissions";
 import { accessibleSignatureRequestWhere } from "./signing/access";
 import { DELIVERY_NOTE } from "./signing/subject";
+import { johannesburgDateKey } from "./activityDay";
 
 /**
  * EVERY signing request — delivery notes, contracts, custom documents and quotes — for DAX (Sean, 2026-11-14: "DAX
@@ -31,7 +32,8 @@ export type SigningArgs = {
 const DAY = 86_400_000;
 const LIVE = ["sent", "viewed", "in_progress"];
 const SIGNING_ROLES = ["signer", "approver"];
-const day = (d: Date | null | undefined) => (d ? d.toISOString().slice(0, 10) : null);
+// The SOUTH AFRICAN day, as from/to filter by (review of #1106: 00:30 SAST on the 14th printed as the 13th in UTC).
+const day = (d: Date | null | undefined) => (d ? johannesburgDateKey(d) : null);
 const contains = (needle: string) => ({ contains: needle, mode: "insensitive" as const });
 
 /** What each status asks for, as a request filter. "Viewed" is still waiting, and someone has opened it without signing. */

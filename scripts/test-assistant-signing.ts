@@ -77,7 +77,7 @@ async function main() {
   const repQuote = await basePrisma.quote.create({ data: { tenantId: A, number: quoteNo(), status: "sent", contactId: marcel.id, createdById: rep.id }, select: { id: true, number: true } });
   const ownerQuote = await basePrisma.quote.create({ data: { tenantId: A, number: quoteNo(), status: "sent", contactId: petrus.id, createdById: a.ownerUserId }, select: { id: true, number: true } });
 
-  const request = async (title: string, data: Record<string, unknown>, recipients: { name: string; status: string; signedAt?: Date; viewedAt?: Date; remindedAt?: Date }[]) => {
+  const request = async (title: string, data: Record<string, unknown>, recipients: { name: string; status: string; signedAt?: Date; viewedAt?: Date; remindedAt?: Date; declinedAt?: Date }[]) => {
     const r = await basePrisma.signatureRequest.create({ data: { tenantId: A, title: `${title} ${SFX}`, status: "sent", sentAt: ago(3), createdById: a.ownerUserId, ...data }, select: { id: true } });
     for (const [i, x] of recipients.entries()) {
       await basePrisma.signatureRecipient.create({ data: { tenantId: A, requestId: r.id, role: "signer", order: i, token: token(), email: `${x.name.toLowerCase()}.${SFX}@customer.invalid`, phone: "+27820000000", ...x } });
@@ -96,9 +96,18 @@ async function main() {
     { name: "Anna", status: "signed", signedAt: ago(2) },
   ]);
 
+  // REVIEW OF #1106: 00:30 SAST on 14 November is 22:30 UTC on the 13th — every date must read the SA day, the 14th.
+  const halfPastMidnight = new Date("2026-11-14T00:30:00+02:00");
+  await request("Midnight", { contactId: marcel.id, sentAt: halfPastMidnight, completedAt: halfPastMidnight, expiresAt: halfPastMidnight }, [
+    { name: "Ada", status: "signed", signedAt: halfPastMidnight },
+    { name: "Ben", status: "declined", declinedAt: halfPastMidnight },
+    { name: "Cas", status: "viewed", viewedAt: halfPastMidnight, remindedAt: halfPastMidnight },
+  ]);
+
   const lookup = async (tenantId: string, u: PermissionUser, args: SigningArgs) =>
     (await runInTenantScope({ tenantId, system: false }, () => signingLookup(u, args))).data[0] as Data;
-  const titles = (d: Data) => (d.requests ?? []).map((r) => r.title.replace(` ${SFX}`, "")).sort();
+  // "Midnight" has its own checks (SA days); left out of the access ones.
+  const titles = (d: Data) => (d.requests ?? []).map((r) => r.title.replace(` ${SFX}`, "")).filter((t) => t !== "Midnight").sort();
 
   try {
     __setTenantEnforcingForTests(true);
@@ -107,16 +116,27 @@ async function main() {
     const all = await lookup(A, ownerA, { status: "any", title: SFX });
     check("sees every request — quotes, delivery notes, the contract", JSON.stringify(titles(all)) === JSON.stringify(["Contract", "Delivery note owner", "Delivery note rep", "Owner quote", "Rep quote"]), JSON.stringify(titles(all)));
     const waiting = await lookup(A, ownerA, { title: SFX });
-    check("default is waiting: the four not yet signed, not the completed contract", waiting.total === 4 && !titles(waiting).includes("Contract"), JSON.stringify(titles(waiting)));
+    check("default is waiting: the four not yet signed (and Midnight), not the completed contract", waiting.total === 5 && titles(waiting).length === 4 && !titles(waiting).includes("Contract"), JSON.stringify(titles(waiting)));
     const byCustomer = await lookup(A, ownerA, { status: "any", customer: `Petrus Sign${SFX}` });
     check("by customer: Petrus's quote request, and the delivery note for that quote", titles(byCustomer).join() === "Delivery note owner,Owner quote", JSON.stringify(titles(byCustomer)));
     const dn = (waiting.requests ?? []).find((r) => r.title.startsWith("Delivery note rep"));
     check("a delivery note says what it is for", dn?.for === `delivery note for Q-${repQuote.number}`, dn?.for);
     const viewed = await lookup(A, ownerA, { status: "viewed", title: SFX });
-    const rq = viewed.requests?.[0];
+    const rq = viewed.requests?.find((r) => r.title === `Rep quote ${SFX}`);
     check("viewed: opened, not signed — with the last reminder", titles(viewed).join() === "Rep quote" && rq?.openedNotSigned.join() === "Marcel" && /opened .*not signed/.test(rq?.notSigned[0] ?? "") && rq?.lastReminder !== null, JSON.stringify(rq));
     const done = await lookup(A, ownerA, { status: "completed", title: `Contract ${SFX}` });
     check("completed: both signers named as signed", done.total === 1 && done.requests?.[0].signed.length === 2 && done.requests?.[0].notSigned.length === 0, JSON.stringify(done.requests));
+
+    console.log("\nSouth African days, not UTC (review of #1106)");
+    type Dated = Req & { sent?: string; completed?: string; expires?: string };
+    const onThe14th = await lookup(A, ownerA, { status: "any", title: `Midnight ${SFX}`, from: "2026-11-14", to: "2026-11-14" });
+    const m = onThe14th.requests?.[0] as Dated | undefined;
+    check("sent at 00:30 SAST on the 14th: found when filtering for the 14th", onThe14th.total === 1, JSON.stringify(onThe14th).slice(0, 200));
+    check("…and shown as the 14th: sent, completed, expires", m?.sent === "2026-11-14" && m?.completed === "2026-11-14" && m?.expires === "2026-11-14", JSON.stringify(m));
+    check("…signed, declined and opened on the 14th", m?.signed.join() === "Ada (signed 2026-11-14)" && m?.notSigned.some((s) => s === "Ben: declined 2026-11-14") === true && m?.notSigned.some((s) => s === "Cas: opened 2026-11-14, not signed") === true, JSON.stringify(m));
+    check("…and reminded on the 14th", m?.lastReminder === "2026-11-14", String(m?.lastReminder));
+    const onThe13th = await lookup(A, ownerA, { status: "any", title: `Midnight ${SFX}`, from: "2026-11-13", to: "2026-11-13" });
+    check("…and NOT found on the 13th (its UTC day)", onThe13th.total === 0, String(onThe13th.total));
 
     console.log("\nA rep with their own quotes");
     const repSees = await lookup(A, rep, { status: "any", title: SFX });
