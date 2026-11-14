@@ -52,7 +52,7 @@ The **platform console** (`/platform`) handles workspaces, domains, plans, usage
   | Schedule | Jobs |
   | --- | --- |
   | Every 30 min | signing jobs, bot outbox, scheduled emails, journeys, automations, statistics, research, assistant |
-  | Daily | backup 02:00 UTC, photo orphans 03:00, competitor watch 05:00 |
+  | Daily | backup 02:00 UTC, photo orphans 03:00, Xero payments check 04:40 (06:40 SA), competitor watch 05:00 |
   | Hourly | private-storage at :20 |
   | Monthly | security check on the 1st |
 

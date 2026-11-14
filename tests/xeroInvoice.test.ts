@@ -154,7 +154,7 @@ test("tax types: exact active revenue rate; 0% prefers zero-rated; ambiguous or 
 test("Xero settings are always read and written for a NAMED workspace, never the general settings", () => {
   // getSetting/putSetting fall back to the founding workspace while enforcement is
   // off — one workspace's Xero choice reached another that way (review of #1068).
-  for (const path of ["src/app/actions/xero.ts", "src/lib/xero.ts", "src/app/(app)/settings/integrations/page.tsx"]) {
+  for (const path of ["src/app/actions/xero.ts", "src/lib/xero.ts", "src/lib/xeroSync.ts", "src/app/(app)/settings/integrations/page.tsx"]) {
     const source = readFileSync(path, "utf8");
     assert.doesNotMatch(source, /\b(getSetting|putSetting)\(/, `${path} uses the general settings`);
   }
@@ -374,8 +374,8 @@ test("every way to undo an accepted invoice asks xeroLockReason under the row lo
 });
 
 test("a PDF is filed only while the invoice still links that Xero invoice; a refresh that matched nothing stops", () => {
-  const actions = readFileSync("src/app/actions/xero.ts", "utf8");
-  const file = actions.slice(actions.indexOf("async function fileXeroPdf("), actions.indexOf("async function tryFilePdf("));
+  const sync = readFileSync("src/lib/xeroSync.ts", "utf8");
+  const file = sync.slice(sync.indexOf("async function fileXeroPdf("), sync.indexOf("async function tryFilePdf("));
   const order = [
     "FOR UPDATE",
     "tx.quote.count({ where: { id: input.quote.id, tenantId: input.tenantId, xeroInvoiceId: input.invoice.id } })",
@@ -390,7 +390,7 @@ test("a PDF is filed only while the invoice still links that Xero invoice; a ref
     file,
     /tx\.document\.updateMany\(\{\s*where: \{ tenantId: input\.tenantId, quoteId: input\.quote\.id, tag: "accounting-invoice", deletedAt: null, id: \{ not: document\.id \} \},\s*data: \{ replacedById: document\.id, deletedAt: new Date\(\), deletedByName: "Xero", deleteReason:/,
   );
-  const refresh = actions.slice(actions.indexOf("export async function refreshXeroInvoice("));
+  const refresh = sync.slice(sync.indexOf("export async function refreshOneFromXero("));
   assert.ok(refresh.indexOf("if (updated.count !== 1) refuse(") > 0 && refresh.indexOf("if (updated.count !== 1) refuse(") < refresh.indexOf("tryFilePdf("), "stop before any PDF when the update matched nothing");
 });
 
@@ -460,7 +460,7 @@ test("a send writes its result only while its own claim stands; a failed create 
   assert.ok(actions.indexOf("createAttempted = true;") < actions.indexOf("client.createInvoice(payload, plan.idempotencyKey)"));
   // The claim never clears the link: a voided invoice stays until its replacement is recorded.
   assert.match(actions, /data: \{ xeroStatus: "SENDING", xeroSentAt: claimAt \},/);
-  assert.match(actions, /if \(xeroSendUncertain\(quote\.xeroStatus\)\) refuse\(/, "Refresh doesn't read the voided invoice back over a send");
+  assert.match(readFileSync("src/lib/xeroSync.ts", "utf8"), /if \(xeroSendUncertain\(quote\.xeroStatus\)\) refuse\(/, "Refresh doesn't read the voided invoice back over a send");
   const unconfirmed = { number: 1, invoiceNumber: 5, xeroInvoiceId: null, xeroInvoiceNumber: null, xeroStatus: XERO_UNCONFIRMED, xeroSentAt: null };
   assert.match(xeroLockReason(unconfirmed) ?? "", /didn't finish/, "Xero may have it → locked until a send checks");
 });

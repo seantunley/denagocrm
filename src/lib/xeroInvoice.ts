@@ -486,6 +486,10 @@ function summary(invoice: Record<string, unknown> | undefined): XeroInvoiceSumma
 
 /** Settings key: where payments are recorded. "crm" puts the CRM's own forms back; anything else (default) = Xero. */
 export const XERO_PAYMENTS_SOURCE_KEY = "XERO_PAYMENTS_SOURCE";
+/** Settings key: the hourly automatic payments check — "off" stops it; anything else (default) runs it. */
+export const XERO_AUTO_CHECK_KEY = "XERO_AUTO_CHECK";
+/** Settings key: when the automatic check last ran for this workspace (ISO) — shown in Settings. */
+export const XERO_AUTO_CHECKED_AT_KEY = "XERO_AUTO_CHECKED_AT";
 /** QuotePayment.method of a payment brought back from Xero — shown as "Recorded in Xero", never offered in the CRM's form. */
 export const XERO_PAYMENT_METHOD = "xero";
 

@@ -1592,6 +1592,9 @@ model Quote {
   /// "Not for Xero" (Sean, 2026-11-11): a historical invoice, processed before Xero, marked by hand —
   /// never offered to Xero. Its payments are recorded in the CRM as before.
   xeroExcludedAt       DateTime?
+  /// Which of Xero's states the filed Xero PDF shows. The automatic payments check moves the status on
+  /// without filing (a document needs a real uploader); a person's next Refresh then files the newer PDF.
+  xeroPdfStatus        String?
   xeroExcludedByName   String?
   depositPaidAt        DateTime?
   depositPaidCents     Int? // amount actually received; null = recorded before amounts were captured
