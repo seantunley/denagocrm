@@ -1,5 +1,7 @@
 import { prisma } from "@/lib/db";
 import { accessibleRequestWhere, governingBinding as resolveBinding, type RequestBinding } from "./binding";
+import { canActOnStep } from "./approvals";
+import { CLOSED_REQUEST_STATUSES } from "./statusPolicy";
 import {
   canAccessContact,
   canAccessDocument,
@@ -100,6 +102,26 @@ export async function accessibleSignatureRequestWhere(user: PermissionUser) {
 }
 
 /**
+ * The approval steps the Signatures page offers this person: ones they may decide (canActOnStep — the assigned
+ * approver, or the owner) on requests they may OPEN (the list rule above). Both, never either (review of #1111: the
+ * panel checked only the assignee, so it named and linked a delivery note on another rep's deal). An assigned approver
+ * who can't open the deal still has the approval link emailed to them.
+ */
+export async function pendingApprovalsFor(user: PermissionUser) {
+  const mine = await accessibleSignatureRequestWhere(user);
+  const steps = await prisma.approvalStep.findMany({
+    where: {
+      status: "pending",
+      request: { deletedAt: null, status: { notIn: [...CLOSED_REQUEST_STATUSES] }, AND: [mine] },
+    },
+    include: { request: { select: { id: true, title: true } } },
+    orderBy: { createdAt: "asc" },
+    take: 100,
+  });
+  return steps.filter((step) => canActOnStep(step, user));
+}
+
+/**
  * Capability + record access for a signature request, resolved by id.
  *
  * Returns `null` when the caller may not act, WITHOUT distinguishing "no such
@@ -125,6 +147,8 @@ export const REQUEST_BINDING_SELECT = {
   contactId: true,
   documentId: true,
   createdById: true,
+  subjectType: true,
+  subjectId: true,
 } as const;
 
 /**

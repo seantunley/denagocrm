@@ -127,23 +127,31 @@ test("the request page checks the record, not just the Signatures permission", (
   // Every query the list and its counts are built from.
   assert.equal((list.match(/AND: \[mine\]/g) ?? []).length, 4, "status counts, completion times, the list itself and Needs attention");
   assert.doesNotMatch(list, /\.\.\.mine/, "a spread would be overwritten by a query's own OR");
-  assert.match(list, /allPendingApprovals\.filter\(\(step\) => canActOnStep\(step, user\)\)/);
+  // Pending approvals: the assignee check AND the record rule (review of #1111), in one shared function.
+  assert.match(list, /pendingApprovalsFor\(user\)/);
+  assert.doesNotMatch(list, /approvalStep\.findMany/, "the page keeps no approvals query of its own");
+  const access = code("src/lib/signing/access.ts");
+  assert.match(access, /request: \{ deletedAt: null, status: \{ notIn: \[\.\.\.CLOSED_REQUEST_STATUSES\] \}, AND: \[mine\] \}/);
+  assert.match(access, /return steps\.filter\(\(step\) => canActOnStep\(step, user\)\);/);
 });
 
 /** Evaluate the Prisma-shaped filter against a row, for the handful of operators it uses. */
-function matches(where: ReturnType<typeof accessibleRequestWhere>, row: RequestBinding): boolean {
+function matches(where: { OR: object[] }, row: RequestBinding): boolean {
   const field = (cond: unknown, value: string | null) => {
     if (cond === null) return value === null;
     if (typeof cond === "string") return value === cond;
-    const c = cond as { in?: string[]; not?: null };
+    const c = cond as { in?: string[]; not?: string | null };
     if ("in" in c) return value !== null && c.in!.includes(value);
-    return value !== null; // { not: null }
+    // SQL: `col <> 'x'` is never true for a NULL column, which is why the filter names the NULL case itself.
+    return c.not === null ? value !== null : value !== null && value !== c.not;
   };
-  return where.OR.some((branch) => Object.entries(branch).every(([key, cond]) => field(cond, row[key as keyof RequestBinding])));
+  return where.OR.some((branch) =>
+    Object.entries(branch).every(([key, cond]) =>
+      key === "OR" ? matches({ OR: cond as object[] }, row) : field(cond, row[key as keyof RequestBinding])));
 }
 
 test("the list filter is the same precedence as the single-record check, never a looser one", () => {
-  const row = (binding: Partial<RequestBinding>): RequestBinding => ({ quoteId: null, jobCardId: null, contactId: null, documentId: null, createdById: null, ...binding });
+  const row = (binding: Partial<RequestBinding>): RequestBinding => ({ quoteId: null, jobCardId: null, contactId: null, documentId: null, createdById: null, subjectType: null, subjectId: null, ...binding });
   const mine = accessibleRequestWhere({ quoteIds: ["q_mine"], jobCardIds: ["j_mine"], documentIds: ["d_mine"], contactIds: ["c_mine"], userId: "me" });
 
   assert.equal(matches(mine, row({ quoteId: "q_mine", contactId: "c_other" })), true, "my quote, whoever the customer is");
@@ -158,12 +166,27 @@ test("the list filter is the same precedence as the single-record check, never a
 
   // It agrees with governingBinding on which record decides, for every combination.
   const ids = { quoteId: ["q_mine", "q_other", null], jobCardId: ["j_mine", "j_other", null], documentId: ["d_mine", "d_other", null], contactId: ["c_mine", "c_other", null] } as const;
-  for (const quoteId of ids.quoteId) for (const jobCardId of ids.jobCardId) for (const documentId of ids.documentId) for (const contactId of ids.contactId) {
-    const r = row({ quoteId, jobCardId, documentId, contactId, createdById: "someone" });
+  // Subjects too: a delivery note on my quote or someone else's, one with no quote named, and a test-drive indemnity.
+  const subjects = [
+    { subjectType: null, subjectId: null },
+    { subjectType: "delivery_note", subjectId: "q_mine" },
+    { subjectType: "delivery_note", subjectId: "q_other" },
+    { subjectType: "delivery_note", subjectId: null },
+    { subjectType: "test_drive_indemnity", subjectId: "td1" },
+  ];
+  for (const quoteId of ids.quoteId) for (const jobCardId of ids.jobCardId) for (const documentId of ids.documentId) for (const contactId of ids.contactId) for (const subject of subjects) {
+    const r = row({ quoteId, jobCardId, documentId, contactId, createdById: "someone", ...subject });
     const governing = governingBinding(r);
     const expected = governing ? governing.id.endsWith("_mine") : false;
     assert.equal(matches(mine, r), expected, JSON.stringify(r));
   }
+
+  // Sean 2026-11-14: a rep can see the customer and its document, not the delivery note on another rep's deal.
+  const otherRepsNote = row({ subjectType: "delivery_note", subjectId: "q_other", contactId: "c_mine", documentId: "d_mine" });
+  assert.deepEqual(governingBinding(otherRepsNote), { kind: "quote", id: "q_other" });
+  assert.equal(matches(mine, otherRepsNote), false);
+  assert.equal(matches(mine, row({ subjectType: "delivery_note", subjectId: "q_mine", contactId: "c_other" })), true);
+  assert.equal(matches(mine, row({ subjectType: "test_drive_indemnity", subjectId: "td1", contactId: "c_mine" })), true, "other subjects keep the customer rule");
 
   // "Every record of that kind" stays every record — and still only when it governs.
   const unrestrictedQuotes = accessibleRequestWhere({ quoteIds: null, jobCardIds: [], documentIds: [], contactIds: [], userId: "me" });
