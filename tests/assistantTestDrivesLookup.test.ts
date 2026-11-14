@@ -22,6 +22,12 @@ test("held to the /test-drives page's own rule, checked before anything is read"
   assert.match(body, /AND: \[\s*scope,/);
   // A won deal only when the person may open it.
   assert.match(body, /AND: \[leadIds === null \? \{\} : \{ id: \{ in: leadIds \} \}\]/);
+  // A sale they can't see is never "didn't buy" (review of #1108): no deal access, or a deal on the customer they
+  // can't open → unknown; "didn't buy" leaves unknowns out and says how many.
+  assert.match(body, /const noDealAccess = leadIds !== null && leadIds\.length === 0;/);
+  assert.match(body, /return noDealAccess \|\| unverifiable\.has\(d\.contactId\) \? null : false;/);
+  assert.match(body, /drives\.filter\(\(d\) => bought\(d\) === args\.boughtAfter\)/);
+  assert.match(body, /bought: bought\(d\) \?\? "unknown — not verified with your access"/);
   // The workspace named in the bookings query, and in every contact, product and lead read.
   assert.match(body, /const where: Prisma\.TestDriveBookingWhereInput = \{\s*tenantId,/);
   const reads = body.match(/prisma\.(contact|product|lead)\.findMany\(\{\s*where: \{ [^\n]*/g) ?? [];

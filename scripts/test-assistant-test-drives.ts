@@ -40,7 +40,7 @@ const ago = (days: number) => new Date(Date.now() - days * DAY);
 const LICENCE = `LIC${SFX}`;
 const EMERGENCY = `Emergency ${SFX}`;
 const INCIDENT = `Incident ${SFX}`;
-type Row = { total?: number | string; customer?: string; ranBy?: string; bought?: boolean; wonDeal?: unknown; note?: string; feedback?: string };
+type Row = { total?: number | string; customer?: string; ranBy?: string; bought?: boolean | string; wonDeal?: unknown; note?: string; feedback?: string };
 
 async function main() {
   guardEnvironment();
@@ -53,19 +53,23 @@ async function main() {
   const rep = user("Rep Own");
   const colleague = user("Rep Other");
   const noActs = user("No Activities");
+  /** Runs drives (activities.view) but may open NO deals (review of #1108). */
+  const actsOnly = user("Acts Only");
   const ROLE_OWN = crypto.randomUUID();
   const ROLE_NO_ACTS = crypto.randomUUID();
+  const ROLE_ACTS_ONLY = crypto.randomUUID();
   const savedModules = (await basePrisma.tenant.findUnique({ where: { id: A }, select: { modules: true } }))?.modules ?? "";
   // Automotive on for the run, whatever the fixture had (restored in cleanup).
   await basePrisma.tenant.update({ where: { id: A }, data: { modules: [...new Set([...savedModules.split(","), "automotive"])].filter(Boolean).join(",") } });
 
-  for (const u of [rep, colleague, noActs]) {
+  for (const u of [rep, colleague, noActs, actsOnly]) {
     await basePrisma.$executeRaw`INSERT INTO "User" ("id","name","email","passwordHash","role","sessionVersion") VALUES (${u.id}, ${u.name}, ${u.email}, 'x', 'member', 0)`;
     await basePrisma.$executeRaw`INSERT INTO "TenantMember" ("id","tenantId","userId") VALUES (${crypto.randomUUID()}, ${A}, ${u.id})`;
   }
   for (const [role, keys, holders] of [
     [ROLE_OWN, ["activities.view", "contacts.view_owned", "leads.view_owned"], [rep, colleague]],
     [ROLE_NO_ACTS, ["contacts.view_owned", "leads.view_owned"], [noActs]],
+    [ROLE_ACTS_ONLY, ["activities.view", "contacts.view_owned"], [actsOnly]],
   ] as const) {
     await basePrisma.$executeRaw`INSERT INTO "Role" ("id","tenantId","name","description","system","updatedAt") VALUES (${role}, ${A}, ${`Test drives ${role.slice(0, 8)} ${SFX}`}, 'test', false, now())`;
     for (const key of keys) await basePrisma.$executeRaw`INSERT INTO "RolePermission" ("roleId","permissionKey","tenantId") VALUES (${role}, ${key}, ${A})`;
@@ -96,6 +100,10 @@ async function main() {
   await drive(cara.id, colleague.id, 4, { salesOutcome: "no_interest" });
   // Upcoming: the rep's drive with Ben next week.
   await drive(ben.id, rep.id, -7, { status: "booked" });
+  // Dan: driven by Acts Only, who may open no deals — and Dan DID buy later, through the rep's deal.
+  const dan = await contact("Dan", actsOnly.id);
+  await drive(dan.id, actsOnly.id, 6, { salesOutcome: "follow_up" });
+  await basePrisma.lead.create({ data: { tenantId: A, stageId: a.rows.stageId, status: "won", name: `Dan Drive${SFX}`, title: `Dan's secret deal ${SFX}`, contactId: dan.id, assignedToId: rep.id, createdById: rep.id, wonAt: ago(1) } });
 
   const run = (tenantId: string, u: PermissionUser, args: TestDrivesArgs = {}) =>
     runInTenantScope({ tenantId, system: false }, () => testDrivesLookup(u, args));
@@ -124,6 +132,19 @@ async function main() {
     const colleagueOut = rows(await run(A, colleague, { limit: 60 }));
     check("the colleague sees Cara, and Anna's drive is not theirs", mine(colleagueOut).some((r) => r.customer?.startsWith("Cara")) && !mine(colleagueOut).some((r) => r.customer?.startsWith("Anna")));
 
+    console.log("\ntest_drives — a sale the person can't see is never \"didn't buy\" (review of #1108)");
+    const blind = rows(await run(A, actsOnly, { limit: 60 }));
+    const danRow = mine(blind).find((r) => r.customer?.startsWith("Dan"));
+    check("they see the drive they ran", Boolean(danRow), JSON.stringify(mine(blind).map((r) => r.customer)));
+    check("…bought is 'unknown — not verified', never false", typeof danRow?.bought === "string" && /unknown/.test(String(danRow?.bought)), JSON.stringify(danRow));
+    check("…and the deal itself never appears", !danRow?.wonDeal && !JSON.stringify(blind).includes(`Dan's secret deal ${SFX}`));
+    const blindNot = rows(await run(A, actsOnly, { boughtAfter: false, limit: 60 }));
+    check("didn't buy: Dan is LEFT OUT, and the answer says how many were unverified", !mine(blindNot).some((r) => r.customer?.startsWith("Dan")) && /1 more drive\(s\) left out/.test(String((blindNot[0] as Record<string, unknown>).unverified)), JSON.stringify(blindNot[0]));
+    const blindYes = rows(await run(A, actsOnly, { boughtAfter: true, limit: 60 }));
+    check("bought: not claimed either (only verified sales count)", !mine(blindYes).some((r) => r.customer?.startsWith("Dan")));
+    const ownerDan = mine(rows(await run(A, ownerA, { customer: "Dan" })))[0];
+    check("the owner, who may open the deal, sees Dan bought", ownerDan?.bought === true && Boolean(ownerDan?.wonDeal), JSON.stringify(ownerDan));
+
     console.log("\ntest_drives — refused");
     check("no activities permission: refused", /can't open test drives/.test(String(rows(await run(A, noActs))[0].note)));
     const otherWs = rows(await run(b.tenantId, memberB, { limit: 60 }));
@@ -137,12 +158,12 @@ async function main() {
     await basePrisma.testDriveBooking.deleteMany({ where: { tenantId: A, reference: { startsWith: `TD-${SFX}` } } }).catch(() => 0);
     await basePrisma.lead.deleteMany({ where: { tenantId: A, name: { endsWith: `Drive${SFX}` } } }).catch(() => 0);
     await basePrisma.contact.deleteMany({ where: { tenantId: A, lastName: `Drive${SFX}` } }).catch(() => 0);
-    await basePrisma.$executeRaw`DELETE FROM "UserRole" WHERE "roleId" IN (${ROLE_OWN}, ${ROLE_NO_ACTS})`.catch(() => 0);
-    await basePrisma.$executeRaw`DELETE FROM "RolePermission" WHERE "roleId" IN (${ROLE_OWN}, ${ROLE_NO_ACTS})`.catch(() => 0);
-    await basePrisma.$executeRaw`DELETE FROM "Role" WHERE "id" IN (${ROLE_OWN}, ${ROLE_NO_ACTS})`.catch(() => 0);
+    await basePrisma.$executeRaw`DELETE FROM "UserRole" WHERE "roleId" IN (${ROLE_OWN}, ${ROLE_NO_ACTS}, ${ROLE_ACTS_ONLY})`.catch(() => 0);
+    await basePrisma.$executeRaw`DELETE FROM "RolePermission" WHERE "roleId" IN (${ROLE_OWN}, ${ROLE_NO_ACTS}, ${ROLE_ACTS_ONLY})`.catch(() => 0);
+    await basePrisma.$executeRaw`DELETE FROM "Role" WHERE "id" IN (${ROLE_OWN}, ${ROLE_NO_ACTS}, ${ROLE_ACTS_ONLY})`.catch(() => 0);
     await teardown(fixture);
-    await basePrisma.$executeRaw`DELETE FROM "TenantMember" WHERE "userId" IN (${rep.id}, ${colleague.id}, ${noActs.id})`.catch(() => 0);
-    await basePrisma.$executeRaw`DELETE FROM "User" WHERE "id" IN (${rep.id}, ${colleague.id}, ${noActs.id})`.catch(() => 0);
+    await basePrisma.$executeRaw`DELETE FROM "TenantMember" WHERE "userId" IN (${rep.id}, ${colleague.id}, ${noActs.id}, ${actsOnly.id})`.catch(() => 0);
+    await basePrisma.$executeRaw`DELETE FROM "User" WHERE "id" IN (${rep.id}, ${colleague.id}, ${noActs.id}, ${actsOnly.id})`.catch(() => 0);
   }
   console.log(`\n${passed} passed, ${failed} failed`);
 }

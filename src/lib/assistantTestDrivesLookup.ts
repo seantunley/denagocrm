@@ -82,6 +82,20 @@ export async function testDrivesLookup(user: PermissionUser, args: TestDrivesArg
   ]);
 
   const contactIds = [...new Set(drives.map((d) => d.contactId))];
+  // CAN THEY TELL? (review of #1108). "Didn't buy" is only said when the person may open every deal on that customer —
+  // otherwise a sale made through a deal they can't see would read as "no sale". Counted, never read: nothing about
+  // those deals reaches the answer.
+  // No deal access at all: never verifiable (not even "this customer has no deals" is theirs to learn).
+  const noDealAccess = leadIds !== null && leadIds.length === 0;
+  const hidden =
+    leadIds === null || noDealAccess || !contactIds.length
+      ? []
+      : await prisma.lead.groupBy({
+          by: ["contactId"],
+          where: { tenantId, deletedAt: null, contactId: { in: contactIds }, id: { notIn: leadIds } },
+          _count: { _all: true },
+        });
+  const unverifiable = new Set(hidden.map((h) => h.contactId));
   const [contacts, productRows, staff, won] = await Promise.all([
     prisma.contact.findMany({ where: { tenantId, id: { in: contactIds } }, select: { id: true, firstName: true, lastName: true, company: true, isCompany: true } }),
     prisma.product.findMany({ where: { tenantId, id: { in: [...new Set(drives.map((d) => d.productId).filter((x): x is string => !!x))] } }, select: { id: true, name: true } }),
@@ -99,10 +113,15 @@ export async function testDrivesLookup(user: PermissionUser, args: TestDrivesArg
   const person = new Map(staff.map((s) => [s.id, s.name]));
   const boughtAfter = (d: (typeof drives)[number]) =>
     won.find((l) => l.contactId === d.contactId && l.wonAt && l.wonAt.getTime() >= d.scheduledStart.getTime()) ?? null;
-  const bought = (d: (typeof drives)[number]) => d.salesOutcome === "sale_won" || Boolean(boughtAfter(d));
+  /** true / false — or null: not verifiable with this person's access (a deal on the customer they can't open). */
+  const bought = (d: (typeof drives)[number]): boolean | null => {
+    if (d.salesOutcome === "sale_won" || boughtAfter(d)) return true;
+    return noDealAccess || unverifiable.has(d.contactId) ? null : false;
+  };
 
   // ponytail: "bought" is worked out on the newest READ drives; past that the total is a floor.
   const filtered = args.boughtAfter === undefined ? drives : drives.filter((d) => bought(d) === args.boughtAfter);
+  const unknownLeftOut = args.boughtAfter === undefined ? 0 : drives.filter((d) => bought(d) === null).length;
   const total = args.boughtAfter === undefined ? count : count > READ ? `at least ${filtered.length}` : filtered.length;
   const take = Math.min(args.limit ?? 15, 60);
   const page = filtered.slice(0, take);
@@ -110,7 +129,14 @@ export async function testDrivesLookup(user: PermissionUser, args: TestDrivesArg
   return {
     truncated: filtered.length > take || count > READ,
     data: [
-      { total, listed: page.length, period: `${saDay(from).slice(0, 10)} to ${saDay(new Date(to.getTime() - DAY)).slice(0, 10)}` },
+      {
+        total,
+        listed: page.length,
+        period: `${saDay(from).slice(0, 10)} to ${saDay(new Date(to.getTime() - DAY)).slice(0, 10)}`,
+        ...(unknownLeftOut
+          ? { unverified: `${unknownLeftOut} more drive(s) left out: whether that customer bought can't be checked with this person's access (a deal they can't open). Say so — never call them "didn't buy".` }
+          : {}),
+      },
       ...page.map((d) => {
         const deal = boughtAfter(d);
         return {
@@ -126,7 +152,7 @@ export async function testDrivesLookup(user: PermissionUser, args: TestDrivesArg
           outcome: d.salesOutcome?.replaceAll("_", " ") ?? null,
           feedback: d.customerFeedback ? clip(d.customerFeedback, 240) : null,
           quoteCreated: Boolean(d.convertedQuoteId),
-          bought: bought(d),
+          bought: bought(d) ?? "unknown — not verified with your access",
           ...(deal ? { wonDeal: { title: deal.title, link: `/leads/${deal.id}`, won: deal.wonAt?.toISOString().slice(0, 10) } } : {}),
         };
       }),
