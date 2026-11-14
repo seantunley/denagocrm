@@ -42,7 +42,8 @@ export async function partsLookup(user: PermissionUser, args: z.infer<typeof par
       AND: words(args.search).map((w) => ({ OR: [{ name: fuzzy(w) }, { sku: fuzzy(w) }, { location: fuzzy(w) }, { notes: fuzzy(w) }] })),
     },
     orderBy: [{ name: "asc" }, { id: "asc" }],
-    select: { id: true, name: true, sku: true, location: true, stockQty: true, reorderAt: true, priceCents: true, costCents: true },
+    // Cost is not even read for someone who may not see it (review of #1110).
+    select: { id: true, name: true, sku: true, location: true, stockQty: true, reorderAt: true, priceCents: true, costCents: showCost },
   });
   // Low stock is a comparison of two columns, so it is read here — over this workspace's parts only.
   const matching = args.lowStock ? parts.filter((p) => p.reorderAt != null && p.stockQty <= p.reorderAt) : parts;

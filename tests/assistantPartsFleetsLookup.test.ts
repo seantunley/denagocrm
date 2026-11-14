@@ -26,6 +26,7 @@ test("parts: the Parts page's rule; the cost only for those who may manage parts
   assert.ok(parts.indexOf('hasAnyPermission(user, "parts.view", "parts.manage")') < parts.indexOf("prisma.part.findMany"), "permission first");
   assert.match(parts, /const showCost = await hasAnyPermission\(user, "parts\.manage"\);/);
   assert.match(parts, /\.\.\.\(showCost \? \{ cost: formatZAR\(p\.costCents, money\) \} : \{\}\),/);
+  assert.match(parts, /costCents: showCost \}/, "cost is not even read without parts.manage");
   assert.match(parts, /where: \{\s*tenantId,\s*active: true,\s*deletedAt: null,/);
   const shown = parts.slice(parts.indexOf("const shown = "), parts.indexOf("return {", parts.indexOf("const shown = ")));
   assert.doesNotMatch(shown, /notes|margin/);
