@@ -407,6 +407,12 @@ jobs:
         # number or quote view from lost_alive; one with quote access, and the owner, do; the other workspace nothing.
         run: npm run test:assistant-lost-alive
 
+      - name: DAX targets and competitors -- the Targets page's counts, each held to its page's permission
+        # Sean, 2026-11-14: "DAX must have knowledge of those things, permission based". Targets need a reports
+        # permission and use lib/targetProgress (the page's own counts); competitors need competitors.view; the other
+        # workspace sees none of A's.
+        run: npm run test:assistant-targets
+
       - name: DAX custom fields -- only on records the person may open, only fields the page would show
         # Sean, 2026-11-14: "DAX must have knowledge of those things, permission based". A rep sees their lead's
         # custom fields, never a colleague's; switched-off and "Show only when"-hidden fields stay hidden; a link

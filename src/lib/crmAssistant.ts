@@ -59,6 +59,7 @@ import { stuckLookup } from "./assistantStuckLookup";
 import { catchUpLookup } from "./assistantCatchUpLookup";
 import { lostAliveLookup } from "./assistantLostAliveLookup";
 import { campaignsLookup, forecastLookup, referralsLookup, surveysLookup, ticketsLookup } from "./assistantAreaLookups";
+import { competitorsLookup, targetsLookup } from "./assistantTargetsLookup";
 import { CUSTOM_FIELD_TOOLS, customFieldsLookup, withCustomFields } from "./assistantCustomFieldsLookup";
 import { customersLookup } from "./assistantCustomersLookup";
 import { dealFileLookup, suppliersLookup } from "./assistantDealFileLookup";
@@ -1759,6 +1760,8 @@ async function runTool(user: User, step: ToolStep): Promise<ToolOutput> {
     case "tickets": return ticketsLookup(user, step.args);
     case "campaigns": return campaignsLookup(user, step.args);
     case "forecast": return forecastLookup(user, step.args);
+    case "targets": return targetsLookup(user, step.args);
+    case "competitors": return competitorsLookup(user, step.args);
     case "surveys": return surveysLookup(user, step.args);
     case "referrals": return referralsLookup(user, step.args);
     case "custom_fields": return customFieldsLookup(user, step.args);
