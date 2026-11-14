@@ -96,6 +96,11 @@ async function main() {
   for (const requestId of [repNote, ownerNote]) {
     await basePrisma.approvalStep.create({ data: { tenantId: A, requestId, nodeId: "n1", label: `Approve ${SFX}`, assigneeType: "staff", assigneeUserId: rep.id, assigneeName: rep.name, token: token() } });
   }
+  // RE-REVIEW OF #1111: 101 OLDER pending steps for someone else, on a request the rep can open — more than the
+  // panel's 100-row limit, all ahead of the rep's own in its order.
+  await basePrisma.approvalStep.createMany({
+    data: Array.from({ length: 101 }, (_, i) => ({ tenantId: A, requestId: repNote, nodeId: `o${i}`, label: `Other ${SFX}`, assigneeType: "staff", assigneeUserId: a.ownerUserId, token: token(), createdAt: ago(10) })),
+  });
   await request("Contract", { contactId: marcel.id, status: "completed", completedAt: ago(1) }, [
     { name: "Marcel", status: "signed", signedAt: ago(1) },
     { name: "Anna", status: "signed", signedAt: ago(2) },
@@ -153,7 +158,8 @@ async function main() {
     const approvals = async (u: PermissionUser) =>
       (await runInTenantScope({ tenantId: A, system: false }, () => pendingApprovalsFor(u))).map((s) => s.request.title.replace(` ${SFX}`, "")).sort();
     const repApprovals = await approvals(rep);
-    check("the assigned rep sees the approval on their own deal's delivery note", repApprovals.includes("Delivery note rep"), JSON.stringify(repApprovals));
+    check("the assigned rep sees the approval on their own deal's delivery note — behind 101 older steps of someone else's", repApprovals.includes("Delivery note rep"), JSON.stringify(repApprovals));
+    check("…and only their own steps", repApprovals.length === 1, String(repApprovals.length));
     check("…never the one on the owner's deal, though assigned to them and its customer is theirs", !repApprovals.includes("Delivery note owner"), JSON.stringify(repApprovals));
     const ownerApprovals = await approvals(ownerA);
     check("the owner sees both", ownerApprovals.includes("Delivery note rep") && ownerApprovals.includes("Delivery note owner"), JSON.stringify(ownerApprovals));
