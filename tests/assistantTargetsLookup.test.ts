@@ -26,4 +26,9 @@ test("each is held to its page's rule, in its page's numbers", () => {
   const rule = code("src/lib/targetProgress.ts");
   assert.equal((rule.match(/where: \{ tenantId,/g) ?? []).length, 5, "every count names the workspace");
   assert.match(rule, /sales_value: wonLeads\.reduce\(\(sum, lead\) => sum \+ baseValueCents\(lead\), 0\)/, "base currency only");
+  // By the day it was WON (review of #1107), a legacy deal with no won date by its last update; never a deleted one.
+  assert.match(rule, /deletedAt: null, status: "won", OR: \[\{ wonAt: within \}, \{ wonAt: null, updatedAt: within \}\]/);
+  assert.doesNotMatch(rule, /status: "won", updatedAt: within/);
+  assert.match(rule, /prisma\.lead\.count\(\{ where: \{ tenantId, deletedAt: null, createdAt: within \} \}\)/);
+  assert.match(rule, /prisma\.quote\.count\(\{ where: \{ tenantId, deletedAt: null, deliveredAt: within \} \}\)/);
 });

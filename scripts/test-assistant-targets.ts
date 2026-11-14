@@ -75,13 +75,24 @@ async function main() {
     { tenantId: A, metric: "leads", period: PERIOD, value: 3 },
     { tenantId: A, metric: "sales_value", period: PERIOD, value: 100_000 },
   ] });
-  const lead = async (name: string, status: string, valueCents: number, currency: string | null) => {
-    const row = await basePrisma.lead.create({ data: { tenantId: A, stageId: a.rows.stageId, status, name: `${name} ${SFX}`, title: "Rover XL", valueCents, currency, createdById: a.ownerUserId, createdAt: inMonth(5) }, select: { id: true } });
-    // @updatedAt is set by Prisma on every write; the won rule reads it, so it is put in the month directly.
-    await basePrisma.$executeRaw`UPDATE "Lead" SET "updatedAt" = ${inMonth(20)} WHERE "id" = ${row.id}`;
+  const nextMonth = new Date(YEAR, MONTH, 2, 12);
+  const lastMonth = new Date(YEAR, MONTH - 2, 20, 12);
+  const lead = async (name: string, status: string, valueCents: number, currency: string | null, at: { created?: Date; won?: Date; updated?: Date; deleted?: Date } = {}) => {
+    const row = await basePrisma.lead.create({
+      data: { tenantId: A, stageId: a.rows.stageId, status, name: `${name} ${SFX}`, title: "Rover XL", valueCents, currency, createdById: a.ownerUserId, createdAt: at.created ?? inMonth(5), wonAt: at.won ?? null, deletedAt: at.deleted ?? null },
+      select: { id: true },
+    });
+    // @updatedAt is set by Prisma on every write: put where the case needs it, directly.
+    await basePrisma.$executeRaw`UPDATE "Lead" SET "updatedAt" = ${at.updated ?? inMonth(20)} WHERE "id" = ${row.id}`;
   };
+  // Legacy rows with no wonAt: counted by their last update (in the month).
   await lead("Won rand", "won", 60_000, null);
   await lead("Won dollar", "won", 50_000, "USD");
+  // Review of #1107: WON in the month, edited the next — still this month's. Won last month, edited this one — not.
+  await lead("Won in month, edited after", "won", 15_000, null, { created: lastMonth, won: inMonth(28), updated: nextMonth });
+  await lead("Won last month, edited now", "won", 7_000, null, { created: lastMonth, won: lastMonth, updated: inMonth(10) });
+  // Deleted: counts for nothing — not a sale, not a new lead.
+  await lead("Won then deleted", "won", 9_000, null, { won: inMonth(12), deleted: inMonth(13) });
 
   const comp = await basePrisma.competitor.create({ data: { tenantId: A, name: `Rival Carts ${SFX}`, tier: 1, notes: "Cheaper Rover copy" }, select: { id: true } });
   const source = await basePrisma.competitorSource.create({ data: { tenantId: A, competitorId: comp.id, label: "Pricing page", url: "https://rival.example.invalid/pricing" }, select: { id: true } });
@@ -101,14 +112,18 @@ async function main() {
     console.log("\ntargets — the owner");
     const own = await targets(A, ownerA);
     const sales = goal(own, "Sales value");
-    check("sales value counts the rand deal only: R600 of R1 000, R400 still needed, 60%", sales?.actual === 600 && sales.target === 1000 && sales.stillNeeded === 400 && sales.percent === 60 && sales.achieved === false, JSON.stringify(sales));
+    // R600 (legacy, by last update) + R150 (won in the month, edited after) — not the dollar deal, not the one won last
+    // month and edited now, not the deleted one.
+    check("sales value counts deals WON in the month: R750 of R1 000, R250 still needed, 75%", sales?.actual === 750 && sales.target === 1000 && sales.stillNeeded === 250 && sales.percent === 75 && sales.achieved === false, JSON.stringify(sales));
+    const next = (await runInTenantScope({ tenantId: A, system: false }, () => targetsLookup(ownerA, { period: `${nextMonth.getFullYear()}-${String(nextMonth.getMonth() + 1).padStart(2, "0")}` }))).data[0] as TargetsData;
+    check("…and the deal edited the next month does not count there", goal(next, "Sales value")?.actual === 0, JSON.stringify(goal(next, "Sales value")));
     const leads = goal(own, "New leads");
-    check("new leads: 2 of 3 (67%)", leads?.actual === 2 && leads.target === 3 && leads.percent === 67, JSON.stringify(leads));
+    check("new leads: 2 of 3 (67%) — the deleted one made this month doesn't count", leads?.actual === 2 && leads.target === 3 && leads.percent === 67, JSON.stringify(leads));
     check("a goal with no target says not set", goal(own, "Deliveries")?.target === "not set");
 
     console.log("\ntargets — who may see them");
     const rep = await targets(A, reportsOnly);
-    check("someone with a reports permission sees the same business targets", goal(rep, "Sales value")?.actual === 600, JSON.stringify(rep).slice(0, 200));
+    check("someone with a reports permission sees the same business targets", goal(rep, "Sales value")?.actual === 750, JSON.stringify(rep).slice(0, 200));
     check("someone without one is refused", /can't open Targets/.test((await targets(A, nothing)).note ?? ""));
     const other = await targets(b.tenantId, memberB);
     check("another workspace: none of A's targets or counts", goal(other, "Sales value")?.target === "not set" && goal(other, "New leads")?.actual === 0 && !JSON.stringify(other).includes(SFX), JSON.stringify(other).slice(0, 300));

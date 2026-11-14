@@ -50,7 +50,7 @@ export async function targetsLookup(user: PermissionUser, args: { period?: strin
       goalsSet: set.length,
       goalsAchieved: set.filter((g) => "achieved" in g && g.achieved).length,
       moneyIn: "rands, the base currency (deals in another currency don't count toward a target)",
-      howCounted: "New leads = created in the month; sales value = deals marked won whose last update was in the month; deliveries = quotes delivered; services = service records dated in the month — as the Targets page counts them. Targets are for the whole business, not per person.",
+      howCounted: "New leads = created in the month; sales value = deals WON in the month (an old deal with no won date: its last update); deliveries = quotes delivered in the month; services = service records dated in the month. Deleted leads and quotes don't count. As the Targets page counts them. Targets are for the whole business, not per person.",
       goals,
     }],
     rows: [{ label: `Targets ${period}`, detail: `${set.filter((g) => "achieved" in g && g.achieved).length} of ${set.length} goals achieved`, href: "/targets" }],
