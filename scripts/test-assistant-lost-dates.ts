@@ -126,6 +126,18 @@ async function main() {
     const july = rows(await run(A, ownerA, { status: "lost", closedFrom: "2026-07-01", closedTo: "2026-07-31" }));
     check("without the filter: both, and both reasons", july[0].total === 2 && (july[0].lostReasons ?? []).length === 2, JSON.stringify(july[0]));
 
+    console.log("\nClosed order agrees with its total, whatever the status (re-review of #1101)");
+    await lead("Still open", "open", "2026-11-01", null);
+    const closedInA = await basePrisma.lead.count({ where: { tenantId: A, deletedAt: null, status: { in: ["won", "lost"] } } });
+    const anyClosed = rows(await run(A, ownerA, { status: "any", sort: "closed", limit: 60 }));
+    check("any + closed, no dates: the total counts won and lost deals only", anyClosed[0].total === closedInA, `${anyClosed[0].total} vs ${closedInA}`);
+    check("…the list holds no open deal, and says it is closed deals only", !(anyClosed.slice(1) as { status?: string }[]).some((r) => r.status === "open") && /Won and lost deals only/.test(String((anyClosed[0] as Record<string, unknown>).note)), JSON.stringify(anyClosed[0]));
+    const openClosed = rows(await run(A, ownerA, { status: "open", sort: "closed", limit: 60 }));
+    check("open + closed: open deals listed (newest first), never an empty list beside a total", Number(openClosed[0].total) > 0 && openClosed.length - 1 === Math.min(60, Number(openClosed[0].total)) && mine(openClosed).some((r) => r.customer === `Still open ${SFX}`), JSON.stringify(openClosed[0]));
+    check("…and says open deals have no closed date", /no closed date/.test(String((openClosed[0] as Record<string, unknown>).note)));
+    const noStatus = rows(await run(A, ownerA, { closedFrom: "2026-10-01", closedTo: "2026-10-31", limit: 60 }));
+    check("a closed period with no status means won or lost (not the default open)", noStatus[0].total === 34, String(noStatus[0].total));
+
     console.log("\nThe other workspace");
     const other = rows(await run(b.tenantId, memberB, { status: "lost", closedFrom: "2026-10-01", closedTo: "2026-10-31", limit: 60 }));
     check("nothing of A's", !JSON.stringify(other).includes(SFX));

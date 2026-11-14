@@ -255,16 +255,24 @@ export async function findLeads(user: User, raw: z.infer<typeof leadArgs>): Prom
     ...(args.closedFrom ? { gte: new Date(`${args.closedFrom}T00:00:00+02:00`) } : {}),
     ...(args.closedTo ? { lt: new Date(new Date(`${args.closedTo}T00:00:00+02:00`).getTime() + DAY) } : {}),
   };
-  const closed = !Object.keys(closedAt).length
+  const closedFilter = Object.keys(closedAt).length > 0;
+  // "Closed in October" names no status: it means won OR lost — never the default "open", which has no closed date.
+  const status = args.status ?? (closedFilter ? "any" : "open");
+  // BY THE DAY IT CLOSED (asked, or the default for a closed-date period): only won and lost deals have that day.
+  // Open or nurture deals have none — they are listed newest first instead, and the result says so (re-review of #1101).
+  const closedSortAsked = (args.sort ?? (closedFilter && !args.noContactDays ? "closed" : null)) === "closed";
+  const byClosed = closedSortAsked && (status === "lost" || status === "won" || status === "any");
+  const closed = !closedFilter
     ? {}
-    : args.status === "lost" ? { lostAt: closedAt }
-      : args.status === "won" ? { wonAt: closedAt }
+    : status === "lost" ? { lostAt: closedAt }
+      : status === "won" ? { wonAt: closedAt }
         : { AND: [{ OR: [{ lostAt: closedAt }, { wonAt: closedAt }] }] };
   const where = {
     ...closed,
     deletedAt: null,
     ...(ids === null ? {} : { id: { in: ids } }),
-    ...(args.status === "any" ? {} : { status: args.status ?? "open" }),
+    // "Any" in closed order is the CLOSED deals — counted as well as listed, so the total and the list agree.
+    ...(status === "any" ? (byClosed ? { status: { in: ["won", "lost"] } } : {}) : { status }),
     ...(args.stage ? { stage: { name: fuzzy(args.stage) } } : {}),
     ...(args.assignedTo ? { assignedTo: { name: fuzzy(args.assignedTo) } } : {}),
     ...(args.product ? { product: { name: fuzzy(args.product) } } : {}),
@@ -275,10 +283,9 @@ export async function findLeads(user: User, raw: z.infer<typeof leadArgs>): Prom
       ? { OR: [{ name: fuzzy(args.search) }, { title: fuzzy(args.search) }, { email: fuzzy(args.search) }] }
       : {}),
   };
-  // BY THE DAY IT CLOSED, read from the database in that order (review of #1101): read newest-CREATED first, 500
-  // newer deals lost early in the month pushed out an older one lost on its last day. "Any" status reads the lost and
-  // the won each by their own date, then takes the latest of both.
-  const byClosed = (args.sort ?? (Object.keys(closedAt).length && !args.noContactDays ? "closed" : null)) === "closed";
+  // Read from the database in closed order (review of #1101): read newest-CREATED first, 500 newer deals lost early in
+  // the month pushed out an older one lost on its last day. "Any" reads the lost and the won each by their own date,
+  // then takes the latest of both.
   const closedOrder = (field: "lostAt" | "wonAt"): Prisma.LeadOrderByWithRelationInput[] => [{ [field]: { sort: "desc", nulls: "last" } }, { id: "asc" }];
   const read = (extra: Prisma.LeadWhereInput, orderBy: Prisma.LeadOrderByWithRelationInput[]) => prisma.lead.findMany({
       where: { AND: [where, extra] },
@@ -302,8 +309,8 @@ export async function findLeads(user: User, raw: z.infer<typeof leadArgs>): Prom
     });
   const readLeads = async () => {
     if (!byClosed) return read({}, [{ createdAt: "desc" }]);
-    if (args.status === "lost") return read({}, closedOrder("lostAt"));
-    if (args.status === "won") return read({}, closedOrder("wonAt"));
+    if (status === "lost") return read({}, closedOrder("lostAt"));
+    if (status === "won") return read({}, closedOrder("wonAt"));
     const [lost, won] = await Promise.all([read({ status: "lost" }, closedOrder("lostAt")), read({ status: "won" }, closedOrder("wonAt"))]);
     return [...lost, ...won].sort((a, b) => (closedOn(b)?.getTime() ?? 0) - (closedOn(a)?.getTime() ?? 0)).slice(0, CANDIDATES);
   };
@@ -312,7 +319,7 @@ export async function findLeads(user: User, raw: z.infer<typeof leadArgs>): Prom
     // The real count — not capped at the CANDIDATES read above.
     prisma.lead.count({ where }),
     // "Why did we lose them": every lost reason across ALL the matches, not just the ones listed.
-    args.status === "lost" ? prisma.lead.groupBy({ by: ["lostReason"], where, _count: { _all: true } }) : Promise.resolve([]),
+    status === "lost" ? prisma.lead.groupBy({ by: ["lostReason"], where, _count: { _all: true } }) : Promise.resolve([]),
   ]);
 
   // Last contact = the latest message either way, call or meeting. Not an
@@ -349,7 +356,8 @@ export async function findLeads(user: User, raw: z.infer<typeof leadArgs>): Prom
     newest: (a, b) => b.lead.createdAt.getTime() - a.lead.createdAt.getTime(),
     closed: (a, b) => (closedOn(b.lead)?.getTime() ?? 0) - (closedOn(a.lead)?.getTime() ?? 0),
   };
-  const sorted = [...filtered].sort(sorters[args.sort ?? (cutoff ? "oldest_contact" : Object.keys(closedAt).length ? "closed" : "newest")]);
+  const sortBy = byClosed ? "closed" : args.sort && args.sort !== "closed" ? args.sort : cutoff ? "oldest_contact" : "newest";
+  const sorted = [...filtered].sort(sorters[sortBy]);
   const take = args.limit ?? 10;
   const page = sorted.slice(0, take);
 
@@ -369,7 +377,9 @@ export async function findLeads(user: User, raw: z.infer<typeof leadArgs>): Prom
     data: [{
       total,
       listed: page.length,
-      ...(args.status === "lost" ? { lostReasons } : {}),
+      ...(status === "lost" ? { lostReasons } : {}),
+      ...(closedSortAsked && !byClosed ? { note: `${status} deals have no closed date — listed ${sortBy === "oldest_contact" ? "longest without contact" : "newest"} first.` } : {}),
+      ...(byClosed && status === "any" ? { note: "Won and lost deals only, most recently closed first." } : {}),
     }, ...page.map(({ lead, lastContact }) => ({
       id: lead.id,
       link: `/leads/${lead.id}`,
