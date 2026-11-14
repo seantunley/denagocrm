@@ -16,10 +16,14 @@ test('"How many leads came in last month?" — a real count over the calendar mo
   assert.equal(leadArgs.safeParse({ status: "any", createdFrom: "2026-09-01", createdTo: "2026-09-30" }).success, true);
   assert.equal(leadArgs.safeParse({ createdFrom: "1 Sept" }).success, false, "dates are YYYY-MM-DD only");
   const find = fn("findLeads");
-  assert.match(find, /\.\.\.\(args\.status === "any" \? \{\} : \{ status: args\.status \?\? "open" \}\)/);
+  // Default open — except a closed-date period, which means won or lost (re-review of #1101).
+  assert.match(find, /const status = args\.status \?\? \(closedFilter \? "any" : "open"\);/);
+  assert.match(find, /\.\.\.\(status === "any" \? \(byClosed \? \{ status: \{ in: \["won", "lost"\] \} \} : \{\}\) : \{ status \}\)/);
   assert.match(find, /createdTo \? \{ lt: new Date\(new Date\(`\$\{args\.createdTo\}T00:00:00\+02:00`\)\.getTime\(\) \+ DAY\) \}/, "the whole last day counts");
   assert.match(find, /prisma\.lead\.count\(\{ where \}\)/, "the total isn't capped at the rows read");
-  assert.match(find, /data: \[\{ total, listed: page\.length \}, \.\.\.page\.map/);
+  assert.match(find, /data: \[\{\s*total,\s*listed: page\.length,/);
+  // Lost deals: every lost reason across ALL the matches, from the same `where` as the total.
+  assert.match(find, /status === "lost" \? prisma\.lead\.groupBy\(\{ by: \["lostReason"\], where, _count: \{ _all: true \} \}\)/);
   const plan = planInstructions({ today: "2026-10-05", userName: "Sean", stages: [], staff: [], activityTypes: [] });
   assert.match(plan, /last month is the previous calendar month, not the last 30 days/);
   assert.match(ANSWER_RULES, /a TOTAL in the results is the real count: give it/);

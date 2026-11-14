@@ -27,6 +27,8 @@ export type AssistantReportMeta = {
   tagline: string;
   /** PNG bytes of the business's logo, or null when it has none we can draw. */
   logo: Buffer | null;
+  /** The logo is light lettering on transparency (made for a dark page): drawn on a dark panel. */
+  logoOnDark?: boolean;
   /** The workspace's brand colour, when it has set one. */
   accent: string | null;
   assistantName: string;
@@ -48,6 +50,8 @@ const s = StyleSheet.create({
   header: { position: "absolute", top: 24, left: 40, right: 40, height: 52, flexDirection: "row", alignItems: "center", justifyContent: "space-between", borderBottomWidth: 1.5, paddingBottom: 10 },
   brandRow: { flexDirection: "row", alignItems: "center", gap: 10, maxWidth: 340 },
   logo: { height: 36, maxWidth: 130, objectFit: "contain" },
+  logoPanel: { backgroundColor: ink, borderRadius: 4, paddingVertical: 5, paddingHorizontal: 8 },
+  logoOnPanel: { height: 30, maxWidth: 130, objectFit: "contain" },
   brand: { color: ink, fontFamily: "Helvetica-Bold", fontSize: 13, letterSpacing: 0.6 },
   brandLarge: { color: ink, fontFamily: "Helvetica-Bold", fontSize: 17, letterSpacing: 0.8 },
   brandSub: { color: slate500, fontSize: 7, marginTop: 2, letterSpacing: 0.5 },
@@ -149,8 +153,15 @@ export default function AssistantReportDoc({ report, meta }: { report: Report; m
       <Page size="A4" style={s.page}>
         <View style={[s.header, { borderBottomColor: accent }]} fixed>
           <View style={s.brandRow}>
-            {/* eslint-disable-next-line jsx-a11y/alt-text -- react-pdf's Image is not an HTML img and takes no alt */}
-            {meta.logo ? <Image src={{ data: meta.logo, format: "png" }} style={s.logo} /> : null}
+            {meta.logo && meta.logoOnDark ? (
+              <View style={s.logoPanel}>
+                {/* eslint-disable-next-line jsx-a11y/alt-text -- react-pdf's Image is not an HTML img and takes no alt */}
+                <Image src={{ data: meta.logo, format: "png" }} style={s.logoOnPanel} />
+              </View>
+            ) : meta.logo ? (
+              // eslint-disable-next-line jsx-a11y/alt-text -- react-pdf's Image is not an HTML img and takes no alt
+              <Image src={{ data: meta.logo, format: "png" }} style={s.logo} />
+            ) : null}
             <View>
               <Text style={meta.logo ? s.brand : s.brandLarge}>{meta.companyName}</Text>
               {meta.tagline ? <Text style={s.brandSub}>{meta.tagline.toUpperCase()}</Text> : null}
