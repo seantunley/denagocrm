@@ -104,12 +104,18 @@ function quoteNumbers(data: unknown, into = new Set<string>()): Set<string> {
  * someone SAID ("he wrote R5 000"), or proposing a change ("I'll set delivery
  * to R6 500") — those figures are not the record's, by design.
  *
- * ponytail: a sentence naming two quotes is checked against both together, so
- * a figure swapped between them passes. Bind per clause when that shows up.
+ * WHICH RECORD EACH CLAIM BELONGS TO (DAX_Conversational_Upgrades §5, Sean 2026-11-14): "both numbers are
+ * somewhere in the lookups" let swapped totals through.
+ *  - Bound per CLAUSE: "Werner's quote is R 88 500 and Anna's is R 256 500" checks each amount against the
+ *    customer of its own clause, not both quotes together. A clause naming no record falls back to the sentence.
+ *  - By CUSTOMER, even without the word "quote": "Anna's total is R 256 500", when that is Werner's figure and
+ *    nothing of Anna's, is flagged. Only a clause naming exactly one customer is checked; none or several, no guess.
+ *  - Deposit and delivery claims bind to the named customer's quotes without "quote" being said; a deposit only
+ *    requested ("not paid") is never "paid"; and "was delivered on X" needs a delivered date, not a booked one.
  */
 
 /** What one quote holds, merged across every lookup that returned it (keyed by its link). */
-type QuoteRecord = { quote: string; customers: Set<string>; numbers: number[]; total: number | null; paid: boolean; delivery: Set<string> };
+type QuoteRecord = { quote: string; customers: Set<string>; numbers: number[]; total: number | null; paid: boolean; depositKnown: boolean; delivery: Set<string>; delivered: Set<string> };
 type StockRecord = { link: string; unit: string; product: string; status: string };
 
 /** Customer words inside a quote's row — never the quote's own facts. */
@@ -132,21 +138,28 @@ const amount = (v: unknown) => (typeof v === "string" && /^\s*R/.test(v) ? readN
 function recordsIn(sources: unknown[]) {
   const quotes = new Map<string, QuoteRecord>();
   const stock: StockRecord[] = [];
+  // Every figure in a row that names whose it is (customer, or the record's own name), by that owner.
+  const owners = new Map<string, number[]>();
   const walk = (v: unknown, customer: string | null) => {
     if (Array.isArray(v)) return v.forEach((x) => walk(x, customer));
     if (!v || typeof v !== "object") return;
     const o = v as Record<string, unknown>;
     // A quote row names its customer; one inside a lead brief or a customer record sits under theirs.
     const who = typeof o.customer === "string" ? o.customer : typeof o.name === "string" ? o.name : customer;
+    if (who) owners.set(who, [...(owners.get(who) ?? []), ...knownNumbers(withoutTalk(o))]);
     const link = typeof o.link === "string" ? o.link : "";
     if (link.startsWith("/quotes/") && typeof o.quote === "string") {
       const own = withoutTalk(o);
-      const r = quotes.get(link) ?? { quote: o.quote.replace(/^Q-?/i, ""), customers: new Set<string>(), numbers: [], total: null, paid: false, delivery: new Set<string>() };
+      const r = quotes.get(link) ?? { quote: o.quote.replace(/^Q-?/i, ""), customers: new Set<string>(), numbers: [], total: null, paid: false, depositKnown: false, delivery: new Set<string>(), delivered: new Set<string>() };
       if (who) r.customers.add(who);
       r.numbers.push(...knownNumbers(own));
       r.total ??= amount(o.total);
+      // "paid 2026-10-20 (R 10 000,00)" is paid; "not paid" (requested, or nothing yet) never is.
+      if (typeof o.deposit === "string") r.depositKnown = true;
       if (typeof o.deposit === "string" && /^paid\b/i.test(o.deposit)) r.paid = true;
       for (const key of ["deliveryDate", "delivered", "delivery"]) for (const d of datesIn(stringsIn(o[key]).join(" "))) r.delivery.add(d.key);
+      // Delivered (done) is a different fact from delivery booked (promised): only `delivered` says it happened.
+      for (const d of datesIn(stringsIn(o.delivered).join(" "))) r.delivered.add(d.key);
       quotes.set(link, r);
     }
     if (link.startsWith("/stock/") && typeof o.status === "string") {
@@ -155,7 +168,7 @@ function recordsIn(sources: unknown[]) {
     for (const [k, x] of Object.entries(o)) if (!TALK_KEYS.has(k) && x && typeof x === "object") walk(x, who);
   };
   walk(sources, null);
-  return { quotes: [...quotes.entries()].map(([link, r]) => ({ link, ...r })), stock };
+  return { quotes: [...quotes.entries()].map(([link, r]) => ({ link, ...r })), stock, owners };
 }
 
 /** Someone's words being reported — not a claim about the record. */
@@ -174,6 +187,12 @@ function names(text: string, customers: Set<string>): boolean {
   }
   return false;
 }
+
+const CITE = /\[\[\s*(\/[^\]\s]{1,200})\s*\]\]/g;
+/** Clause breaks — never a comma INSIDE an amount ("R 256 500,00"): only one followed by a space. */
+const CLAUSE = /[,;]\s+|\s+(?:and|but|while|whereas)\s+/i;
+/** A delivery that happened, as opposed to one booked or promised. */
+const DELIVERED = /\b(?:was|were|got|been)\s+delivered\b|\bdelivered\s+(?:on|at)\b/i;
 
 /** "the email was delivered" / "she read your email" — the CRM can only know accepted, bounced or opened. */
 const EMAIL_CLAIM = /\be-?mail\w*\b[^.,;:!?]{0,40}?\b(delivered|read|received)\b|\b(read|received)\b[^.,;:!?]{0,25}?\be-?mail/i;
@@ -194,38 +213,62 @@ export function unsupportedFigures(answer: string, sources: unknown[]): string[]
     .split("\n")
     .filter((line) => !/^\s*[-•]?\s*My read:/i.test(line))
     .flatMap((line) => line.split(/(?<=[.!?;])\s+/));
-  for (const sentence of sentences) {
-    const cites = new Set([...sentence.matchAll(/\[\[\s*(\/[^\]\s]{1,200})\s*\]\]/g)].map((m) => m[1]));
-    const text = sentence.replace(/\[\[[^\]]*\]\]/g, "");
+  const quotesBy = (raw: string) => {
+    const cites = new Set([...raw.matchAll(CITE)].map((m) => m[1]));
+    const text = raw.replace(/\[\[[^\]]*\]\]/g, "");
     const named = new Set([...text.matchAll(QUOTE)].map((m) => m[1]));
-    const aboutQuote = named.size > 0 || [...cites].some((c) => c.startsWith("/quotes/")) || /\bquot(e|es|ed|ation)\b/i.test(text);
+    return { cites, text, named, quotes: records.quotes.filter((r) => cites.has(r.link) || named.has(r.quote) || names(text, r.customers)) };
+  };
+  const on = (rs: { quote: string }[]) => rs.map((r) => `Q-${r.quote}`).join("/");
+  for (const sentence of sentences) {
+    const whole = quotesBy(sentence);
+    const { text, cites } = whole;
+    const saysQuote = whole.named.size > 0 || [...cites].some((c) => c.startsWith("/quotes/")) || /\bquot(e|es|ed|ation)\b/i.test(text);
+    // A deposit or a delivery is a quote's, whether or not the word "quote" is said.
+    const aboutQuote = saysQuote || /\bdeposit\b|\bdeliver/i.test(text);
     const free = REPORTED.test(text) || PROPOSAL.test(text);
-    const bound = free || !aboutQuote ? [] : records.quotes.filter((r) => cites.has(r.link) || named.has(r.quote) || names(text, r.customers));
-    const boundNumbers = [...bound.flatMap((r) => r.numbers), bound.reduce((sum, r) => sum + (r.total ?? 0), 0)];
-    const on = bound.map((r) => `Q-${r.quote}`).join("/");
+    const bound = free || !aboutQuote ? [] : whole.quotes;
 
-    for (const m of text.matchAll(MONEY)) {
-      const read = readNumber(m[1]);
-      if (!read) continue;
-      const scale = m[2] ? SCALE[m[2].toLowerCase()] : 1;
-      const value = read.value * scale;
-      // Rounded as written ("R1.2m" is anything from 1.15m to 1.25m), or within 1%.
-      const slack = Math.max((read.unit * scale) / 2, value * 0.01, 0.5);
-      if (!near(numbers, value, slack)) flagged.push(m[0].trim());
-      // In the records, but not on the quote this sentence is about: a mix-up.
-      else if (bound.length && !near(boundNumbers, value, slack)) flagged.push(`${m[0].trim()} (not on ${on})`);
+    for (const clause of sentence.split(CLAUSE)) {
+      const own = quotesBy(clause);
+      // The record(s) THIS clause names; a clause naming none is checked against the sentence's, as before.
+      const clauseBound = bound.length && own.quotes.length ? own.quotes : bound;
+      const boundNumbers = [...clauseBound.flatMap((r) => r.numbers), clauseBound.reduce((sum, r) => sum + (r.total ?? 0), 0)];
+      // Whose figures this clause is about: exactly one owner named, or no ownership check at all.
+      const ownersNamed = free ? [] : [...records.owners.keys()].filter((o) => names(own.text, new Set([o])));
+      for (const m of own.text.matchAll(MONEY)) {
+        const read = readNumber(m[1]);
+        if (!read) continue;
+        const scale = m[2] ? SCALE[m[2].toLowerCase()] : 1;
+        const value = read.value * scale;
+        // Rounded as written ("R1.2m" is anything from 1.15m to 1.25m), or within 1%.
+        const slack = Math.max((read.unit * scale) / 2, value * 0.01, 0.5);
+        if (!near(numbers, value, slack)) flagged.push(m[0].trim());
+        // In the records, but not on the quote this clause is about: a mix-up.
+        else if (clauseBound.length && !near(boundNumbers, value, slack)) flagged.push(`${m[0].trim()} (not on ${on(clauseBound)})`);
+        // Nothing of this customer's, but exactly another's: "Anna's total is R 256 500" when that is Werner's.
+        else if (ownersNamed.length === 1 && !near(records.owners.get(ownersNamed[0]) ?? [], value, slack)) {
+          const other = [...records.owners].find(([o, pool]) => o !== ownersNamed[0] && near(pool, value, slack));
+          if (other) flagged.push(`${m[0].trim()} (that's ${other[0]}'s, not ${ownersNamed[0]}'s)`);
+        }
+      }
     }
     for (const m of text.matchAll(QUOTE)) if (!quotes.has(m[1])) flagged.push(`Q-${m[1]}`);
     if (free) continue;
 
-    if (bound.length && /\bdeposit\b/i.test(text) && /\bpaid\b/i.test(text) && !NEGATED.test(text) && !bound.some((r) => r.paid)) {
-      flagged.push(`deposit paid (not on ${on})`);
+    // Said without "quote", a claim is checked only against a quote whose lookup carried that fact at all.
+    const depositBound = saysQuote ? bound : bound.filter((r) => r.depositKnown);
+    if (depositBound.length && /\bdeposit\b/i.test(text) && /\bpaid\b/i.test(text) && !NEGATED.test(text) && !depositBound.some((r) => r.paid)) {
+      flagged.push(`deposit paid (not on ${on(depositBound)})`);
     }
     // Dates written after "deliver…": "signed 3 Oct, delivery not booked" names no delivery date.
     const deliverAt = text.search(/\bdeliver/i);
     const dates = deliverAt < 0 ? [] : datesIn(text.slice(deliverAt));
-    if (bound.length && dates.length && !dates.some((d) => bound.some((r) => r.delivery.has(d.key)))) {
-      flagged.push(`delivery ${dates[0].written} (not on ${on})`);
+    const deliveryBound = saysQuote ? bound : bound.filter((r) => r.delivery.size > 0);
+    // "Was delivered on 4 Nov" says it HAPPENED: only a delivered date supports it, never one merely booked.
+    const done = DELIVERED.test(text) && !NEGATED.test(text);
+    if (deliveryBound.length && dates.length && !dates.some((d) => deliveryBound.some((r) => (done ? r.delivered : r.delivery).has(d.key)))) {
+      flagged.push(`${done ? "delivered" : "delivery"} ${dates[0].written} (not on ${on(deliveryBound)})`);
     }
     if (/\b(in stock|available)\b/i.test(text) && !NEGATED.test(text)) {
       const units = records.stock.filter((u) => cites.has(u.link) || (u.unit && word(u.unit).test(text)) || (u.product.length >= 3 && word(u.product).test(text)));
