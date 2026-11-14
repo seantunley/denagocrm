@@ -68,7 +68,9 @@ const M = { promise: cid(), askDate: cid(), bounced: cid(), long: cid(), theirDe
 const D = { contract: cid(), scan: cid(), long: cid(), photo: cid(), outsiders: cid(), otherTenant: cid(), strangers: cid(), longScan: cid(), drawn: cid(), sheet: cid(), word: cid(), msgPhoto: cid(), msgTheirs: cid(), hoVin: cid(), hoOdo: cid(), hoTheirs: cid() };
 // Delivery handover photos (2026-11-14): the rep's quote on Hendrik, and the stranger's on Petrus.
 const Q = { mine: cid(), strangers: cid() };
-const QN = { mine: 900_000_000 + Math.floor(Math.random() * 90_000_000), strangers: 990_000_000 + Math.floor(Math.random() * 9_000_000) };
+/** 21 NEWER quotes on Hendrik with no handover: the delivered one is older than all of them (review of #1099). */
+const NEWER = Array.from({ length: 21 }, () => cid());
+const QN = { mine: 900_000_000 + Math.floor(Math.random() * 80_000_000), strangers: 990_000_000 + Math.floor(Math.random() * 9_000_000) };
 const TEMPLATE = cid();
 const RUN = { mine: `ev_run_${SFX}_m`, strangers: `ev_run_${SFX}_s` };
 let savedModules: string | null = null;
@@ -218,6 +220,7 @@ async function seed() {
     data: [
       { id: Q.mine, tenantId: T, number: QN.mine, status: "accepted", contactId: C.hendrik, leadId: L.mine, createdById: rep.id },
       { id: Q.strangers, tenantId: T, number: QN.strangers, status: "accepted", contactId: C.strangers, leadId: L.strangers, createdById: stranger.id },
+      ...NEWER.map((id, i) => ({ id, tenantId: T, number: QN.mine + 1 + i, status: "draft", contactId: C.hendrik, leadId: L.mine, createdById: rep.id, createdAt: new Date(Date.now() + (i + 1) * 60_000) })),
     ],
   });
   await basePrisma.checklistTemplate.create({ data: { id: TEMPLATE, tenantId: T, host: "quote.delivery", name: `Evidence handover ${SFX}`, active: true } });
@@ -242,7 +245,7 @@ async function cleanup() {
   await basePrisma.checklistRun.deleteMany({ where: { id: { in: Object.values(RUN) } } });
   await basePrisma.checklistTemplateRevision.deleteMany({ where: { templateId: TEMPLATE } });
   await basePrisma.checklistTemplate.deleteMany({ where: { id: TEMPLATE } });
-  await basePrisma.quote.deleteMany({ where: { id: { in: Object.values(Q) } } });
+  await basePrisma.quote.deleteMany({ where: { id: { in: [...Object.values(Q), ...NEWER] } } });
   if (modulesSaved) await basePrisma.tenant.update({ where: { id: T }, data: { modules: savedModules ?? "" } });
   await basePrisma.document.deleteMany({ where: { id: { in: Object.values(D) } } });
   await basePrisma.communication.deleteMany({ where: { id: { in: Object.values(M) } } });
@@ -436,7 +439,8 @@ async function main() {
       return { ok: true, text: "VIN plate: VIN ABC123XYZ." };
     });
     const vin = first(await inT(() => readDocument(rep, { handover: hendrik, step: "VIN" })));
-    check("the VIN photo from Hendrik's handover is read", /VIN ABC123XYZ/.test(String(vin.text)) && sent.at(-1)?.count === 1 && /VIN \/ serial number/.test(sent.at(-1)?.about ?? ""), JSON.stringify(vin).slice(0, 300));
+    check("found under 21 newer quotes on the same customer (no newest-20 cut-off)", vin.link === `/quotes/${Q.mine}`, JSON.stringify(vin).slice(0, 200));
+    check("the VIN photo from Hendrik's handover is read",/VIN ABC123XYZ/.test(String(vin.text)) && sent.at(-1)?.count === 1 && /VIN \/ serial number/.test(sent.at(-1)?.about ?? ""), JSON.stringify(vin).slice(0, 300));
     check("…naming the quote and the step read", vin.link === `/quotes/${Q.mine}` && JSON.stringify(vin.photosRead).includes("VIN / serial number"), JSON.stringify(vin).slice(0, 300));
     const all = first(await inT(() => readDocument(rep, { handover: hendrik })));
     check("no step: every photo of the handover, and the steps listed", sent.at(-1)?.count === 2 && JSON.stringify(all.stepsWithPhotos).includes("Odometer"), JSON.stringify(all).slice(0, 300));
@@ -453,6 +457,14 @@ async function main() {
     check("NEVER from another workspace, even its owner", /No quote you can open|don't have access/.test(otherWs.note ?? "") && sent.length === before, otherWs.note);
     const noQuotes = first(await inT(() => readDocument(noDocs, { handover: hendrik })));
     check("no quote access: refused", /don't have access to quotes/.test(noQuotes.note ?? "") && sent.length === before, noQuotes.note);
+    // A photo that won't open: only the one that did is named — to the AI and in what DAX says it read.
+    rmSync(path.join(UPLOADS, stored(D.hoVin)), { force: true });
+    const partial = first(await inT(() => readDocument(rep, { handover: hendrik })));
+    const told = sent.at(-1)?.about ?? "";
+    check("a missing VIN photo: one picture reaches the AI, named as the odometer only", sent.at(-1)?.count === 1 && /Odometer/.test(told) && !/VIN/.test(told), told);
+    check("…'photos read' names only the odometer, and the VIN photo is said NOT read", JSON.stringify(partial.photosRead).includes("Odometer") && !JSON.stringify(partial.photosRead).includes("VIN") && /NOT read: VIN \/ serial number/.test(String(partial.notOpened)), JSON.stringify(partial).slice(0, 300));
+    const onlyMissing = first(await inT(() => readDocument(rep, { handover: hendrik, step: "VIN" })));
+    check("…and asked for the VIN alone, it says it couldn't open it — nothing reaches the AI", /couldn't open the handover photos/.test(onlyMissing.note ?? "") && sent.at(-1)?.about === told, JSON.stringify(onlyMissing).slice(0, 200));
     await basePrisma.tenant.update({ where: { id: T }, data: { modules: (savedModules ?? "").split(",").filter((m) => m && m !== "automotive").join(",") } });
     const off = first(await inT(() => readDocument(rep, { handover: hendrik, step: "VIN" })));
     check("Automotive off: no handover photos", /no handover photos/.test(off.note ?? "") && sent.length === before, off.note);
