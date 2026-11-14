@@ -221,6 +221,24 @@ export const customFieldsArgs = z
     limit: upTo(50).optional(),
   })
   .strict();
+
+/** CUSTOMERS AS A LIST (assistantCustomersLookup) — by area, fleet, tag, owner, birthday, date added (Sean, 2026-11-14). */
+export const customersArgs = z
+  .object({
+    area: name.optional(),
+    fleet: name.optional(),
+    tag: name.optional(),
+    owner: name.optional(),
+    kind: z.enum(["individual", "business", "fleet"]).optional(),
+    /** Birthdays from today through this many days ahead (0 = today only). */
+    birthdayWithinDays: z.number().int().min(0).transform((n) => Math.min(n, 31)).optional(),
+    createdFrom: isoDay.optional(),
+    createdTo: isoDay.optional(),
+    openDeal: z.boolean().optional(),
+    sort: z.enum(["newest", "name"]).optional(),
+    limit: upTo(60).optional(),
+  })
+  .strict();
 /** One deal's file, and the suppliers (assistantDealFileLookup) — each held to its page's own rule. */
 export const dealFileArgs = z.object({ deal: name }).strict();
 export const suppliersArgs = z.object({ supplier: name.optional(), missing: z.boolean().optional(), orders: z.boolean().optional() }).strict();
@@ -270,6 +288,7 @@ export const assistantStep = z.discriminatedUnion("tool", [
   z.object({ tool: z.literal("surveys"), args: surveysArgs.default({}) }),
   z.object({ tool: z.literal("referrals"), args: referralsArgs.default({}) }),
   z.object({ tool: z.literal("custom_fields"), args: customFieldsArgs }),
+  z.object({ tool: z.literal("customers"), args: customersArgs.default({}) }),
   z.object({ tool: z.literal("deal_file"), args: dealFileArgs }),
   z.object({ tool: z.literal("suppliers"), args: suppliersArgs.default({}) }),
   z.object({ tool: z.literal("notes"), args: notesArgs }),
@@ -345,6 +364,7 @@ export function planInstructions(ctx: PlanContext): string {
     '- surveys: {"from":"YYYY-MM-DD","to":"YYYY-MM-DD","survey":"<words of a survey title>"} — CUSTOMER SURVEYS sent in that period (default the last 30 days): per survey, sent, answered, response rate, NPS or average score, and the unhappy answers with what the customer said. Run it for "how are our NPS scores", "any unhappy customers in the surveys".',
     '- referrals: {"from":"YYYY-MM-DD","to":"YYYY-MM-DD","status":"pending|earned|redeemed"} — REFERRALS in that period (default the last 90 days): totals pending / earned-not-redeemed / redeemed, the top referrers, and the latest referrals. Run it for "how many referrals this quarter", "who refers the most", "which rewards are still owed".',
     '- custom_fields: {"record":"lead|contact|quote|case|vehicle|jobcard" (required),"field":"<the field\'s name>","value":"<words of the value>","limit":<1-50>} — the workspace\'s OWN CUSTOM FIELDS (fields it added itself, e.g. "Finance house", "Expo"). Without field: which custom fields that record type has, with their options. With field (and value): the records whose field matches, that the person may open. Leads, quotes, customers and vehicles that other lookups return already carry their filled custom fields as customFields — read those first. Run it for "which leads came from the Paarl expo", "customers financing with WesBank", "what custom fields do we have on quotes".',
+    '- customers: {"area":"<suburb, city, province or estate>","fleet":"<fleet name>","tag":"<tag>","owner":"<person>","kind":"individual|business|fleet","birthdayWithinDays":<0-31, 0 = today>,"createdFrom":"YYYY-MM-DD","createdTo":"YYYY-MM-DD","openDeal":true|false,"sort":"newest|name","limit":<1-60>} — CUSTOMERS AS A LIST, only those the person may open: the TOTAL that match, then each with area, fleet, tags, owner, open deals, birthday, phone, email, whether they opted out of marketing, and a link. Run it for "customers in Constantia", "birthdays this week", "customers added last month", "who is on the Pearl Valley fleet", "customers tagged VIP with no open deal". To find ONE customer by name use search_everything or lead_brief.',
     '- deal_file: {"deal":"<customer, lead title or Q-number>" (required)} — ONE DEAL\'S FILE, as the deal page shows it: its quotes, the checklist (each item done or missing, and why), what is still MISSING, the papers on file by type, signing requests, handover photo count, and — with Suppliers on — the suppliers on the deal and which of their papers are missing. Run it for "what paperwork is missing on X\'s deal", "is X\'s deal file complete", "has the supplier invoice come in for Q-1031".',
     '- suppliers: {"supplier":"<supplier name>","missing":true (deals still missing supplier papers),"orders":true (their purchase orders)} — SUPPLIERS (workspace owner only, Suppliers module on): each supplier with kind, contact, terms and how many deals, papers and orders; with a supplier named, its purchase orders and the deals still missing its papers. Run it for "which deals are missing supplier invoices", "what have we ordered from Denago", "who are our suppliers". No bank details are ever in it.',
     '- lost_alive: {"mine":true (only their own deals and unassigned ones)} — deals marked LOST in the last 90 days for a went-quiet or timing reason ("gone cold", "stopped responding", "buying later") where the customer has since messaged or opened a quote: each with when and why it was lost and what the customer did since. Run it for "which lost deals are still alive", "any lost deals worth another look", "lost but not really lost"; it answers on its own ("then":"answer"), offering a nurture or reopen card for each.',
@@ -508,6 +528,7 @@ const LOOKUP_STATUS: Record<string, string> = {
   surveys: "Reading the survey results",
   referrals: "Checking referrals",
   custom_fields: "Checking custom fields",
+  customers: "Listing customers",
   deal_file: "Opening the deal file",
   suppliers: "Checking suppliers",
   notes: "Reading the notes added",
