@@ -8,6 +8,7 @@ import { conversationHistory, currentConversation } from "@/lib/assistantConvers
 import { createContact, updateContact } from "@/app/actions/contacts";
 import { contactFormFor } from "@/lib/contactFormFor";
 import { completeConfirmKey, releaseConfirmKey, reserveConfirmKey } from "@/lib/assistantConfirmKey";
+import { confirmReply, runConfirmSteps, type ConfirmStep } from "@/lib/assistantConfirmSteps";
 import { MAX_IMAGE_BYTES } from "@/lib/assistantImage";
 import { heldUpload } from "@/lib/assistantUpload";
 import { uploadDocument } from "@/app/actions/documents";
@@ -276,7 +277,9 @@ export async function runAssistantAction(
         if (!result.ok) return { ok: false, error: result.error ?? "Couldn't log it." };
         const visit = card.activity === "meeting";
         await confirmedOn(visit ? "log a visit" : "log a call", { leadId: card.leadId, contactId: card.contactId ?? null });
-        const success = card.followUp ? "Logged, and the follow-up is booked" : "Logged on the timeline";
+        const logged = card.followUp ? "Logged, and the follow-up is booked" : "Logged on the timeline";
+        // The call IS saved; only its timeline note didn't go — said, never reported as a failure.
+        const success = result.warning ? `${logged}. ${result.warning}` : logged;
         return card.leadId ? { ok: true, success } : { ok: true, success, href: `/contacts/${card.contactId}` };
       }
       case "note": {
@@ -427,21 +430,35 @@ export async function runAssistantAction(
         form.set("receivedAt", card.receivedOn);
         if (card.reference) form.set("reference", card.reference);
         form.set("idempotencyKey", card.confirmKey);
-        const result = await recordQuotePayment(card.quoteId, form);
-        if (result?.error) return { ok: false, error: result.error };
-        await confirmedOn("record a payment", { leadId: card.leadId, contactId: null });
-        const paid = `Payment of ${formatZAR(card.amountCents, withCurrency(moneyFmt, card.currency))} recorded on Q-${card.quoteNumber}`;
-        if (!card.uploadId) return { ok: true, success: paid };
-        // The proof, filed on the quote ONCE (its own key, derived from the payment's): a second Confirm records no
-        // second payment (the ledger's key) and files no second proof. If it may not have been filed, the payment is
-        // still recorded — said plainly, never retried blind.
-        // A throw here must not hide that the payment IS recorded: it reads as "may not have been filed".
-        const filed = await fileHeldUpload(user.id, `${card.confirmKey}-proof`, card.uploadId, { quoteId: card.quoteId }, "file the proof of payment").catch(() => ({ error: "" }));
-        if (filed === "filed" || filed === "already") return { ok: true, success: `${paid}, proof filed` };
-        return {
-          ok: true,
-          success: `${paid}. The proof of payment ${filed === "gone" ? "is no longer held" : filed === "busy" ? "is still being filed (or the last try was cut off)" : "may not have been filed"} — check the quote's documents, and send it to DAX again if it's missing.`,
-        };
+        // TWO WRITES, TWO STEPS (assistantConfirmSteps): the payment, then its proof. Confirm again skips what's done
+        // (no second audit entry either); a blip recording the payment carries on — safe, the ledger's key records it once.
+        const steps: ConfirmStep[] = [{
+          name: "payment",
+          label: "recording the payment",
+          run: async () => {
+            const result = await recordQuotePayment(card.quoteId, form);
+            if (result?.error) return { refused: result.error };
+            await confirmedOn("record a payment", { leadId: card.leadId, contactId: null });
+            return { done: `Payment of ${formatZAR(card.amountCents, withCurrency(moneyFmt, card.currency))} recorded on Q-${card.quoteNumber}` };
+          },
+        }];
+        const uploadId = card.uploadId;
+        if (uploadId) {
+          steps.push({
+            name: "proof",
+            label: "filing the proof of payment",
+            run: async () => {
+              // The proof, filed on the quote ONCE (its own key, derived from the payment's): a second Confirm files no
+              // second proof. If it may not have been filed, the payment is still recorded — said plainly, never retried blind.
+              // A throw here must not hide that the payment IS recorded: it reads as "may not have been filed".
+              const filed = await fileHeldUpload(user.id, `${card.confirmKey}-proof`, uploadId, { quoteId: card.quoteId }, "file the proof of payment").catch(() => ({ error: "" }));
+              if (filed === "filed" || filed === "already") return { done: "Proof of payment filed on the quote" };
+              const why = filed === "gone" ? "it is no longer held" : filed === "busy" ? "it is still being filed (or the last try was cut off)" : "it may not have been filed";
+              return { unsure: `${why}. Check the quote's documents, and send it again if it's missing` };
+            },
+          });
+        }
+        return confirmReply(await runConfirmSteps(tenantId, user.id, card.confirmKey, steps));
       }
       case "update_customer": {
         // THE CONTACT FORM'S OWN DOOR (updateContact): contacts.edit, access to THIS customer, the audit entry with
@@ -690,21 +707,39 @@ export async function runAssistantAction(
         if (!(await resolveAssignableUser(input.assignedToId, "salesperson").catch(() => null))) {
           return untouched("The salesperson on that card isn't available any more — ask again, and say who should have the deal.");
         }
-        let reopened = false;
-        if (now.status === "lost") {
-          const result = await reopenLead(card.leadId);
-          if (result?.error) return { ok: false, error: result.error };
-          reopened = true;
+        // A card from before its steps had a key: asked for again (nothing above wrote anything).
+        if (!CONFIRM_KEY.test(String(card.confirmKey ?? ""))) return untouched(STALE_CARD);
+        // TWO WRITES, TWO STEPS (assistantConfirmSteps): a lost deal reopened, then parked. Confirm again skips the
+        // reopen it already did — the deal is never reopened twice — and a blip in either step carries on from there.
+        const steps: ConfirmStep[] = [];
+        if (now.status === "lost" || reopenedAlready) {
+          steps.push({
+            name: "reopen",
+            label: "reopening the deal",
+            run: async () => {
+              // Only a deal that IS lost is reopened: open already, this card's earlier try reopened it.
+              if (now.status === "lost") {
+                const result = await reopenLead(card.leadId);
+                if (result?.error) return { refused: result.error };
+              }
+              return { done: `${card.leadLabel}'s deal is open again` };
+            },
+          });
         }
-        const parked = await saveLeadNurture(card.leadId, form);
-        if (parked?.error) {
-          // Reopened, not parked: the retry finds it open and only parks it — it is never reopened twice.
-          return reopened || reopenedAlready
-            ? resumable(`${card.leadLabel}'s deal was reopened, but couldn't be moved to Nurture: ${parked.error} Confirm again to finish — it won't be reopened twice.`)
-            : { ok: false, error: parked.error };
-        }
-        await confirmed("park the deal in Nurture", card.leadId);
-        return { ok: true, success: parkedOn, href: `/leads/${card.leadId}` };
+        steps.push({
+          name: "park",
+          label: "moving it to Nurture",
+          run: async () => {
+            // Safe to run again: the move, the review task and its audit entry are one transaction (saveLeadNurture).
+            const parked = await saveLeadNurture(card.leadId, form);
+            if (parked?.error) return { refused: parked.error };
+            await confirmed("park the deal in Nurture", card.leadId);
+            return { done: parkedOn };
+          },
+        });
+        const outcome = await runConfirmSteps(ownedWriteTenantId(), user.id, card.confirmKey!, steps);
+        const reply = confirmReply(outcome);
+        return reply.ok ? { ...reply, href: `/leads/${card.leadId}` } : reply;
       }
       case "quote": {
         const result = await createQuoteFromLead(card.leadId);

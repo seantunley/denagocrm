@@ -15,6 +15,7 @@ import { withActingStaffScope } from "@/lib/actingScope";
 import { futureActivityRefusal, isFutureDay } from "@/lib/activityDay";
 import { resolveAssignableUser } from "@/lib/tenantActor";
 import { logAudit } from "@/lib/audit";
+import { logError } from "@/lib/errorLog";
 import { reserveSlot } from "@/lib/bookingSlots";
 import { ensureTimelinePin } from "@/lib/timelinePins";
 import { resolveAttendees } from "@/lib/activityAttendees";
@@ -671,7 +672,7 @@ export async function logVoiceDebrief(data: {
   followUpDate?: string;
   nextStep?: string;
   opKey: string;
-}): Promise<{ ok: boolean; error?: string; repeated?: boolean }> {
+}): Promise<{ ok: boolean; error?: string; repeated?: boolean; warning?: string }> {
   return asOwnResult(
     () =>
       withActingStaffScope(async () => {
@@ -757,19 +758,27 @@ export async function logVoiceDebrief(data: {
         // The timeline message AFTER the commit: db.ts refuses one inside a transaction (attaching it to its
         // conversation runs on another connection). The call above already holds the notes, and the spent key stops
         // a repeat before here, so this is written once.
+        // THE CALL IS SAVED from here on (risk assessment 2026-11-15): a failure now must not read as "nothing saved" —
+        // it threw, and the call that WAS filed was reported as failed. Said as it is instead.
+        let warning: string | undefined;
         if (notes) {
-          await prisma.communication.create({
-            data: {
-              type: data.type,
-              direction: "outbound",
-              subject: `🎙 ${data.type === "call" ? "Call" : "Visit"}: ${summary}`,
-              body: notes,
-              leadId,
-              contactId,
-              userId: user.id,
-              tenantId,
-            },
-          });
+          try {
+            await prisma.communication.create({
+              data: {
+                type: data.type,
+                direction: "outbound",
+                subject: `🎙 ${data.type === "call" ? "Call" : "Visit"}: ${summary}`,
+                body: notes,
+                leadId,
+                contactId,
+                userId: user.id,
+                tenantId,
+              },
+            });
+          } catch (error) {
+            await logError("voice-debrief", "timeline note after a logged call failed", error instanceof Error ? error.name : "unknown").catch(() => {});
+            warning = "Its notes are saved on the call itself, but couldn't be added as a separate timeline note.";
+          }
         }
         const page = leadId ? `/leads/${leadId}` : `/contacts/${contactId}`;
         await logAudit({
@@ -786,7 +795,7 @@ export async function logVoiceDebrief(data: {
         revalidatePath(page);
         revalidatePath("/activities");
         revalidatePath("/");
-        return { ok: true };
+        return warning ? { ok: true, warning } : { ok: true };
       }),
     (error) => ({ ok: false, error }),
   );

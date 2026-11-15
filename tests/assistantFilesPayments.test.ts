@@ -107,7 +107,12 @@ test("payment card: deliveries.manage, an invoiced quote they may open, the depo
   assert.ok(run.indexOf('form.set("idempotencyKey", card.confirmKey)') < run.indexOf("await recordQuotePayment("));
   // Its proof: filed after the payment, once, under its own key; a proof that may not have been filed never hides
   // that the payment IS recorded (ok, said plainly) — and nothing here is offered for a blind retry.
-  assert.ok(run.indexOf("await recordQuotePayment(") < run.indexOf("await fileHeldUpload(user.id, `${card.confirmKey}-proof`, card.uploadId, { quoteId: card.quoteId }"));
+  assert.ok(run.indexOf("await recordQuotePayment(") < run.indexOf("await fileHeldUpload(user.id, `${card.confirmKey}-proof`, uploadId, { quoteId: card.quoteId }"));
   assert.match(run, /"file the proof of payment"\)\.catch\(\(\) => \(\{ error: "" \}\)\);/);
   assert.doesNotMatch(run, /resumable\(/);
+  // Its two writes are two steps (assistantConfirmSteps, risk assessment 2026-11-15): a Confirm pressed again skips
+  // what's done; a proof that may not have been filed is `unsure` — said, and never run again.
+  assert.match(run, /name: "payment",[\s\S]*?name: "proof",/);
+  assert.match(run, /return \{ unsure: `\$\{why\}\. Check the quote's documents, and send it again if it's missing` \};/);
+  assert.match(run, /return confirmReply\(await runConfirmSteps\(tenantId, user\.id, card\.confirmKey, steps\)\);/);
 });

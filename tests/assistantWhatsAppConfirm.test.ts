@@ -455,13 +455,16 @@ test("review of #905: the customer record was made, then the quote failed — th
   assert.ok(build.indexOf("await quoteFromLeadDefaults()") > -1 && build.indexOf("await quoteFromLeadDefaults()") < build.indexOf("convertLeadToContact("));
   const afterCustomer = build.slice(build.indexOf("convertLeadToContact("), build.indexOf("await saveQuoteDraft("));
   assert.doesNotMatch(afterCustomer.replace(/^\s*\/\/.*$/gm, ""), /await (?!logError)/, "between the customer record and the protected save, nothing else is awaited");
-  // Two places. record_payment is not one (review of #934): its key records the payment once, its proof is filed once
-  // under its own key, and a proof that may not have been filed is said plainly — never offered for a blind retry.
-  // nurture IS (2026-11-02): a lost deal reopened and then not parked — the retry finds it open and only parks it.
-  assert.equal(action.match(/resumable\(/g)?.length, 2, "quote_build after the customer; nurture after the reopen");
+  // One place by hand: quote_build after the customer. record_payment is not one (review of #934): its key records the
+  // payment once, its proof is filed once under its own key, and a proof that may not have been filed is said plainly —
+  // never offered for a blind retry. nurture IS (2026-11-02) — now through its steps (assistantConfirmSteps, risk
+  // assessment 2026-11-15): a lost deal reopened and then not parked; the retry skips the reopen and only parks it.
+  assert.equal(action.match(/resumable\(/g)?.length, 1, "quote_build after the customer");
   const nurture = action.slice(action.indexOf('case "nurture": {'), action.indexOf('case "quote": {'));
   assert.ok(nurture.indexOf("await reopenLead(card.leadId)") < nurture.indexOf("await saveLeadNurture(card.leadId, form)"));
-  assert.match(nurture, /return reopened \|\| reopenedAlready\s*\? resumable\(/, "resumable only once the deal WAS reopened");
+  assert.ok(nurture.indexOf('name: "reopen"') < nurture.indexOf('name: "park"'), "reopen, then park — two steps under the card's key");
+  assert.match(nurture, /if \(parked\?\.error\) return \{ refused: parked\.error \};/, "a refused park after the reopen is offered again (partly saved)");
+  assert.match(nurture, /const outcome = await runConfirmSteps\(ownedWriteTenantId\(\), user\.id, card\.confirmKey!, steps\);/);
   assert.match(nurture, /const reopenedAlready = card\.wasStatus === "lost" && now\.status === "open";/);
   const payment = action.slice(action.indexOf('case "record_payment": {'), action.indexOf('case "update_customer": {'));
   assert.ok(payment.indexOf('form.set("idempotencyKey", card.confirmKey)') < payment.indexOf("await recordQuotePayment("), "the payment is once-only by the card's key");
@@ -526,7 +529,8 @@ test("A PINNED NOTE WHOSE PIN FAILS IS NOT WRITTEN TWICE: the note was saved, so
   // can't — all before reopenLead, its one write.)
   // (2026-11-09, one more of attach_file's — a supplier that isn't an id — before fileHeldUpload, its one write.)
   // (2026-11-14, review of #1117, one of log_call's — no confirm key — before logVoiceDebrief, its one write.)
-  assert.equal((run.match(/return untouched\(/g) ?? []).length, 77);
+  // (2026-11-15, one more of nurture's — a card from before its steps had a key — before reopenLead, its first write.)
+  assert.equal((run.match(/return untouched\(/g) ?? []).length, 78);
   const logCall = run.slice(run.indexOf('case "log_call": {'), run.indexOf('case "note": {'));
   assert.ok(logCall.indexOf("return untouched(STALE_CARD)") < logCall.indexOf("await logVoiceDebrief("));
   const buildCase = run.slice(run.indexOf('case "quote_build": {'), run.indexOf('case "quote_pdf": {'));
