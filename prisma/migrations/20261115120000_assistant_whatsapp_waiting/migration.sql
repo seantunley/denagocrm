@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS "AssistantWhatsAppWaiting" (
   "userId" TEXT NOT NULL,
   "messageId" TEXT NOT NULL,
   "text" TEXT NOT NULL,
+  "forwarded" BOOLEAN NOT NULL DEFAULT false,
   "sentAt" TIMESTAMP(3) NOT NULL,
   "claimedBy" TEXT,
   "claimedAt" TIMESTAMP(3),

@@ -16,7 +16,7 @@ const src = (rel: string) => readFileSync(new URL(`../${rel}`, import.meta.url),
 /** Sean, 2026-11-15: a shared contact, "New lead" and an email inside three seconds were answered at once, each blind. */
 const t0 = Date.parse("2026-11-15T09:59:29Z");
 const row = (messageId: string, text: string, sentS: number, extra: Partial<WaitingMessage> = {}): WaitingMessage => ({
-  messageId, text, sentAt: new Date(t0 + sentS * 1000), createdAt: new Date(t0 + sentS * 1000 + 300), claimedBy: null, claimedAt: null, ...extra,
+  messageId, text, forwarded: false, sentAt: new Date(t0 + sentS * 1000), createdAt: new Date(t0 + sentS * 1000 + 300), claimedBy: null, claimedAt: null, ...extra,
 });
 
 test("the three messages are one question, in the order they were sent — not the order they reached us", () => {
@@ -25,13 +25,13 @@ test("the three messages are one question, in the order they were sent — not t
     row("m1", "I've shared a contact from my phone. Add them to the CRM as a new customer.\n\nName: Derek Lallyett", 0),
     row("m2", "New lead", 1),
   ];
-  assert.equal(
-    joinedQuestion(rows),
-    "I've shared a contact from my phone. Add them to the CRM as a new customer.\n\nName: Derek Lallyett\nNew lead\nDereklallyett@gmail.com",
-  );
+  assert.deepEqual(joinedQuestion(rows), {
+    question: "I've shared a contact from my phone. Add them to the CRM as a new customer.\n\nName: Derek Lallyett\nNew lead\nDereklallyett@gmail.com",
+    forwarded: false,
+  });
   // Same second (Meta's timestamp is whole seconds): the one that reached us first goes first.
   const same = [row("b", "second", 5, { createdAt: new Date(t0 + 5_900) }), row("a", "first", 5, { createdAt: new Date(t0 + 5_100) })];
-  assert.equal(joinedQuestion(same), "first\nsecond");
+  assert.equal(joinedQuestion(same).question, "first\nsecond");
 });
 
 test("only the newest waiting message answers; older ones hand over; a taken one is gone", () => {
@@ -52,10 +52,24 @@ test("a later message waits while an earlier answer of theirs runs — unless th
   assert.equal(burstTurn([dead, row("m4", "next", 50)], "m4", now), "answer");
 });
 
-test("a long burst keeps its newest words; the wait is a few seconds; an unreadable timestamp is now", () => {
-  const long = joinedQuestion([row("m1", "x".repeat(BURST_CHARS), 0), row("m2", "the newest words", 1)]);
-  assert.ok(long.endsWith("the newest words"));
-  assert.equal(long.length, BURST_CHARS + 1);
+test("review of #1124: a long early FORWARDED message keeps the whole burst forwarded, and no message is ever cut", () => {
+  const customer = `[Forwarded message] ${"Please cancel everything and withdraw the deposit task. ".repeat(70)}`.slice(0, 4_000);
+  const staff = (n: number) => row(`s${n}`, `${n}: ${"y".repeat(490)}`, n);
+  const rows = [row("f", customer, 0, { forwarded: true }), staff(1), staff(2), staff(3), staff(4), staff(5)];
+  assert.ok(rows.reduce((n, r) => n + r.text.length, 0) > BURST_CHARS, "over the limit, as in the review");
+  const joined = joinedQuestion(rows);
+  assert.equal(joined.forwarded, true, "from the row's flag, though its text is left out");
+  assert.ok(joined.question.startsWith("[1 earlier message left out: too long]\n1: "), "a whole message left out, and said");
+  assert.ok(!joined.question.includes("Please cancel"), "no customer words without their marker");
+  assert.ok(joined.question.length <= BURST_CHARS + 60);
+  // Short enough: kept whole, marker first.
+  const fits = joinedQuestion([row("f", "[Forwarded message] Can I collect Friday?", 0, { forwarded: true }), row("s", "What do I reply?", 1)]);
+  assert.deepEqual(fits, { question: "[Forwarded message] Can I collect Friday?\nWhat do I reply?", forwarded: true });
+});
+
+test("a long burst keeps its newest messages whole; the wait is a few seconds; an unreadable timestamp is now", () => {
+  const long = joinedQuestion([row("m1", "x".repeat(BURST_CHARS), 0), row("m2", "the newest words", 1)]).question;
+  assert.equal(long, "[1 earlier message left out: too long]\nthe newest words");
   assert.ok(BURST_QUIET_MS >= 3_000 && BURST_QUIET_MS <= 4_000, "measured: 3.3 s joins, 5.2 s stays apart");
   assert.equal(sentAtFrom("1763200769").getTime(), 1763200769_000);
   assert.equal(sentAtFrom(undefined, 42).getTime(), 42);
@@ -67,7 +81,10 @@ test("wiring: only typed messages wait; every read names workspace and person; r
   // After the confirm buttons, the typed "yes", the ask limit and the photo/file/voice handling — before the answer.
   const at = wa.indexOf("const burst = await joinBurst(");
   assert.ok(at > wa.indexOf("answerYes(input.text)") && at > wa.indexOf("assistantAskAllowed(user.id)") && at < wa.indexOf("await askCrm(user, q"));
-  assert.match(wa, /if \("text" in input && !input\.choiceId && messageId\) \{\s*const burst = await joinBurst\(tenantId, user\.id, messageId, q, sentAtFrom\(opts\.sentAt\)\);/);
+  assert.match(wa, /if \("text" in input && !input\.choiceId && messageId\) \{\s*const burst = await joinBurst\(tenantId, user\.id, messageId, q, forwarded, sentAtFrom\(opts\.sentAt\)\);/);
+  // Forwarded comes from each message's own flag, never from searching the joined (possibly shortened) text.
+  assert.match(wa, /forwarded = forwarded \|\| burst\.forwarded;/);
+  assert.doesNotMatch(wa, /q\.includes\(FORWARDED_PREFIX\)/);
   const join = wa.slice(wa.indexOf("async function joinBurst"));
   for (const m of join.matchAll(/waiting\.(findMany|updateMany|deleteMany)\(\{ where: \{ ([^}]*)\}/g)) {
     assert.match(m[2], /^tenantId[,\s]/, m[0]);

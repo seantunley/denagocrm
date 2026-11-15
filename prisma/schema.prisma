@@ -1181,8 +1181,9 @@ model AssistantTurn {
 /// page continues THEIR conversation. `summary` keeps what has fallen out of the last six exchanges (longer memory:
 /// assistantConversation.foldOlderTurns), so a long thread keeps its thread.
 /// A typed WhatsApp message to the assistant, waiting a few seconds in case the next one belongs with it
-/// (assistantWhatsAppBurst — Sean, 2026-11-15). Short-lived: removed once answered, and anything older than ten
-/// minutes is removed unanswered. Never a customer's message.
+/// (assistantWhatsAppBurst — Sean, 2026-11-15). Short-lived: removed once answered. One left behind by an answer
+/// that died is never answered; it is removed the next time anyone in the workspace types to the assistant once it
+/// is ten minutes old. Never a customer's own message to the business.
 model AssistantWhatsAppWaiting {
   id        String    @id @default(cuid())
   tenantId  String
@@ -1191,6 +1192,8 @@ model AssistantWhatsAppWaiting {
   messageId String
   /// The question as it would have been asked alone (capped like any WhatsApp question).
   text      String
+  /// A customer's message the person FORWARDED: the joined question is then handled as forwarded, however long.
+  forwarded Boolean   @default(false)
   /// When it was sent (Meta's timestamp): the order they are joined in.
   sentAt    DateTime
   /// The message whose answer took it, and when. Null: still waiting.

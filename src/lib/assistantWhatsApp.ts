@@ -423,15 +423,16 @@ export async function handleStaffWhatsApp(
   // the order sent, after any answer of theirs still running. Not a tapped button, a "yes", a photo, a file or a
   // voice note — those were dealt with above, or are answered on their own as before.
   if ("text" in input && !input.choiceId && messageId) {
-    const burst = await joinBurst(tenantId, user.id, messageId, q, sentAtFrom(opts.sentAt));
+    const burst = await joinBurst(tenantId, user.id, messageId, q, forwarded, sentAtFrom(opts.sentAt));
     if (!burst) {
       await typing;
       return true; // a newer message of theirs answers this one with it
     }
     releaseBurst = burst.release;
     q = burst.question;
-    // A forwarded customer message among them makes the whole question forwarded: the safe way round.
-    forwarded = forwarded || q.includes(FORWARDED_PREFIX);
+    // A forwarded customer message among them makes the whole question forwarded — the safe way round — from each
+    // message's own flag, never from the joined text (review of #1124: a cut could drop the marker).
+    forwarded = forwarded || burst.forwarded;
   }
 
   // The AssistantTurn askCrm saves (source "whatsapp") is the record of this
@@ -530,14 +531,17 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  * it. Otherwise the waiting messages it took, joined as one question, and `release` for when the answer is done.
  * Every read and write names the workspace AND the person.
  */
-async function joinBurst(tenantId: string, userId: string, messageId: string, text: string, sentAt: Date): Promise<{ question: string; release: () => Promise<unknown> } | null> {
+async function joinBurst(
+  tenantId: string, userId: string, messageId: string, text: string, forwarded: boolean, sentAt: Date,
+): Promise<{ question: string; forwarded: boolean; release: () => Promise<unknown> } | null> {
   const waiting = basePrisma.assistantWhatsAppWaiting;
   const started = Date.now();
-  // Never joined to a new question: a message left behind by an answer that died.
+  // Never joined to a new question: a message left behind by an answer that died (removed here, as anyone in the
+  // workspace next types; there is no timed sweep).
   await waiting.deleteMany({ where: { tenantId, createdAt: { lt: new Date(started - BURST_STALE_MS) } } });
-  const added = await waiting.createMany({ data: [{ tenantId, userId, messageId, text, sentAt }], skipDuplicates: true });
+  const added = await waiting.createMany({ data: [{ tenantId, userId, messageId, text, forwarded, sentAt }], skipDuplicates: true });
   if (added.count === 0) return null; // already waiting: this message is being answered
-  const select = { messageId: true, text: true, sentAt: true, createdAt: true, claimedBy: true, claimedAt: true } as const;
+  const select = { messageId: true, text: true, forwarded: true, sentAt: true, createdAt: true, claimedBy: true, claimedAt: true } as const;
   for (;;) {
     await sleep(BURST_QUIET_MS);
     const rows = await waiting.findMany({ where: { tenantId, userId }, select, take: 100 });
@@ -552,7 +556,7 @@ async function joinBurst(tenantId: string, userId: string, messageId: string, te
   // Another answer took this one between the look and the claim: it is answered there.
   if (!taken.some((row) => row.messageId === messageId)) return null;
   return {
-    question: joinedQuestion(taken),
+    ...joinedQuestion(taken),
     release: () => waiting.deleteMany({ where: { tenantId, userId, claimedBy: messageId } }),
   };
 }

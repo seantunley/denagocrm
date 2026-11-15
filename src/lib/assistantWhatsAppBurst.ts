@@ -19,12 +19,17 @@ export const BURST_QUIET_MS = 3_500;
 export const BURST_LEASE_MS = 5 * 60_000;
 /** How long the newest message waits for an earlier answer before going ahead anyway. */
 export const BURST_WAIT_MAX_MS = 150_000;
-/** Waiting messages older than this are never answered: they are removed, not joined to a new question. */
+/**
+ * Waiting messages older than this are never answered or joined to a new question. They are removed when anyone in
+ * the workspace next types to the assistant — there is no timed sweep.
+ */
 export const BURST_STALE_MS = 10 * 60_000;
 /** Room for the joined question: several typed messages, or a forwarded one and a question about it. */
 export const BURST_CHARS = 6_000;
 
-export type WaitingMessage = { messageId: string; text: string; sentAt: Date; createdAt: Date; claimedBy: string | null; claimedAt: Date | null };
+export type WaitingMessage = {
+  messageId: string; text: string; forwarded: boolean; sentAt: Date; createdAt: Date; claimedBy: string | null; claimedAt: Date | null;
+};
 
 /** Oldest first: when it was SENT (Meta's timestamp, whole seconds), then when it reached us. */
 export const sentOrder = (a: WaitingMessage, b: WaitingMessage) =>
@@ -45,10 +50,23 @@ export function burstTurn(rows: readonly WaitingMessage[], me: string, now: numb
   return "answer";
 }
 
-/** The messages as one question, in the order they were sent. Over BURST_CHARS: the oldest words go first. */
-export function joinedQuestion(rows: readonly WaitingMessage[]): string {
-  const text = [...rows].sort(sentOrder).map((row) => row.text.trim()).filter(Boolean).join("\n");
-  return text.length > BURST_CHARS ? `…${text.slice(-BURST_CHARS)}` : text;
+/**
+ * The messages as one question, in the order they were sent. `forwarded` comes from EVERY message taken, never from
+ * the text (review of #1124): one forwarded customer message makes the whole question forwarded, even if it is left
+ * out for length. Over BURST_CHARS, whole messages are left out, oldest first, and that is said. A message is never
+ * cut, so each one keeps its "[Forwarded message]" marker and its boundary.
+ */
+export function joinedQuestion(rows: readonly WaitingMessage[]): { question: string; forwarded: boolean } {
+  const all = [...rows].sort(sentOrder).map((row) => ({ text: row.text.trim(), forwarded: row.forwarded })).filter((row) => row.text);
+  const kept = [...all];
+  const length = () => kept.reduce((n, row) => n + row.text.length + 1, 0);
+  while (kept.length > 1 && length() > BURST_CHARS) kept.shift();
+  const left = all.length - kept.length;
+  const text = kept.map((row) => row.text).join("\n");
+  return {
+    question: left ? `[${left} earlier message${left === 1 ? "" : "s"} left out: too long]\n${text}` : text,
+    forwarded: all.some((row) => row.forwarded),
+  };
 }
 
 /** Meta's message timestamp (seconds, as a string) → a Date; anything unreadable is "now". */
