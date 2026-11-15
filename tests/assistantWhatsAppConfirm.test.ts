@@ -455,11 +455,16 @@ test("review of #905: the customer record was made, then the quote failed — th
   assert.ok(build.indexOf("await quoteFromLeadDefaults()") > -1 && build.indexOf("await quoteFromLeadDefaults()") < build.indexOf("convertLeadToContact("));
   const afterCustomer = build.slice(build.indexOf("convertLeadToContact("), build.indexOf("await saveQuoteDraft("));
   assert.doesNotMatch(afterCustomer.replace(/^\s*\/\/.*$/gm, ""), /await (?!logError)/, "between the customer record and the protected save, nothing else is awaited");
-  // One place by hand: quote_build after the customer. record_payment is not one (review of #934): its key records the
-  // payment once, its proof is filed once under its own key, and a proof that may not have been filed is said plainly —
-  // never offered for a blind retry. nurture IS (2026-11-02) — now through its steps (assistantConfirmSteps, risk
-  // assessment 2026-11-15): a lost deal reopened and then not parked; the retry skips the reopen and only parks it.
-  assert.equal(action.match(/resumable\(/g)?.length, 1, "quote_build after the customer");
+  // Two places by hand. record_payment is not one (review of #934): its key records the payment once, its proof is
+  // filed once under its own key, and a proof that may not have been filed is said plainly — never offered for a blind
+  // retry. nurture IS (2026-11-02) — now through its steps (assistantConfirmSteps, risk assessment 2026-11-15): a lost
+  // deal reopened and then not parked; the retry skips the reopen and only parks it.
+  // create_lead IS (review of #1125): the lead opened and its key spent, then putting the customer's quotes on it threw —
+  // Confirm again finds the lead by its key and only puts the quotes on.
+  assert.equal(action.match(/resumable\(/g)?.length, 2, "quote_build after the customer; create_lead's quotes after the lead");
+  const newLead = action.slice(action.indexOf('case "create_lead": {'), action.indexOf('case "attach_file": {'));
+  assert.ok(newLead.indexOf('await completeConfirmKey(tenantId, card.confirmKey, "a new lead", { leadId });') < newLead.indexOf("return withQuotes(leadId, false);"));
+  assert.match(newLead, /\} catch \(error\) \{[\s\S]*?return \{ \.\.\.resumable\(/, "resumable only from the quote step, after the lead exists");
   const nurture = action.slice(action.indexOf('case "nurture": {'), action.indexOf('case "quote": {'));
   assert.ok(nurture.indexOf("await reopenLead(card.leadId)") < nurture.indexOf("await saveLeadNurture(card.leadId, form)"));
   assert.ok(nurture.indexOf('name: "reopen"') < nurture.indexOf('name: "park"'), "reopen, then park — two steps under the card's key");

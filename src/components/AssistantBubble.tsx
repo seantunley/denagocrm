@@ -8,8 +8,9 @@ import { DaxIcon } from "@/components/DaxIcon";
 import { openAssistantBubble } from "@/app/actions/assistant";
 import AssistantChat from "@/components/AssistantChat";
 import { publishDax, registerDax } from "@/lib/daxLauncher";
+import type { OpeningLine } from "@/lib/daxBriefRules";
 
-type Opened = { name: string; connected: boolean; listen: boolean; history: { id: string; question: string; answer: string; source: string }[]; conversation: string | null };
+type Opened = { name: string; connected: boolean; listen: boolean; history: { id: string; question: string; answer: string; source: string }[]; conversation: string | null; opening: OpeningLine | null };
 
 /**
  * The "Ask DAX" chat panel, on every page in the app — opened by the sidebar's Ask the CRM button.
@@ -156,6 +157,7 @@ export default function AssistantBubble({ unseen = 0 }: { unseen?: number }) {
                 autoAsk={autoAsk ?? undefined}
                 listen={data.listen}
                 conversation={data.conversation}
+                opening={data.opening}
                 compact
               />
             )}

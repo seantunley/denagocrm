@@ -17,7 +17,10 @@ import { contactName } from "./format";
 import { listActingTenantStaff } from "./tenantActor";
 import { nurtureReasonLabel } from "./leadNurture";
 import { baseValueCents } from "./currencyRules";
-import { buildBrief, buildTeamRows, type BriefLead, type DaxBrief, type NurtureReview, type TeamRow } from "./daxBriefRules";
+import { buildBrief, buildTeamRows, openingLine, type BriefLead, type DaxBrief, type NurtureReview, type OpeningLine, type TeamRow } from "./daxBriefRules";
+import { getWorkspaceSetting } from "./settings";
+import { ownedWriteTenantId } from "./tenantWrite";
+import { openingLineKey, openingLineOn } from "./proactiveRules";
 
 export {
   buildBrief,
@@ -257,3 +260,13 @@ export const loadDaxBrief = cache(async (user: PermissionUser, now: Date = new D
     nurtureReviewsTotal: nurtureReviews.total,
   });
 });
+
+/**
+ * DAX SPEAKS FIRST: the opening line for a new, empty conversation (Ask page and panel only — never WhatsApp), from
+ * this person's own brief, so it never says more than their own lists show. Null when they switched it off, or when
+ * there is nothing to say. The person's switch is read in THIS workspace.
+ */
+export async function openingLineFor(user: PermissionUser): Promise<OpeningLine | null> {
+  if (!openingLineOn(await getWorkspaceSetting(ownedWriteTenantId(), openingLineKey(user.id)))) return null;
+  return openingLine(await loadDaxBrief(user));
+}

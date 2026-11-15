@@ -219,12 +219,32 @@ export function unsupportedFigures(answer: string, sources: unknown[]): string[]
     const cites = new Set([...raw.matchAll(CITE)].map((m) => m[1]));
     const text = raw.replace(/\[\[[^\]]*\]\]/g, "");
     const named = new Set([...text.matchAll(QUOTE)].map((m) => m[1]));
-    return { cites, text, named, quotes: records.quotes.filter((r) => cites.has(r.link) || named.has(r.quote) || names(text, r.customers)) };
+    // A quote NAMED (its number or its [[/quotes/…]] link) is that quote — never the same customer's others (review of
+    // #1116: "Werner's quote Q-1040 is R 88 500" passed on Werner's Q-1042). A customer named beside it reaches only
+    // their quotes when none of theirs was named; a named quote not in the lookups binds nothing, never a stand-in.
+    // Review of #1126: a number and a link that DISAGREE ("Q-1040 … [[/quotes/<Q-1042's>]]") are never combined — the
+    // written number is the claim, checked on its own, and the mismatch is flagged. A quote link the lookups never
+    // returned is flagged too, and binds nothing: the customer's other quotes are no stand-in for it.
+    const byLink = records.quotes.filter((r) => cites.has(r.link));
+    const byNumber = records.quotes.filter((r) => named.has(r.quote));
+    const mismatched = named.size ? byLink.filter((r) => !named.has(r.quote)) : [];
+    const unknownLinks = [...cites].filter((c) => c.startsWith("/quotes/") && !records.quotes.some((r) => r.link === c));
+    const problems = [
+      ...mismatched.map((r) => `${[...named].map((n) => `Q-${n}`).join("/")} cited with Q-${r.quote}'s link`),
+      ...unknownLinks.map((c) => `[[${c}]] (not a quote the lookups returned)`),
+    ];
+    const explicit = mismatched.length ? byNumber : [...new Set([...byLink, ...byNumber])];
+    const pinned = new Set(explicit.flatMap((r) => [...r.customers]));
+    const byName = unknownLinks.length || mismatched.length
+      ? []
+      : records.quotes.filter((r) => !explicit.includes(r) && names(text, r.customers) && ![...r.customers].some((c) => pinned.has(c)));
+    return { cites, text, named, quotes: [...explicit, ...byName], problems };
   };
   const on = (rs: { quote: string }[]) => rs.map((r) => `Q-${r.quote}`).join("/");
   for (const sentence of sentences) {
     const whole = quotesBy(sentence);
     const { text, cites } = whole;
+    flagged.push(...whole.problems);
     const saysQuote = whole.named.size > 0 || [...cites].some((c) => c.startsWith("/quotes/")) || /\bquot(e|es|ed|ation)\b/i.test(text);
     // A deposit or a delivery is a quote's, whether or not the word "quote" is said.
     const aboutQuote = saysQuote || /\bdeposit\b|\bdeliver/i.test(text);
