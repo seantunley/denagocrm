@@ -12,6 +12,7 @@ import { contactFormFor } from "@/lib/contactFormFor";
 import { completeConfirmKey, releaseConfirmKey, reserveConfirmKey } from "@/lib/assistantConfirmKey";
 import { MAX_IMAGE_BYTES } from "@/lib/assistantImage";
 import { heldUpload } from "@/lib/assistantUpload";
+import { putQuotesOnNewLead } from "@/lib/assistantLeadQuotes";
 import { uploadDocument } from "@/app/actions/documents";
 import { recordQuotePayment } from "@/app/actions/quotePayments";
 import { markDepositPaid, rescheduleDelivery, scheduleDelivery } from "@/app/actions/fulfilment";
@@ -19,7 +20,7 @@ import { johannesburgDateKey } from "@/lib/activityDay";
 import { getSetting, getRegionalSettings } from "@/lib/settings";
 import { isCodexConnected } from "@/lib/codex";
 import { ASSISTANT_PROFILE_KEY, parseProfile } from "@/lib/assistantSoul";
-import { CONFIRM_KEY, CUSTOMER_FIELDS, QUOTE_ADD_MAX_FEES, QUOTE_ADD_MAX_FEE_RANDS, QUOTE_BUILD_MAX_LINES, STALE_CARD, type ActionCard } from "@/lib/assistantActions";
+import { CONFIRM_KEY, CUSTOMER_FIELDS, leadQuotesReply, QUOTE_ADD_MAX_FEES, QUOTE_ADD_MAX_FEE_RANDS, QUOTE_BUILD_MAX_LINES, STALE_CARD, type ActionCard } from "@/lib/assistantActions";
 import { editorDefaults, quoteFromLeadDefaults } from "@/lib/quoteFromLead";
 import { QUOTE_PDF_SOURCE } from "@/lib/assistantWhatsAppRules";
 import { tenantOrigin } from "@/lib/tenantOrigin";
@@ -351,16 +352,30 @@ export async function runAssistantAction(
         // (assistantConfirmKey). A second Confirm gets the lead the first made; two at once, one lead.
         const tenantId = ownedWriteTenantId();
         const reserved = await reserveConfirmKey(tenantId, user.id, card.confirmKey, "a new lead");
+        // TWO STEPS, EACH ONCE (review of #1125): the key is spent with the lead as soon as it exists, so no Confirm can
+        // ever open a second one. The quotes are the second step and run on EVERY Confirm of the card — one already on
+        // the lead counts as done — so a Confirm again after a failure finishes only what is left.
+        const withQuotes = async (leadId: string, again: boolean) => {
+          const href = `/leads/${leadId}`;
+          if (!Array.isArray(l.quotes) || !l.quotes.length) return { ok: true, success: again ? `That lead is already open for ${card.leadLabel}` : `Lead opened for ${card.leadLabel}`, href };
+          try {
+            return { ok: true, success: leadQuotesReply(card.leadLabel, await putQuotesOnNewLead(user, leadId, l.quotes), again), href };
+          } catch (error) {
+            // Not "the quote changed": the database didn't answer, and nothing moved. Logged without client data.
+            await logError("assistant-actions", "putting quotes on a new lead failed", error instanceof Error ? error.name : "unknown").catch(() => {});
+            const numbers = l.quotes.map((q) => `Q-${q.number}`).join(", ");
+            return { ...resumable(`The lead for ${card.leadLabel} is open, but ${numbers} couldn't be put on it just now. Tap Confirm again to finish — the lead won't be opened twice.`), href };
+          }
+        };
         if (reserved.state === "done") {
           const made = typeof reserved.result.leadId === "string" ? reserved.result.leadId : null;
-          return made
-            ? { ok: true, success: `That lead is already open for ${card.leadLabel}`, href: `/leads/${made}` }
-            : { ok: false, error: LEAD_UNSURE };
+          return made ? withQuotes(made, true) : { ok: false, error: LEAD_UNSURE };
         }
         if (reserved.state === "busy") return { ok: false, error: "That lead is being opened right now — check the CRM in a moment." };
         const form = new FormData();
         form.set("name", l.name);
-        for (const [key, value] of [["contactId", l.contactId], ["phone", l.phone], ["email", l.email], ["productId", l.productId], ["notes", l.notes]] as const) {
+        // stageId: createLead refuses a closed or missing stage itself. currency: its quotes' (null = the base).
+        for (const [key, value] of [["contactId", l.contactId], ["phone", l.phone], ["email", l.email], ["productId", l.productId], ["notes", l.notes], ["stageId", l.stageId], ["currency", l.currency]] as const) {
           if (value) form.set(key, value);
         }
         // Retry only on proof that nothing was written: an error from createLead may come after the lead (or its new
@@ -379,7 +394,7 @@ export async function runAssistantAction(
         }
         await completeConfirmKey(tenantId, card.confirmKey, "a new lead", { leadId });
         await confirmed("open a lead", leadId);
-        return { ok: true, success: `Lead opened for ${card.leadLabel}`, href: `/leads/${leadId}` };
+        return withQuotes(leadId, false);
       }
       case "attach_file": {
         // THE DOCUMENTS FORM'S OWN DOOR (uploadDocument): documents.upload, access to THE one record, the size limit,

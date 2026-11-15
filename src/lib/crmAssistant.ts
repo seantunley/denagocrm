@@ -92,7 +92,8 @@ import { matchVendorByName } from "./vendors";
 import { paymentMethodLabel } from "./accountStatement";
 import { carriedUpload, holdUpload, linkUpload, photoUpload, uploadImage } from "./assistantUpload";
 import { actingTenantId } from "./actingTenant";
-import { ACTION_INSTRUCTIONS, CHECK_BACK_RULE, CHOICE_INSTRUCTIONS, JOB_CARD_RULE, MAX_ACTIONS, logCallDetail, newCustomerDetail, type NewCustomer, CUSTOMER_FIELDS, customerChangesText, type CustomerChange, type CustomerField, type FileTarget, matchQuoteRow, quoteAddText, quoteBuildText, quoteChangeText, settledAnswer, withoutSetUpClaims, type ActionCard, type ProposedAction, type QuoteBuildLine, type QuoteChange } from "./assistantActions";
+import { getDefaultPipeline, listPipelineStages } from "./pipelines";
+import { ACTION_INSTRUCTIONS, CHECK_BACK_RULE, CHOICE_INSTRUCTIONS, JOB_CARD_RULE, LEAD_QUOTES_MAX, MAX_ACTIONS, logCallDetail, unlinkedOpenQuotesWhere, newCustomerDetail, type NewCustomer, CUSTOMER_FIELDS, customerChangesText, type CustomerChange, type CustomerField, type FileTarget, matchQuoteRow, quoteAddText, quoteBuildText, quoteChangeText, settledAnswer, withoutSetUpClaims, type ActionCard, type ProposedAction, type QuoteBuildLine, type QuoteChange } from "./assistantActions";
 import { knowledgeProducts, resolveCatalogueProduct } from "./catalogueLookup";
 import { TASK_INSTRUCTIONS, keepIds, taskBlock, type TaskView } from "./assistantTaskRules";
 import { listedBlock, listedRecords, splitListed, type ListedSlot } from "./assistantListedRules";
@@ -3072,10 +3073,31 @@ export async function resolveActions(
       const product = p.productId || p.product ? await resolveCatalogueProduct({ productId: p.productId, product: p.product }) : null;
       if ((p.productId || p.product) && !product) { problems.push(`"${p.product ?? "That product"}" isn't one product in the catalogue — look it up and name it as listed.`); continue; }
       const openDeals = contactId ? await prisma.lead.count({ where: { contactId, status: "open", deletedAt: null } }) : 0;
+      // The stage they named, among the open stages of the pipeline createLead opens it in (its default) — the
+      // same exact-name match as the stage card.
+      let stage: { id: string; name: string } | null = null;
+      if (p.stage) {
+        const pipeline = await getDefaultPipeline();
+        const wanted = p.stage.trim().toLowerCase();
+        stage = pipeline ? (await listPipelineStages(pipeline.id)).find((s) => !s.isClosed && s.name.toLowerCase() === wanted) ?? null : null;
+        if (!stage) { problems.push(`The pipeline new leads open in has no open stage called "${p.stage}".`); continue; }
+      }
+      // The customer's open quotes on no deal yet go on this one (Sean, 2026-11-15: Q-1043 was built for Grant's Auto
+      // Spares, then the lead opened without it). Only ones this person may edit, and one currency: a lead's
+      // currency is fixed by its quotes, so the newest quote's sets it and others wait.
+      const quotes = contactId && (await hasPermission(user, "quotes.edit"))
+        ? await prisma.quote.findMany({ where: unlinkedOpenQuotesWhere(contactId), orderBy: { createdAt: "desc" }, take: LEAD_QUOTES_MAX, select: { id: true, number: true, status: true, currency: true } })
+        : [];
+      const mine: typeof quotes = [];
+      for (const q of quotes) if (q.currency === quotes[0].currency && (await canAccessQuote(user, q.id))) mine.push(q);
       cards.push({
         id: `a${index}-new-lead`, kind: "create_lead", leadId: null, leadLabel: who,
         title: `Open a lead for ${who}${product ? ` — ${product.name}` : ""}`,
-        lead: { contactId, name: who, phone, email, productId: product?.id ?? null, notes: p.notes ?? null },
+        lead: {
+          contactId, name: who, phone, email, productId: product?.id ?? null, notes: p.notes ?? null,
+          ...(stage ? { stageId: stage.id } : {}),
+          ...(mine.length ? { quotes: mine.map((q) => ({ id: q.id, number: q.number })), currency: mine[0].currency } : {}),
+        },
         detail: [
           contactId ? `Customer: ${who} (already in the CRM)` : `New customer: ${who} — created with the lead`,
           ...(phone ? [`Phone: ${phone}`] : []),
@@ -3083,7 +3105,8 @@ export async function resolveActions(
           ...(product ? [`Interested in: ${product.name}`] : []),
           ...(p.notes ? [`Notes: ${p.notes}`] : []),
           ...(openDeals > 0 ? [`${who} already has ${openDeals} open deal${openDeals === 1 ? "" : "s"}.`] : []),
-          "Opens in the first stage, given to you. The customer is not contacted.",
+          ...(mine.length ? [`Puts ${mine.map((q) => `Q-${q.number} (${q.status})`).join(", ")} on this lead.`] : []),
+          `Opens in ${stage ? stage.name : "the first stage"}, given to you. The customer is not contacted.`,
         ].join("\n"),
         // One Confirm, one lead: reserved and spent at Confirm (assistantConfirmKey).
         confirmKey: `qk_${randomBytes(16).toString("hex")}`,
