@@ -3,7 +3,7 @@ import { Prisma } from "@prisma/client";
 import { basePrisma } from "./db";
 import { logError } from "./errorLog";
 import { claimInterrupted } from "./assistantPlanRules";
-import { confirmReply, type ConfirmOutcome, type StepResult } from "./assistantConfirmStepsRules";
+import type { ConfirmOutcome, StepResult } from "./assistantConfirmStepsRules";
 
 export { confirmReply, type ConfirmOutcome, type StepResult } from "./assistantConfirmStepsRules";
 

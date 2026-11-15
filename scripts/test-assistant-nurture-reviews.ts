@@ -26,6 +26,7 @@ import { resolveActions } from "../src/lib/crmAssistant";
 import { briefForAssistant, loadDaxBrief } from "../src/lib/daxBrief";
 import { johannesburgDateKey } from "../src/lib/activityDay";
 import { runAssistantAction } from "../src/app/actions/assistant";
+import { __failConfirmStepOnceForTests } from "../src/lib/assistantConfirmSteps";
 import { signFreshSession } from "../src/lib/session";
 import { runAsSession, type ActingSession } from "./harness/actingSession";
 
@@ -99,6 +100,7 @@ async function cleanup() {
   const ids = USERS.map((u) => u.id);
   const leads = Object.values(L);
   await basePrisma.activity.deleteMany({ where: { leadId: { in: leads } } });
+  await basePrisma.assistantPendingAction.deleteMany({ where: { userId: { in: ids } } });
   await basePrisma.auditLog.deleteMany({ where: { OR: [{ leadId: { in: leads } }, { userId: { in: ids } }] } });
   await basePrisma.lead.deleteMany({ where: { id: { in: leads } } });
   await basePrisma.$executeRaw`DELETE FROM "PipelineStage" WHERE "id" IN (${PARKED}, ${CONTACTED_ID})`;
@@ -184,6 +186,29 @@ async function main() {
       && (await reactivated(L.due)) === 0, JSON.stringify(gone));
     const lost = await propose(rep, repSession, { ...asked, leadId: L.due });
     check("a lost deal: no reactivate card, and it says so", !lost.card && /reopened, not reactivated/.test(lost.problems.join(" ")), lost.problems.join(" | "));
+  }
+
+  // Risk assessment 2026-11-15, Phase 1 (assistantConfirmSteps): a card that writes in two steps, with the database
+  // failing between them. L.due is lost now: parking it reopens it first, then parks it.
+  console.log("\nA nurture card that fails part-way: Confirm again finishes it, and never reopens twice");
+  {
+    const reopened = () => basePrisma.auditEvent.count({ where: { entityId: L.due, eventType: "lead.reopened" } });
+    const problems: string[] = [];
+    const proposal = { type: "nurture", leadId: L.due, because: "timing", interest: "Rover XL", trigger: "When his bonus comes in March", reviewOn: johannesburgDateKey(dayAt(30)) };
+    const cards = await runAsSession(repSession, () => scoped(() => resolveActions(rep, [proposal as never], problems, null)));
+    const card = cards.find((c): c is Extract<ActionCard, { kind: "nurture" }> => c.kind === "nurture");
+    check("the card: reopen and park, with its steps' key", card?.wasStatus === "lost" && /^qk_[0-9a-f]{32}$/.test(String(card.confirmKey)), JSON.stringify({ cards, problems }));
+    __failConfirmStepOnceForTests("park");
+    const cut = await runAsSession(repSession, () => scoped(() => runAssistantAction(card!)));
+    const between = await basePrisma.lead.findUnique({ where: { id: L.due }, select: { status: true } });
+    check("the park step fails: reopened, not parked — said so, and offered again", !cut.ok && cut.resumable === true && /is open again\. Couldn't finish moving it to Nurture just now/.test(cut.error ?? "")
+      && between?.status === "open" && (await reopened()) === 1, JSON.stringify({ cut, between }));
+    const done = await runAsSession(repSession, () => scoped(() => runAssistantAction(card!)));
+    const after = await basePrisma.lead.findUnique({ where: { id: L.due }, select: { status: true, nurtureTrigger: true } });
+    check("Confirm again: parked, and the reopen wasn't repeated", done.ok && after?.status === "nurture" && after.nurtureTrigger === "When his bonus comes in March" && (await reopened()) === 1, JSON.stringify({ done, after }));
+    const steps = await basePrisma.assistantPendingAction.findMany({ where: { id: { startsWith: `${card!.confirmKey}:` } }, select: { id: true, tenantId: true, userId: true, forCrm: true, completedAt: true } });
+    check("…each step's claim row done, in this workspace, for this person, never listed as waiting", steps.length === 2
+      && steps.every((s) => s.tenantId === T && s.userId === rep.id && s.forCrm && s.completedAt), JSON.stringify(steps));
   }
 }
 

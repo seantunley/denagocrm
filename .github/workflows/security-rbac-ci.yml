@@ -832,6 +832,12 @@ jobs:
         # rep's deal or customer, never the other workspace.
         run: npm run test:assistant-log-call
 
+      - name: DAX Nurture reviews and step-by-step Confirm -- a card that fails part-way finishes on Confirm again
+        # Nurture reviews come back to their salesperson only, and Reactivate is confirmed once. Risk assessment
+        # 2026-11-15 (assistantConfirmSteps): a nurture card whose park step fails after the reopen is offered again,
+        # and Confirm again parks it without reopening twice.
+        run: npm run test:assistant-nurture-reviews
+
       # "Whose number is this?" is raw SQL, so the soft-delete filter is not
       # applied for it. A number on a lead binned months earlier still matched:
       # that person's messages were filed on the deleted lead, where nobody sees
