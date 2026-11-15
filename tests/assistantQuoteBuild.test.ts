@@ -55,7 +55,11 @@ test("DAX is told to ask first, to use the catalogue only, and never to offer se
   assert.match(ACTION_INSTRUCTIONS, /\{"type":"quote_build","leadId":"<the leadId of a DEAL — a quote for that deal; give no contactId>","lines":\[\{"productId":"<id>","qty":1,"colour":"<as the catalogue lists it>"\}\],"fees":\[\{"label":"Delivery — Hermanus","amount":6500,"delivery":true\}\]\}/);
   assert.doesNotMatch(ACTION_INSTRUCTIONS, /"contactId":"[^"]*leadId/, "no example puts a lead id in contactId");
   assert.match(QUOTE_BUILD_RULE, /a contactId goes ONLY in contactId, a leadId ONLY in leadId, and a task gives one of them, not both/);
-  assert.match(QUOTE_BUILD_RULE, /ASK FIRST for everything you do not have, all in one message: which customer[^.]*which product\(s\), how many of each, any discount[^.]*and the colour/);
+  assert.match(QUOTE_BUILD_RULE, /ASK FIRST for what you do not have, all in one message: which customer and which product\(s\)\. /);
+  // Sean, 2026-11-15: asked twice about a discount he never mentioned.
+  assert.match(QUOTE_BUILD_RULE, /QUANTITY AND DISCOUNT HAVE DEFAULTS: one of each product and no discount, unless they said otherwise — never ask about either; the card shows the quantity and any discount before Confirm\./);
+  assert.match(QUOTE_BUILD_RULE, /do not ask for a colour they did not mention/);
+  assert.doesNotMatch(QUOTE_BUILD_RULE, /how many of each|any discount \(a percentage/);
   assert.match(QUOTE_BUILD_RULE, /Products come ONLY from the catalogue/);
   assert.match(QUOTE_BUILD_RULE, /The price is always the catalogue's: never put a price in the task/);
   assert.match(QUOTE_BUILD_RULE, /the PDF comes back to THEM on their linked WhatsApp/);

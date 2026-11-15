@@ -3364,7 +3364,7 @@ export async function resolveActions(
         ? quoteSheet.details.lines.map((line) => ({ productId: line.productId, product: line.product || undefined, qty: line.qty, discountPct: line.discountPct, colour: line.colour }))
         : p.lines ?? [];
       const askedFees = quoteSheet?.details.fees?.length ? quoteSheet.details.fees : p.fees ?? [];
-      if (!askedLines.length) { problems.push("Which products go on the quote, and how many of each?"); continue; }
+      if (!askedLines.length) { problems.push("Which products go on the quote?"); continue; }
       let forDeal: { id: string; label: string } | null = null;
       let customerId: string | null = null;
       let customerName = "";
