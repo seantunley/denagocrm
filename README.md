@@ -60,7 +60,7 @@ The **platform console** (`/platform`) handles workspaces, domains, plans, usage
 
 ## Local development
 
-Requires **Node 22+** and **PostgreSQL 16** (what CI uses).
+Requires **Node 24.x** and **PostgreSQL 16**: what CI, Vercel and `package.json` `engines` all use. Move them together (see the `//engines` note in `package.json`).
 
 > **Use a local, disposable Postgres.**
 > - Never point a local checkout at production.
