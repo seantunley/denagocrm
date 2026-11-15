@@ -7,6 +7,7 @@ import { codexRespond, isCodexConnected } from "./codex";
 import { isModuleEnabled } from "./modules/enabled";
 import { ownedWriteTenantId } from "./tenantWrite";
 import { applyLearn } from "./assistantMemoryStore";
+import { liveTurnsWhere } from "./assistantConversation";
 import { FLAG_PREFIX, TIDY_INSTRUCTIONS, inUseWhere, parseTidy, planTidy, type TidyEntry } from "./assistantMemory";
 import { resultsBlock } from "./crmAssistantPlan";
 
@@ -42,6 +43,8 @@ export async function runAssistantTidy(): Promise<number | null> {
   // Claim the day first: a failed run must not retry every 30 minutes.
   await putSetting(TIDY_LAST_KEY, new Date().toISOString());
 
+  // Nothing from a conversation its person deleted is learned from.
+  const live = await liveTurnsWhere(ownedWriteTenantId());
   const [notes, turns, wrong] = await Promise.all([
     // Not anyone's profile: "about you" is that person's own, it never leaves
     // their conversations — not even into this prompt. Nor a held conflict
@@ -49,7 +52,7 @@ export async function runAssistantTidy(): Promise<number | null> {
     // (not in use; the owner extends or removes it).
     prisma.assistantNote.findMany({ where: { ...inUseWhere(), kind: { not: "profile" } }, select: { id: true, kind: true, userId: true, createdById: true, content: true, status: true, name: true } }),
     prisma.assistantTurn.findMany({
-      where: { createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
+      where: { createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }, AND: [live] },
       orderBy: { createdAt: "asc" },
       take: 40,
       select: { question: true },
@@ -57,7 +60,7 @@ export async function runAssistantTidy(): Promise<number | null> {
     // Learning from outcomes: the answers people rated 👎 this week, with why —
     // a repeated cause becomes a playbook, for the owner to approve like any other.
     prisma.assistantTurn.findMany({
-      where: { feedback: "down", feedbackAt: { gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) } },
+      where: { feedback: "down", feedbackAt: { gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }, AND: [live] },
       orderBy: { feedbackAt: "desc" },
       take: 20,
       select: { question: true, answer: true, feedbackReason: true },

@@ -28,7 +28,7 @@ import { withCurrency } from "@/lib/currencyRules";
 /** How long a Confirm in the CRM waits for a built quote's PDF to go to WhatsApp before leaving it to the sweep. */
 const QUOTE_PDF_SEND_WAIT_MS = 4_000;
 import { prisma } from "@/lib/db";
-import { cancelActivity, rescheduleActivity, scheduleActivity, scheduleFollowUp } from "@/app/actions/activities";
+import { cancelActivity, logVoiceDebrief, rescheduleActivity, scheduleActivity, scheduleFollowUp } from "@/app/actions/activities";
 import { addCommunication } from "@/app/actions/communications";
 import { assignLead, convertLeadToContact, createLead, markLost, moveLead, reactivateNurturedLead, reopenLead } from "@/app/actions/leads";
 import { saveLeadNurture } from "@/app/actions/nurture";
@@ -255,6 +255,29 @@ export async function runAssistantAction(
         return on.contactId
           ? { ok: true, success: "Follow-up scheduled", href: `/contacts/${on.contactId}` }
           : { ok: true, success: "Added to your calendar", href: "/calendar" };
+      }
+      case "log_call": {
+        // The Log a call button's own save: activities.manage, access to THIS deal or customer, a completed call, its
+        // notes on the timeline and the follow-up — all checked again here, nothing taken from the card on trust.
+        // Its key is spent with the call: a second Confirm of this card files nothing more.
+        if (!CONFIRM_KEY.test(String(card.confirmKey ?? ""))) return untouched(STALE_CARD);
+        const on = card.leadId ? { leadId: card.leadId } : { contactId: card.contactId ?? null };
+        const result = await logVoiceDebrief({
+          ...on,
+          type: card.activity === "meeting" ? "meeting" : "call",
+          summary: card.summary,
+          notes: [card.notes, card.nextStep && `Next step: ${card.nextStep}`].filter(Boolean).join("\n\n"),
+          followUpDate: card.followUp,
+          nextStep: card.nextStep,
+          opKey: card.confirmKey,
+        });
+        // A delegate's error is returned unproven (the house rule). logVoiceDebrief is all or nothing and keyed, so a
+        // refusal wrote nothing and a retry of this card can never file the call twice.
+        if (!result.ok) return { ok: false, error: result.error ?? "Couldn't log it." };
+        const visit = card.activity === "meeting";
+        await confirmedOn(visit ? "log a visit" : "log a call", { leadId: card.leadId, contactId: card.contactId ?? null });
+        const success = card.followUp ? "Logged, and the follow-up is booked" : "Logged on the timeline";
+        return card.leadId ? { ok: true, success } : { ok: true, success, href: `/contacts/${card.contactId}` };
       }
       case "note": {
         const shot = screenshotFile(card.image);
@@ -1001,7 +1024,7 @@ export async function runAssistantAction(
  * the timeline). The recipient is read again here from the lead — never taken
  * from the browser — so an edited card can't redirect it.
  */
-export async function sendAssistantDraft(input: { leadId: string; channel: "whatsapp" | "email"; subject?: string; body: string; compositionId: string }): Promise<{ ok: boolean; error?: string; success?: string }> {
+export async function sendAssistantDraft(input: { leadId: string; channel: "whatsapp" | "email"; subject?: string; body: string; cc?: string; compositionId: string }): Promise<{ ok: boolean; error?: string; success?: string }> {
   return withActingStaffScope(async () => {
     const user = await requireAnyPermission(...ASSISTANT_PERMISSIONS);
     if (!(await isModuleEnabled("automation"))) {
@@ -1032,6 +1055,9 @@ export async function sendAssistantDraft(input: { leadId: string; channel: "what
       const subject = String(input.subject ?? "").trim().slice(0, 150);
       if (!subject) return { ok: false, error: "Add a subject first." };
       form.set("to", to);
+      // As the card showed it, and as the person left it — the composer checks every address (parseAddressList).
+      const cc = String(input.cc ?? "").trim().slice(0, 800);
+      if (cc) form.set("cc", cc);
       form.set("subject", subject);
       form.set("bodyHtml", body.split(/\n{2,}/).map((p) => `<p>${escapeHtml(p).replace(/\n/g, "<br>")}</p>`).join(""));
       form.set("revalidate", `/leads/${input.leadId}`);

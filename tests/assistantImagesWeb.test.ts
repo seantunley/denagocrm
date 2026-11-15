@@ -181,7 +181,8 @@ test("the search won't look up private people, treats pages as data, and the ans
 test("a spoken question costs one ask: transcription has its own limit", () => {
   const voice = code("src/app/actions/voice.ts");
   assert.doesNotMatch(voice, /assistantAskAllowed/);
-  assert.equal((voice.match(/assistantVoiceAllowed\(user\.id\)/g) ?? []).length, 2);
+  // The question, a recorded/dictated call, and typed call notes (each written up by ChatGPT).
+  assert.equal((voice.match(/assistantVoiceAllowed\(user\.id\)/g) ?? []).length, 3);
   const limits = code("src/lib/assistantUser.ts");
   for (const key of ["assistant-voice", "assistant-image", "assistant-web"]) assert.ok(limits.includes(`rateLimitKey("${key}", userId)`), key);
 });

@@ -27,7 +27,7 @@ export const OUTCOME_LABELS: Record<Outcome, string> = {
 export const FAMILIES: readonly { key: string; label: string; kinds: readonly Kind[]; outcome: Outcome | null }[] = [
   { key: "follow_ups", label: "Follow-ups & reminders", kinds: ["follow_up", "reschedule"], outcome: "reply" },
   { key: "messages", label: "Messages drafted", kinds: ["draft_message"], outcome: "reply" },
-  { key: "notes", label: "Notes", kinds: ["note", "customer_note"], outcome: "reply" },
+  { key: "notes", label: "Notes & calls logged", kinds: ["note", "customer_note", "log_call"], outcome: "reply" },
   // Parking a deal in Nurture (#938), bringing it back (#943) and reopening a lost one are stage decisions: what
   // counts after them is the deal moving on, or being won.
   { key: "stage", label: "Stage & assignment", kinds: ["stage", "assign", "nurture", "reactivate", "reopen"], outcome: "progress" },
@@ -52,6 +52,7 @@ const CONFIRMED = "Confirmed the assistant's proposal: ";
 const SUMMARY_KINDS: [RegExp, Kind][] = [
   [/^schedule an? /, "follow_up"],
   [/^add a note\b/, "note"],
+  [/^log a (call|visit)$/, "log_call"],
   [/^add a new customer$/, "create_customer"],
   [/^open a lead$/, "create_lead"],
   [/^file a document$/, "attach_file"],

@@ -34,4 +34,5 @@ export const SOFT_DELETE_MODELS = new Set([
   "DemoVehicle",
   "TestDriveBooking",
   "Vendor",
+  "AssistantConversation",
 ]);

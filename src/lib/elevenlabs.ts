@@ -147,7 +147,7 @@ export function sttKeyterms(words: readonly (string | null | undefined)[]): stri
 }
 
 /** As elevenLabsSTTDetailed, but says when the key itself was refused. `keyterms`: names to expect (sttKeyterms). */
-export async function elevenLabsSTTChecked(buffer: Buffer, contentType = "audio/ogg", opts: { keyterms?: readonly string[] } = {}): Promise<Transcript | SttRefusal | null> {
+export async function elevenLabsSTTChecked(buffer: Buffer, contentType = "audio/ogg", opts: { keyterms?: readonly string[]; timeoutMs?: number } = {}): Promise<Transcript | SttRefusal | null> {
   const apiKey = await getProviderKey("ELEVENLABS_API_KEY");
   if (!apiKey) return null;
   const model = (await getSetting("ELEVENLABS_STT_MODEL")) || DEFAULT_STT_MODEL;
@@ -166,7 +166,8 @@ export async function elevenLabsSTTChecked(buffer: Buffer, contentType = "audio/
       method: "POST",
       headers: { "xi-api-key": apiKey },
       body: form,
-      signal: AbortSignal.timeout(30000),
+      // A recorded call runs to 15 minutes; a voice note or a question is seconds.
+      signal: AbortSignal.timeout(opts.timeoutMs ?? 30000),
     });
     if (!res.ok) {
       const body = await res.text().catch(() => "");
