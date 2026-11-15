@@ -112,10 +112,15 @@ export async function pendingApprovalsFor(user: PermissionUser) {
   const steps = await prisma.approvalStep.findMany({
     where: {
       status: "pending",
+      // canActOnStep's own rule, in the query BEFORE the limit (re-review of #1111): filtered only afterwards, the first
+      // 100 pending steps could all be other approvers' and hide this person's.
+      ...(user.role === "owner" ? {} : { assigneeType: "staff", assigneeUserId: user.id }),
       request: { deletedAt: null, status: { notIn: [...CLOSED_REQUEST_STATUSES] }, AND: [mine] },
     },
     include: { request: { select: { id: true, title: true } } },
     orderBy: { createdAt: "asc" },
+    // A display limit: the oldest 100 this person may decide. An owner may decide every step, so for an owner it is the
+    // workspace's oldest 100 pending (#1114).
     take: 100,
   });
   return steps.filter((step) => canActOnStep(step, user));

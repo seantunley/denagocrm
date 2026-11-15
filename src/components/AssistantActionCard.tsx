@@ -30,6 +30,7 @@ export default function AssistantActionCard({
   const draft = card.kind === "draft_message" ? card : null;
   const [subject, setSubject] = useState(draft?.subject ?? "");
   const [body, setBody] = useState(draft?.body ?? "");
+  const [cc, setCc] = useState(draft?.cc?.join(", ") ?? "");
   // One per card: a second press after a dropped connection is the same message, not a second one.
   // A saved card keeps the SAME id across reloads, so sending it again after a reload is still the same message.
   const [compositionId] = useState(() => (savedId ? `dax-saved-${savedId}` : `dax-${card.id}-${Math.random().toString(36).slice(2)}`));
@@ -63,7 +64,7 @@ export default function AssistantActionCard({
   const send = () =>
     draft &&
     startTransition(async () => {
-      const result = await sendAssistantDraft({ leadId: draft.leadId, channel: draft.channel, subject, body, compositionId })
+      const result = await sendAssistantDraft({ leadId: draft.leadId, channel: draft.channel, subject, body, cc, compositionId })
         .catch(() => ({ ok: false, error: "Couldn't reach the server — check the conversation before trying again." }));
       setMessage(result.ok ? ("success" in result && result.success) || "Sent" : result.error ?? "That didn't send.");
       if (result.ok) {
@@ -146,6 +147,17 @@ export default function AssistantActionCard({
               maxLength={150}
               placeholder="Subject"
               aria-label="Subject"
+              className="w-full rounded-md border border-border bg-background px-2 py-1 text-xs"
+            />
+          )}
+          {draft.channel === "email" && (
+            <input
+              value={cc}
+              onChange={(e) => setCc(e.target.value)}
+              disabled={!editable}
+              maxLength={800}
+              placeholder="Cc (optional)"
+              aria-label="Cc"
               className="w-full rounded-md border border-border bg-background px-2 py-1 text-xs"
             />
           )}

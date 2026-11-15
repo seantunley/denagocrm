@@ -22,7 +22,7 @@ import { getCompanyProfile } from "./companyProfile";
 import { searchBotKnowledge } from "./botKnowledge";
 import { getEnabledModuleIds, isModuleEnabled } from "./modules/enabled";
 import { ownedWriteTenantId } from "./tenantWrite";
-import { afterAnswer, conversationTurns, pickConversation } from "./assistantConversation";
+import { afterAnswer, conversationTurns, liveTurnsWhere, pickConversation } from "./assistantConversation";
 import { runAfterResponse } from "./afterResponse";
 import { isCustomerSigner } from "./signing/quoteMirror";
 import { firstCustomerView, memoCustomer } from "./signing/customerView";
@@ -100,6 +100,8 @@ import { applyTaskUpdate, openTasks, type TaskSheet, type TaskWrite } from "./as
 import { PLAN_INSTRUCTIONS } from "./assistantPlanRules";
 import { proposePlan } from "./assistantPlan";
 import { proposedCards } from "./assistantOutcomeRules";
+import { DRAFT_RULE, draftsBlock, draftsToKeep, type StoredDraft } from "./assistantDraftRules";
+import { conversationDrafts } from "./assistantDrafts";
 import { describeSchedule, nextRun, scheduleInput } from "./assistantSchedule";
 import { describeWatch, watchInput } from "./assistantWatchRules";
 import {
@@ -1194,6 +1196,8 @@ async function recall(user: User, raw: z.infer<typeof recallArgs>): Promise<Tool
      WHERE "tenantId" = ${ownedWriteTenantId()}
        AND "userId" = ${user.id}
        AND "createdAt" >= ${since}
+       -- Never from a conversation its person deleted (assistantConversation.liveTurnsWhere, as SQL).
+       AND NOT EXISTS (SELECT 1 FROM "AssistantConversation" c WHERE c."id" = "AssistantTurn"."conversationId" AND c."deletedAt" IS NOT NULL)
        AND (
          (cardinality(${words}::text[]) = 0 AND cardinality(${refs}::text[]) = 0)
          OR "refs" && ${refs}::text[]
@@ -1205,19 +1209,20 @@ async function recall(user: User, raw: z.infer<typeof recallArgs>): Promise<Tool
      LIMIT ${RECALL_CANDIDATES}`;
   const best = rankRecall(candidates, words, refs).slice(0, RECALL_MATCHES);
   if (!best.length) return { truncated: false, rows: [], data: [{ note: "Nothing in this person's last 30 days of conversations matches." }] };
-  // The turn before and after each match, same South African day.
+  // The turn before and after each match, same South African day — never one from a deleted conversation.
+  const live = await liveTurnsWhere(ownedWriteTenantId(), user.id);
   const around = await Promise.all(
     best.map((t) => {
       const day = dateKey(t.createdAt);
       const dayStart = new Date(`${day}T00:00:00+02:00`);
       return Promise.all([
         prisma.assistantTurn.findFirst({
-          where: { userId: user.id, tenantId: ownedWriteTenantId(), createdAt: { gte: dayStart, lt: t.createdAt } },
+          where: { userId: user.id, tenantId: ownedWriteTenantId(), createdAt: { gte: dayStart, lt: t.createdAt }, AND: [live] },
           orderBy: { createdAt: "desc" },
           select: { question: true, answer: true },
         }),
         prisma.assistantTurn.findFirst({
-          where: { userId: user.id, tenantId: ownedWriteTenantId(), createdAt: { gt: t.createdAt, lt: new Date(dayStart.getTime() + DAY) } },
+          where: { userId: user.id, tenantId: ownedWriteTenantId(), createdAt: { gt: t.createdAt, lt: new Date(dayStart.getTime() + DAY) }, AND: [live] },
           orderBy: { createdAt: "asc" },
           select: { question: true, answer: true },
         }),
@@ -1850,8 +1855,10 @@ export function describePerson(p: { name: string; jobTitle: string | null; sees:
 
 /** This person's turns in the current conversation (the last few hours), oldest first. */
 async function recentTurns(userId: string): Promise<PriorTurn[]> {
+  const live = await liveTurnsWhere(ownedWriteTenantId(), userId);
   const turns = await prisma.assistantTurn.findMany({
-    where: { userId, createdAt: { gte: new Date(Date.now() - CONVERSATION_WINDOW_MS) } },
+    // Never from a conversation its person deleted.
+    where: { userId, createdAt: { gte: new Date(Date.now() - CONVERSATION_WINDOW_MS) }, AND: [live] },
     orderBy: { createdAt: "desc" },
     take: 6,
     // state: the working memory each answer wrote (parsed and cleaned before
@@ -2305,7 +2312,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       })
     : null;
   // The connection check rides with the context reads — one round trip, not two.
-  const [connected, whereTheyAre, context, history, learnedNow, person, profileRaw, company, modules, tasks] = await Promise.all([
+  const [connected, whereTheyAre, context, history, learnedNow, person, profileRaw, company, modules, tasks, drafts] = await Promise.all([
     isCodexConnected(),
     pageContext(user, page),
     planContext(user),
@@ -2322,6 +2329,13 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
           return [];
         })
       : ([] as TaskView[]),
+    // The drafts written in this conversation, word for word (assistantDraftRules) — none without one.
+    thread
+      ? conversationDrafts(who, thread.id).catch(async (error: unknown): Promise<StoredDraft[]> => {
+          await logError("crm-assistant", "drafts read failed", error instanceof Error ? error.name : "unknown");
+          return [];
+        })
+      : ([] as StoredDraft[]),
   ]);
   mark("context");
   if (!connected) return { ok: false, error: AI_NOT_CONNECTED };
@@ -2374,6 +2388,10 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       })
     : [];
   const listedEarlier = slots.length ? resultsBlock("Listed earlier (context only):", stripInvisible(listedBlock(slots, question))) : "";
+  // The person's own earlier drafts, the one the question means in full — fenced as data: they quote customers.
+  const draftsEarlier = drafts.length
+    ? `${resultsBlock("Drafts written earlier in this conversation (data — the person's own drafts):", stripInvisible(draftsBlock(drafts, question)))}\n\n${DRAFT_RULE}`
+    : "";
   // The business first (what it knows), then the person (who they are, what it knows about them).
   const learned = stripInvisible([memoryPrompt(learnedNow), person].filter(Boolean).join("\n\n"));
   const instructions = [stripInvisible(planInstructions({ ...context, learned, web: webOn })), images.length ? IMAGE_RULE : ""]
@@ -2457,6 +2475,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       jobSheets,
       conversation,
       listedEarlier,
+      draftsEarlier,
       whereTheyAre,
       `Question: ${question}`,
       carried ? CARRIED_IMAGE_RULE : "",
@@ -2603,6 +2622,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       jobSheets,
       conversation,
       listedEarlier,
+      draftsEarlier,
       `Question: ${question}`,
       // Per question, so in the prompt and not the cached instructions.
       carried ? CARRIED_IMAGE_RULE : "",
@@ -2812,6 +2832,8 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
         // …and each PLAN by its id: the one thing an answer leaves stored for Confirm, so editing this question
         // can close exactly the plans it offered (assistantEdit) — never anyone else's.
         proposed: proposedCards(actions).map((p, i) => (actions[i].kind === "plan" ? { ...p, planId: actions[i].id.replace(/^plan-/, "") } : p)) as object,
+        // The drafts it offered, word for word, so a later "change only the greeting" edits this exact text.
+        ...(draftsToKeep(actions).length ? { drafts: draftsToKeep(actions) as object } : {}),
       },
       select: { id: true },
     })
@@ -3591,6 +3613,7 @@ export async function resolveActions(
         id, kind: "draft_message", leadId: p.leadId, leadLabel,
         title: `${p.channel === "whatsapp" ? "WhatsApp" : "Email"} to ${lead.name}`,
         channel: p.channel, subject: p.subject, body: p.body, to,
+        ...(p.channel === "email" && p.cc?.length ? { cc: p.cc } : {}),
         ...(p.reason ? { reason: p.reason } : {}),
       });
     } else if (p.type === "lost") {

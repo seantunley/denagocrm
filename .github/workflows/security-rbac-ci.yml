@@ -757,6 +757,12 @@ jobs:
       - name: Assistant -- editing a question withdraws only what that answer offered
         run: npm run test:assistant-edit
 
+      # DAX_Conversational_Upgrades §1: a draft four turns back comes back word for word — full body, deal, subject,
+      # Cc — and an email stays (Cc and all) beside its WhatsApp variant; never a colleague's, another conversation's
+      # or another workspace's.
+      - name: Assistant -- earlier drafts come back word for word, only this person's in this conversation
+        run: npm run test:assistant-drafts
+
       # DAX report PDFs (review of #1093): with tenant enforcement OFF, the same person's answer from another
       # workspace is "not found" — never printed under this workspace's name and logo.
       - name: Assistant -- a report PDF only from an answer in this workspace
@@ -785,6 +791,12 @@ jobs:
       # person may open it; never a licence number, emergency contact or incident report; the other workspace nothing.
       - name: DAX test drives -- held to the test-drives page's own rule
         run: npm run test:assistant-test-drives
+
+      # Sean, 2026-11-14: "no search across past conversations, and no rename or delete". Search finds only the
+      # person's own live conversations; rename/delete writes can't reach a colleague's or another workspace's; a
+      # deleted conversation leaves the list, the picker and what DAX recalls; the purge removes it after 60 days.
+      - name: DAX conversations -- search, rename and delete, only your own
+        run: npm run test:assistant-conversation-manage
 
       # A scheduled briefing going to a linked phone: what is waiting, claimed
       # before it is sent and released when it could not be, the template nudge
