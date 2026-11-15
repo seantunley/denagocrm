@@ -46,7 +46,7 @@ import {
 } from "./permissions";
 import { ASSISTANT_PROFILE_KEY, parseProfile, selfKnowledge, soulText } from "./assistantSoul";
 import { LEARN_INSTRUCTIONS, memoryPrompt, methodInstructions } from "./assistantMemory";
-import { researchGate } from "./assistantResearchGate";
+import { isComparison, missingEvidence, peopleInResult, researchGate } from "./assistantResearchGate";
 import { DEPTH_BUDGETS, HARD_DEADLINE_MS, MIN_CALL_MS, deepen, parseLedger, recheckBudgetMs, researchLeftMs, roundFits, startingDepth, type Depth } from "./assistantDepth";
 import { matchDecisions, parseDecision } from "./assistantDecisions";
 import { CITE_RULE, REPLY_FORMAT, SPOKEN_RULE, STATE_INSTRUCTIONS, citableLinks, resolveCitations, splitReply, type Evidence } from "./assistantReply";
@@ -66,6 +66,7 @@ import { competitorsLookup, targetsLookup } from "./assistantTargetsLookup";
 import { CUSTOM_FIELD_TOOLS, customFieldsLookup, withCustomFields } from "./assistantCustomFieldsLookup";
 import { customersLookup } from "./assistantCustomersLookup";
 import { dealFileLookup, suppliersLookup } from "./assistantDealFileLookup";
+import { fleetsLookup, partsLookup } from "./assistantPartsFleetsLookup";
 import { notesLookup } from "./assistantNotesLookup";
 import { stuckDealsLookup } from "./assistantStuckDeals";
 import { countQuoted, modelsNamed, quoteLineWhere } from "./quotedProducts";
@@ -1780,6 +1781,8 @@ async function runTool(user: User, step: ToolStep): Promise<ToolOutput> {
     case "customers": return customersLookup(user, step.args);
     case "deal_file": return dealFileLookup(user, step.args);
     case "suppliers": return suppliersLookup(user, step.args);
+    case "parts": return partsLookup(user, step.args);
+    case "fleets": return fleetsLookup(user, step.args);
     case "notes": return notesLookup(user, step.args);
     case "stuck_deals": return stuckDealsLookup(user);
     case "knowledge": return knowledge(user, step.args);
@@ -2514,6 +2517,10 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   // Stopped by the person (opts.stillWanted): it ends at the next step, having written nothing.
   const stopped = async (final = false) => (opts.stillWanted ? !(await opts.stillWanted(final)) : false);
   const STOPPED: AssistantResult = { ok: false, error: "Stopped." };
+  // A comparison's gate checks the people the QUESTION names (review of #1121), so it needs the workspace's staff
+  // names — looked up only for a comparison. A failed read is "no names": the gate falls back to the lookups' own.
+  const staffNames = research && isComparison(question) ? (await listActingTenantStaff().catch(() => [])).map((s) => s.name) : [];
+  const gateSteps = () => observations.map((o) => ({ tool: o.tool, args: o.args, people: peopleInResult(o.tool, o.output.data) }));
   for (let step = 0; research && step < budget().maxSteps && observations.length < budget().maxLookups; step++) {
     if (await stopped()) return STOPPED;
     // Stop researching if the budget (or the answer reserve) can't fit another round.
@@ -2567,6 +2574,8 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     const gate = researchGate({
       question,
       tools: observations.map((o) => o.tool),
+      steps: gateSteps(),
+      staff: staffNames,
       lastRoundEmpty: lastEmpty,
       planSaysAnswer: enough,
       stepsUsed: step + 1,
@@ -2576,6 +2585,11 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     if (gate === "continue") continue;
     if (gate === "answer" || enough) break;
   }
+  // Research stopped short of what the question's subject needs (out of rounds, or the plan gave up): the answer is
+  // told exactly what wasn't checked, so it says so instead of filling the gap (DAX_Conversational_Upgrades item 4).
+  const evidenceGap = observations.length
+    ? missingEvidence(question, observations.map((o) => o.tool), gateSteps(), staffNames)
+    : null;
   // For the owner's speed view (assistantRun.runSpeed): numbers only — 1 = investigated, 0 = quick; and, when the
   // research step said, whether it still thought another lookup would change the answer when it stopped.
   timings.depth = depth === "investigate" ? 1 : 0;
@@ -2642,6 +2656,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       observations.length
         ? resultsBlock("What the CRM returned:", observations.map(observationText).join("\n\n"))
         : "No lookup was needed for this question.",
+      evidenceGap ? `Not checked: ${evidenceGap}. Say plainly that this wasn't checked — don't answer that part from the other results.` : "",
       route === "wording" ? WORDING_EDIT_RULE : "",
       // Per question (only when the answer will be spoken), so in the prompt and not the cached instructions.
       opts.spoken ? SPOKEN_RULE : "",
