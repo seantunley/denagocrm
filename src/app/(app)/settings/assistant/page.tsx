@@ -1,10 +1,11 @@
 import type { ReactNode } from "react";
 import { notFound } from "next/navigation";
 import { requireTenantOwner } from "@/lib/auth";
-import { getSetting } from "@/lib/settings";
+import { getSetting, getWorkspaceSetting } from "@/lib/settings";
+import { OUTCOME_LEARNING_KEY, OUTCOME_LEARNING_LAST_KEY, OUTCOME_LEARNING_SUMMARY_KEY, WINDOW_DAYS as OUTCOME_WINDOW_DAYS, outcomeLearningOn } from "@/lib/outcomeLearning";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { ASSISTANT_PROFILE_KEY, DEFAULT_SOUL, LOCKED_RULES, TONES, WORKSPACE_INSTRUCTIONS_CHARS, parseProfile, type Tone } from "@/lib/assistantSoul";
-import { saveAssistantProactive, saveAssistantProfile, saveAssistantWhatsAppCard } from "@/app/actions/assistantSettings";
+import { checkOutcomesNow, saveAssistantProactive, saveAssistantProfile, saveAssistantWhatsAppCard, saveOutcomeLearning } from "@/app/actions/assistantSettings";
 import { ASSISTANT_PROACTIVE_KEY, proactiveOn } from "@/lib/proactiveRules";
 import { ASSISTANT_VOICE_REPLIES_KEY, voiceRepliesSwitchOn } from "@/lib/assistantVoiceRules";
 import { SettingsWorkspace } from "@/components/settings-workspace";
@@ -142,6 +143,17 @@ export default async function AssistantSettingsPage() {
       await logError("assistant-outcomes", "counting suggestions failed", error instanceof Error ? error.name : "unknown").catch(() => {});
       return "failed" as const;
     });
+  // Learning from outcomes: its switch and last result, named by this workspace.
+  const learning = await actingOwnerTenantId()
+    .then(async (tenantId) => {
+      const [on, last, summary] = await Promise.all([
+        getWorkspaceSetting(tenantId, OUTCOME_LEARNING_KEY).then(outcomeLearningOn),
+        getWorkspaceSetting(tenantId, OUTCOME_LEARNING_LAST_KEY),
+        getWorkspaceSetting(tenantId, OUTCOME_LEARNING_SUMMARY_KEY),
+      ]);
+      return { on, last, summary };
+    })
+    .catch(() => ({ on: false, last: null, summary: null }));
   const rated = (rating: string) => ratings.filter((r) => r.feedback === rating).reduce((n, r) => n + r._count._all, 0);
   const wrongBecause = ratings.filter((r) => r.feedback === "down" && r.feedbackReason);
   const nameOf = new Map(staff.map((s) => [s.id, s.name]));
@@ -539,6 +551,31 @@ export default async function AssistantSettingsPage() {
             (&ldquo;for October…&rdquo;) stops being used after its last day and shows as expired.{" "}
             {tidiedAt ? `Last tidy-up ${formatDateTime(new Date(tidiedAt))}: ${tidySummary ?? "in progress"}.` : "It hasn't tidied yet."}
           </p>
+          <div className="space-y-2 rounded-md border border-border/60 p-3">
+            <SaveForm action={saveOutcomeLearning} resetOnSuccess={false} className="space-y-2">
+              <label className="flex items-start gap-2 text-sm">
+                <input type="checkbox" name="outcomeLearning" defaultChecked={learning.on} className="mt-1 accent-primary" />
+                <span>
+                  <span className="font-medium">Suggest playbook updates from won deals</span>
+                  <span className="block text-xs text-muted-foreground">
+                    Once a week it compares the deals won and lost in the last {OUTCOME_WINDOW_DAYS} days — how fast the
+                    first contact was, follow-ups after a quote, calls, and when messages got answered — and suggests a
+                    playbook with the numbers behind each point. Counts only, never a customer or a message. It waits
+                    below for you to approve, edit or remove; nobody&apos;s DAX uses it until you approve it.
+                  </span>
+                </span>
+              </label>
+              <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
+            </SaveForm>
+            {learning.on && (
+              <SaveForm action={checkOutcomesNow} resetOnSuccess={false} className="flex flex-wrap items-center gap-3">
+                <SaveButton className="btn-secondary btn-sm">Check now</SaveButton>
+                <span className="text-xs text-muted-foreground">
+                  {learning.last ? `Last checked ${formatDateTime(new Date(learning.last))}: ${learning.summary ?? "in progress"}.` : "It hasn't checked yet."}
+                </span>
+              </SaveForm>
+            )}
+          </div>
           <AssistantLearnedReview notes={learned} />
         </div>
       </details>
