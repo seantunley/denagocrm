@@ -27,6 +27,7 @@ import { logError } from "./errorLog";
 import { rateLimitKey, registerRateLimitAttempt } from "./rateLimit";
 import { readUserSecurityStateStrict } from "./userSecurity";
 import { isQuietHour } from "./proactiveRules";
+import { BURST_QUIET_MS, BURST_STALE_MS, BURST_WAIT_MAX_MS, burstTurn, joinedQuestion, sentAtFrom } from "./assistantWhatsAppBurst";
 import {
   ASSISTANT_WHATSAPP_CONTENT_TEMPLATE_KEY,
   ASSISTANT_WHATSAPP_KEY,
@@ -153,7 +154,8 @@ export async function handleStaffWhatsApp(
   from: string,
   input: StaffWhatsAppInput,
   messageId?: string | null,
-  opts: { defer?: (answer: () => Promise<void>) => void } = {},
+  /** sentAt: Meta's message timestamp — the order messages sent seconds apart are joined in (assistantWhatsAppBurst). */
+  opts: { defer?: (answer: () => Promise<void>) => void; sentAt?: unknown } = {},
 ): Promise<boolean> {
   // A REAL workspace scope or nothing. withChannelTenantScope binds one only
   // when the business number is mapped to a workspace; an unmapped number runs
@@ -238,6 +240,8 @@ export async function handleStaffWhatsApp(
   if (!user) return false;
 
   // EVERY CHECK HAS PASSED: this is a staff question, handled by DAX whatever follows — nothing below returns false.
+  // The messages this answer took from the waiting list (joinBurst), let go however the answer ends.
+  let releaseBurst: (() => Promise<unknown>) | null = null;
   const answer = async (): Promise<boolean> => {
 
   // THEY HAVE JUST WRITTEN, so WhatsApp's 24 hours are open: whatever the
@@ -400,7 +404,7 @@ export async function handleStaffWhatsApp(
     question = input.caption.trim() || IMAGE_QUESTION;
   }
   // What was FORWARDED — a customer's message or voice note — is kept whole (FORWARDED_CHARS); a question is capped.
-  const forwarded = forwardedVoice || String(question ?? "").startsWith(FORWARDED_PREFIX);
+  let forwarded = forwardedVoice || String(question ?? "").startsWith(FORWARDED_PREFIX);
   let q = String(question ?? "").trim().slice(0, forwarded ? FORWARDED_CHARS : QUESTION_CHARS);
   // "2" = the second numbered option in DAX's last answer here, in its words.
   if (/^\s*\d{1,2}\s*[.)]?\s*$/.test(q)) {
@@ -414,6 +418,20 @@ export async function handleStaffWhatsApp(
   if (!q) {
     await sendPlan(waId, { texts: ["Ask me anything about your leads, quotes or calendar."], buttons: null });
     return true;
+  }
+  // A TYPED message (or a shared contact) may be one of several sent seconds apart: they are answered together, in
+  // the order sent, after any answer of theirs still running. Not a tapped button, a "yes", a photo, a file or a
+  // voice note — those were dealt with above, or are answered on their own as before.
+  if ("text" in input && !input.choiceId && messageId) {
+    const burst = await joinBurst(tenantId, user.id, messageId, q, sentAtFrom(opts.sentAt));
+    if (!burst) {
+      await typing;
+      return true; // a newer message of theirs answers this one with it
+    }
+    releaseBurst = burst.release;
+    q = burst.question;
+    // A forwarded customer message among them makes the whole question forwarded: the safe way round.
+    forwarded = forwarded || q.includes(FORWARDED_PREFIX);
   }
 
   // The AssistantTurn askCrm saves (source "whatsapp") is the record of this
@@ -490,11 +508,53 @@ export async function handleStaffWhatsApp(
   await Promise.all([typing, ...typingCalls]);
   return true;
   };
+  // Only once the answer, its reply and its Confirm cards exist may the next message of theirs be read.
+  const run = async () => {
+    try {
+      return await answer();
+    } finally {
+      await releaseBurst?.().catch(() => {});
+    }
+  };
   if (opts.defer) {
-    opts.defer(async () => { await answer(); });
+    opts.defer(async () => { await run(); });
     return true;
   }
-  return answer();
+  return run();
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * One typed message into the person's waiting list (assistantWhatsAppBurst). Null: another message of theirs answers
+ * it. Otherwise the waiting messages it took, joined as one question, and `release` for when the answer is done.
+ * Every read and write names the workspace AND the person.
+ */
+async function joinBurst(tenantId: string, userId: string, messageId: string, text: string, sentAt: Date): Promise<{ question: string; release: () => Promise<unknown> } | null> {
+  const waiting = basePrisma.assistantWhatsAppWaiting;
+  const started = Date.now();
+  // Never joined to a new question: a message left behind by an answer that died.
+  await waiting.deleteMany({ where: { tenantId, createdAt: { lt: new Date(started - BURST_STALE_MS) } } });
+  const added = await waiting.createMany({ data: [{ tenantId, userId, messageId, text, sentAt }], skipDuplicates: true });
+  if (added.count === 0) return null; // already waiting: this message is being answered
+  const select = { messageId: true, text: true, sentAt: true, createdAt: true, claimedBy: true, claimedAt: true } as const;
+  for (;;) {
+    await sleep(BURST_QUIET_MS);
+    const rows = await waiting.findMany({ where: { tenantId, userId }, select, take: 100 });
+    const turn = burstTurn(rows, messageId, Date.now());
+    if (turn === "gone" || turn === "handed") return null;
+    // ponytail: polls every few seconds while an earlier answer runs; fine for one person's handful of messages.
+    if (turn === "wait" && Date.now() - started < BURST_WAIT_MAX_MS) continue;
+    break;
+  }
+  await waiting.updateMany({ where: { tenantId, userId, claimedBy: null }, data: { claimedBy: messageId, claimedAt: new Date() } });
+  const taken = await waiting.findMany({ where: { tenantId, userId, claimedBy: messageId }, select });
+  // Another answer took this one between the look and the claim: it is answered there.
+  if (!taken.some((row) => row.messageId === messageId)) return null;
+  return {
+    question: joinedQuestion(taken),
+    release: () => waiting.deleteMany({ where: { tenantId, userId, claimedBy: messageId } }),
+  };
 }
 
 /**

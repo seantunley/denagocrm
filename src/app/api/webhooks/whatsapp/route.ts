@@ -145,7 +145,7 @@ export async function POST(req: NextRequest) {
               if (message.type === "text") {
                 const text = message.text?.body ?? "";
                 // Forwarded: DAX is told it is someone else's message (only on the staff path; a customer's is recorded as sent).
-                if (await handleStaffWhatsApp(from, { text: forwardedForDax(message, text) }, message.id, { defer })) return;
+                if (await handleStaffWhatsApp(from, { text: forwardedForDax(message, text) }, message.id, { defer, sentAt: message.timestamp })) return;
                 if (await held("text", text, text)) return;
                 await link(await recordInboundWhatsApp(from, profileName, text, String(message.id ?? "")));
                 await runWhatsAppBot(from, { text }, { entryContext });
@@ -205,7 +205,7 @@ export async function POST(req: NextRequest) {
                 // A contact shared from a phone. From linked staff it asks DAX to add them as a customer (a card with
                 // Confirm — nothing is created before that). From anyone else it is left alone, as it always was.
                 const question = sharedContactQuestion(message.contacts);
-                if (question) await handleStaffWhatsApp(from, { text: question }, message.id, { defer });
+                if (question) await handleStaffWhatsApp(from, { text: question }, message.id, { defer, sentAt: message.timestamp });
               } else if (message.type === "audio" || message.type === "voice") {
                 const mediaId: string | undefined = message.audio?.id ?? message.voice?.id;
                 if (!mediaId) return;

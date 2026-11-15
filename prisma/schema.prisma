@@ -1180,6 +1180,29 @@ model AssistantTurn {
 /// such as one per customer or deal"). Private to the person, in one workspace. Asking on a deal's or customer's
 /// page continues THEIR conversation. `summary` keeps what has fallen out of the last six exchanges (longer memory:
 /// assistantConversation.foldOlderTurns), so a long thread keeps its thread.
+/// A typed WhatsApp message to the assistant, waiting a few seconds in case the next one belongs with it
+/// (assistantWhatsAppBurst — Sean, 2026-11-15). Short-lived: removed once answered, and anything older than ten
+/// minutes is removed unanswered. Never a customer's message.
+model AssistantWhatsAppWaiting {
+  id        String    @id @default(cuid())
+  tenantId  String
+  userId    String
+  /// Meta's message id.
+  messageId String
+  /// The question as it would have been asked alone (capped like any WhatsApp question).
+  text      String
+  /// When it was sent (Meta's timestamp): the order they are joined in.
+  sentAt    DateTime
+  /// The message whose answer took it, and when. Null: still waiting.
+  claimedBy String?
+  claimedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  @@unique([tenantId, messageId])
+  @@index([tenantId, userId, sentAt])
+  @@index([tenantId, createdAt])
+}
+
 model AssistantConversation {
   id        String   @id @default(cuid())
   tenantId  String
