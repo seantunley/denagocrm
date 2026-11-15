@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
-import { ACTION_INSTRUCTIONS, customerChangesText, parseActionList } from "../src/lib/assistantActions";
+import { ACTION_INSTRUCTIONS, customerChangesText, parseActionList, unlinkedOpenQuotesWhere } from "../src/lib/assistantActions";
 import { WHATSAPP_CONFIRMABLE } from "../src/lib/assistantWhatsAppRules";
 import { contactFormFor, type ContactRecord } from "../src/lib/contactFormFor";
 
@@ -20,7 +20,8 @@ test("the proposals: a lead for a customer or a new person; a change to named fi
   const lead = { type: "create_lead", contactId: ID, product: "Rover XL", notes: "Wants white" };
   assert.deepEqual(parseActionList([lead]), [lead]);
   assert.equal(parseActionList([{ type: "create_lead", firstName: "Jane", phone: "082 555 1234" }]).length, 1);
-  assert.deepEqual(parseActionList([{ ...lead, stageId: "x" }]), [], "the stage and owner are the form's");
+  assert.deepEqual(parseActionList([{ ...lead, stageId: "x" }]), [], "a stage is named, never given by id; the owner is the form's");
+  assert.deepEqual(parseActionList([{ ...lead, stage: "Quoted" }]), [{ ...lead, stage: "Quoted" }]);
   const change = { type: "update_customer", contactId: ID, phone: "083 222 1111", city: "Stellenbosch" };
   assert.deepEqual(parseActionList([change]), [change]);
   for (const bad of [{ ...change, notes: "x" }, { ...change, ownerId: "x" }, { ...change, marketingOptOut: true }, { ...change, phone: "call me" }]) {
@@ -88,7 +89,9 @@ test("lead card: leads.create first, a customer they may open, the catalogue's p
   assert.match(branch, /await resolveCatalogueProduct\(\{ productId: p\.productId, product: p\.product \}\)/);
   const action = code("src/app/actions/assistant.ts");
   const run = action.slice(action.indexOf('case "create_lead": {'), action.indexOf('case "attach_file": {'));
-  assert.equal((run.match(/await [a-zA-Z.]+\(/g) ?? []).filter((call) => !/canAccessContact|createLead|confirmed|reserveConfirmKey|completeConfirmKey/.test(call)).length, 0, "createLead is the only write");
+  assert.equal((run.match(/await [a-zA-Z.]+\(/g) ?? []).filter((call) => !/canAccessContact|createLead|confirmed|reserveConfirmKey|completeConfirmKey|putQuotesOnNewLead|logError/.test(call)).length, 0, "createLead, then the customer's quotes, are the only writes");
+  // The quotes go on AFTER the lead is open and its key spent: a failure there never re-opens the lead.
+  assert.ok(run.indexOf('await completeConfirmKey(tenantId, card.confirmKey, "a new lead", { leadId });') < run.indexOf("await putQuotesOnNewLead(user, leadId, l.quoteIds)"));
   // ONE CONFIRM, ONE LEAD (review of #933): the card's key is reserved BEFORE createLead, and spent after — "done"
   // with the lead it made, or "didn't complete" on any error (retry only on proof that nothing was written).
   assert.ok(run.indexOf("await reserveConfirmKey(tenantId, user.id, card.confirmKey, \"a new lead\")") < run.indexOf("await createLead(form)"));
@@ -98,6 +101,23 @@ test("lead card: leads.create first, a customer they may open, the catalogue's p
   const key = code("src/lib/assistantConfirmKey.ts");
   assert.match(key, /if \(!\(error instanceof Prisma\.PrismaClientKnownRequestError && error\.code === "P2002"\)\) throw error;/, "the primary key decides between two at once");
   assert.match(key, /where: \{ id: key, tenantId \}/);
+});
+
+test("a customer's open quotes on no deal go on the lead opened for them — re-checked at Confirm, all or none", () => {
+  // Sean, 2026-11-15: Q-1043 was built for Grant's Auto Spares, then the lead opened without it.
+  assert.deepEqual(unlinkedOpenQuotesWhere("c1"), { contactId: "c1", leadId: null, deletedAt: null, supersededAt: null, status: { in: ["draft", "sent"] } });
+  const lib = code("src/lib/crmAssistant.ts");
+  const branch = lib.slice(lib.indexOf('if (p.type === "create_lead")'), lib.indexOf('if (p.type === "update_customer")'));
+  assert.match(branch, /contactId && \(await hasPermission\(user, "quotes\.edit"\)\)/);
+  assert.match(branch, /prisma\.quote\.findMany\(\{ where: unlinkedOpenQuotesWhere\(contactId\), orderBy: \{ createdAt: "desc" \}, take: LEAD_QUOTES_MAX,/);
+  assert.match(branch, /q\.currency === quotes\[0\]\.currency && \(await canAccessQuote\(user, q\.id\)\)/, "one currency, and only quotes they may open");
+  const action = code("src/app/actions/assistant.ts");
+  const put = action.slice(action.indexOf("async function putQuotesOnNewLead("), action.indexOf("async function fileHeldUpload("));
+  assert.ok(put.indexOf('hasPermission(user, "quotes.edit")') < put.indexOf("prisma.lead.findFirst"), "the permission first");
+  assert.match(put, /if \(typeof id === "string" && \(await canAccessQuote\(user, id\)\)\) ids\.push\(id\);/, "each quote, again");
+  assert.match(put, /const where = \{ \.\.\.unlinkedOpenQuotesWhere\(lead\.contactId\), id: \{ in: ids \}, tenantId: lead\.tenantId, currency: lead\.currency \};/, "still open, on no deal, the lead's customer, workspace and currency");
+  assert.match(put, /prisma\.\$transaction\(async \(tx\) => \{/);
+  assert.match(put, /if \(done\.count !== rows\.length\) throw new Error/, "a quote changed in between rolls the lot back");
 });
 
 test("update card: contacts.edit and access first; Confirm refuses a field changed since, then updateContact", () => {

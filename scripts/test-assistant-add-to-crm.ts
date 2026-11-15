@@ -71,6 +71,8 @@ const BEN_PHONE = `084 1${digits.slice(1)}`;
 const TAG = id("tag");
 const PRODUCT = id("product");
 const STAGE = id("stage");
+const STAGE_QUOTED = id("stage-quoted");
+const CARA_QUOTES = ["q-draft", "q-sent", "q-declined"].map(id);
 const scoped = <R>(fn: () => Promise<R>) => runInTenantScope({ tenantId: T, system: false }, fn);
 
 async function seed() {
@@ -97,7 +99,8 @@ async function seed() {
   // A fresh test database's default pipeline has no stages; a new lead lands in its first open one.
   await basePrisma.$executeRaw`
     INSERT INTO "PipelineStage" ("id", "tenantId", "name", "order", "color", "pipelineId", "defaultProbability", "isClosed")
-    VALUES (${STAGE}, ${T}, ${`New ${SFX}`}, 900004, '#64748b', 'pipeline_default_retail', 10, false)`;
+    VALUES (${STAGE}, ${T}, ${`New ${SFX}`}, 900004, '#64748b', 'pipeline_default_retail', 10, false),
+      (${STAGE_QUOTED}, ${T}, ${`Quoted ${SFX}`}, 900005, '#64748b', 'pipeline_default_retail', 30, false)`;
 }
 
 async function sessionFor(user: PermissionUser): Promise<ActingSession> {
@@ -116,14 +119,14 @@ async function cleanup() {
   await basePrisma.document.deleteMany({ where: { id: { in: documents.map((d) => d.id) } } });
   await basePrisma.quotePayment.deleteMany({ where: { quoteId: id("quote") } });
   await basePrisma.quoteItem.deleteMany({ where: { quoteId: id("quote") } });
-  await basePrisma.quote.deleteMany({ where: { id: id("quote") } });
+  await basePrisma.quote.deleteMany({ where: { id: { in: [id("quote"), ...CARA_QUOTES] } } });
   await basePrisma.assistantUpload.deleteMany({ where: { userId: { in: ids } } });
   await basePrisma.assistantTurn.deleteMany({ where: { userId: { in: ids } } });
   const leads = (await basePrisma.lead.findMany({ where: { createdById: { in: ids } }, select: { id: true } })).map((l) => l.id);
   await basePrisma.activity.deleteMany({ where: { leadId: { in: leads } } });
   await basePrisma.auditLog.deleteMany({ where: { OR: [{ contactId: { in: contacts } }, { leadId: { in: leads } }, { userId: { in: ids } }] } });
   await basePrisma.lead.deleteMany({ where: { id: { in: leads } } });
-  await basePrisma.$executeRaw`DELETE FROM "PipelineStage" WHERE "id" = ${STAGE}`;
+  await basePrisma.$executeRaw`DELETE FROM "PipelineStage" WHERE "id" IN (${STAGE}, ${STAGE_QUOTED})`;
   await basePrisma.$executeRaw`DELETE FROM "_ContactToTag" WHERE "B" = ${TAG}`;
   await basePrisma.tag.deleteMany({ where: { id: TAG } });
   await basePrisma.product.deleteMany({ where: { id: PRODUCT } });
@@ -280,6 +283,38 @@ async function main() {
     check("…but never to a customer they cannot open", !hidden.card && /can't open/.test(hidden.problems.join(" ")));
     const nothing = await lead({ contactId: id("c-ben"), product: "No such vehicle" });
     check("a product not in the catalogue: no card, and it says why", !nothing.card && /isn't one product in the catalogue/.test(nothing.problems.join(" ")));
+
+    // A QUOTE BUILT FOR THE CUSTOMER FIRST goes on the deal opened for them later (Sean, 2026-11-15: Q-1043 was built
+    // for Grant's Auto Spares, then "Move lead to quoted" opened a lead in New without it).
+    const n = 700_000 + Math.floor(Math.random() * 90_000);
+    await basePrisma.contact.create({ data: { id: id("c-cara"), tenantId: T, firstName: "Cara", lastName: `Quoted${SFX}`, email: `cara-${SFX}@example.invalid`, ownerId: rep.id, createdById: rep.id } });
+    const quoteFor = (key: string, number: number, status: string, minutesAgo: number) => basePrisma.quote.create({
+      data: { id: id(key), number, tenantId: T, status, contactId: id("c-cara"), createdById: rep.id, createdAt: new Date(Date.now() - minutesAgo * 60_000) },
+    });
+    await quoteFor("q-draft", n, "draft", 30);
+    await quoteFor("q-sent", n + 1, "sent", 10);
+    await quoteFor("q-declined", n + 2, "declined", 5);
+    const nowhere = await lead({ contactId: id("c-cara"), stage: "Nowhere" });
+    check("a stage the pipeline doesn't have: no card, and it says why", !nowhere.card && /no open stage called "Nowhere"/.test(nowhere.problems.join(" ")), nowhere.problems.join(" | "));
+    const forCara = await lead({ contactId: id("c-cara"), stage: `Quoted ${SFX}` });
+    check("the card lists her open quotes on no deal, newest first, and the stage named — never the declined one",
+      JSON.stringify(forCara.card?.lead.quoteIds) === JSON.stringify([id("q-sent"), id("q-draft")]) && forCara.card?.lead.stageId === STAGE_QUOTED
+      && forCara.card.detail.includes(`Puts Q-${n + 1} (sent), Q-${n} (draft) on this lead.`) && forCara.card.detail.includes(`Opens in Quoted ${SFX}`) && !forCara.card.detail.includes(`Q-${n + 2}`), JSON.stringify(forCara));
+    // Between the card and Confirm the draft is declined: only what is STILL open moves.
+    await basePrisma.quote.update({ where: { id: id("q-draft") }, data: { status: "declined" } });
+    const opened = await runAsSession(repSession, () => scoped(() => runAssistantAction(forCara.card!)));
+    const caraLead = opened.href ? await basePrisma.lead.findUnique({ where: { id: opened.href.split("/").pop()! } }) : null;
+    const linked = await basePrisma.quote.findMany({ where: { contactId: id("c-cara") }, select: { id: true, leadId: true } });
+    const on = (key: string) => linked.find((q) => q.id === id(key))?.leadId ?? null;
+    check("Confirm: the lead opens in the stage named, with the sent quote on it — the declined ones stay off",
+      opened.ok && caraLead?.stageId === STAGE_QUOTED && on("q-sent") === caraLead.id && on("q-draft") === null && on("q-declined") === null
+      && opened.success === `Lead opened for Cara Quoted${SFX}, with Q-${n + 1} on it`, JSON.stringify({ opened, caraLead, linked }));
+    // A card naming a quote that isn't open (forged, or changed since): the lead opens, the quote stays put, and it says so.
+    const forged = await lead({ contactId: id("c-cara") });
+    const forgedCard = { ...forged.card!, lead: { ...forged.card!.lead, quoteIds: [id("q-declined")] } };
+    const refused = await runAsSession(repSession, () => scoped(() => runAssistantAction(forgedCard)));
+    check("a quote that isn't open is never moved, and the reply says it stays on the customer",
+      refused.ok && /stays on the customer/.test(refused.success ?? "") && (await basePrisma.quote.findUnique({ where: { id: id("q-declined") } }))?.leadId === null, JSON.stringify(refused));
   }
 
   console.log("\nChange a customer's details");
