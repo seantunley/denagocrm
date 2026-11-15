@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { setMyBriefTime, setMyChatbotProblems, setMyMondayStuck, setMyProactive } from "@/app/actions/assistantSettings";
+import { setMyBriefTime, setMyChatbotProblems, setMyMondayStuck, setMyOpeningLine, setMyProactive } from "@/app/actions/assistantSettings";
 import { BRIEF_TIMES } from "@/lib/proactiveRules";
 
 /**
@@ -10,10 +10,12 @@ import { BRIEF_TIMES } from "@/lib/proactiveRules";
  * (lib/proactiveBrief.ts). Only offered while an owner has it on for the workspace; says so when they have not,
  * rather than hiding that it exists.
  */
-export default function AssistantProactiveCard({ name, workspaceOn, on, briefAt, mondayStuck, chatbotProblems }: {
+export default function AssistantProactiveCard({ name, workspaceOn, on, briefAt, mondayStuck, chatbotProblems, openingOn }: {
   name: string; workspaceOn: boolean; on: boolean; briefAt: string; mondayStuck: boolean;
   /** The owner's "chatbot problems" switch; null for anyone else (only the owner can open the System Log). */
   chatbotProblems: boolean | null;
+  /** DAX speaks first: their own switch, offered whatever the workspace's proactive switch says (in-app, no AI). */
+  openingOn: boolean;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -29,6 +31,27 @@ export default function AssistantProactiveCard({ name, workspaceOn, on, briefAt,
   return (
     <section className="card space-y-3 p-5 text-sm" aria-label={`${name} comes to you`}>
       <h2 className="text-base font-semibold">{name} comes to you</h2>
+      <label className="flex cursor-pointer items-start gap-2">
+        <input
+          type="checkbox"
+          name="openingLine"
+          className="mt-1 accent-primary"
+          checked={openingOn}
+          disabled={pending}
+          onChange={(e) => {
+            const next = e.target.checked;
+            run(() => setMyOpeningLine(next));
+          }}
+        />
+        <span>
+          <span className="block font-medium">Say what&apos;s new when I open a chat</span>
+          <span className="block text-xs text-muted-foreground">
+            When you start a new conversation, {name} opens with the top two things from your daily brief — the same list as
+            your home page — e.g. a customer waiting for a reply or a quote about to expire, each linked. Only what your
+            own lists show. Nothing to say, it says nothing. No AI is used and no one is contacted.
+          </span>
+        </span>
+      </label>
       <label className={`flex items-start gap-2 ${workspaceOn ? "cursor-pointer" : "opacity-60"}`}>
         <input
           type="checkbox"

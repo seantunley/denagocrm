@@ -797,6 +797,12 @@ jobs:
       - name: DAX test drives -- held to the test-drives page's own rule
         run: npm run test:assistant-test-drives
 
+      # DAX speaks first (Sean, 2026-11-14): a new chat opens with the person's own brief's top two items. A rep's line
+      # names only their own deals, never another rep's or another workspace's; nothing to say, nothing said; their own
+      # switch turns it off. No AI, nothing written.
+      - name: DAX opening line -- only the person's own brief, and switchable
+        run: npm run test:assistant-opening-line
+
       # Sean, 2026-11-14: "no search across past conversations, and no rename or delete". Search finds only the
       # person's own live conversations; rename/delete writes can't reach a colleague's or another workspace's; a
       # deleted conversation leaves the list, the picker and what DAX recalls; the purge removes it after 60 days.
