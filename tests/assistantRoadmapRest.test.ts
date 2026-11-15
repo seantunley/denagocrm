@@ -37,6 +37,7 @@ test("the nightly review reads this week's 👎 answers and their reasons, and o
 
 test("the ChatGPT connection check rides with the context reads, and still stops the question", () => {
   const lib = code("src/lib/crmAssistant.ts");
-  assert.match(lib, /const \[connected, whereTheyAre, context, history, learnedNow, person, profileRaw, company, modules, tasks, drafts\] = await Promise\.all\(\[\s*isCodexConnected\(\),/);
+  // The assistant profile is read just before (alongside the conversation pick): the follow-up route needs its name.
+  assert.match(lib, /const \[connected, whereTheyAre, context, history, learnedNow, person, company, modules, tasks, drafts\] = await Promise\.all\(\[\s*isCodexConnected\(\),/);
   assert.match(lib, /mark\("context"\);\s*if \(!connected\) return \{ ok: false, error: AI_NOT_CONNECTED \};/);
 });

@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import {
-  HANDS_FREE, HANDS_FREE_OFF, freshVad, handsFreeStep, mayRecord, micStarter, rms, vadStep, type HandsFree, type HandsFreeEvent,
+  HANDS_FREE, HANDS_FREE_OFF, freshVad, handsFreeStep, mayRecord, rms, vadStep, type HandsFree, type HandsFreeEvent,
 } from "../src/lib/handsFree";
+// The one cancellable microphone request, shared with the recorder (#1117).
+import { micStarter } from "../src/lib/micStarter";
 
 const run = (events: HandsFreeEvent[], from: HandsFree = HANDS_FREE_OFF): HandsFree =>
   // "start" in these tests means the tap and the granted microphone both.
