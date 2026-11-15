@@ -91,7 +91,7 @@ import { matchVendorByName } from "./vendors";
 import { paymentMethodLabel } from "./accountStatement";
 import { carriedUpload, holdUpload, linkUpload, photoUpload, uploadImage } from "./assistantUpload";
 import { actingTenantId } from "./actingTenant";
-import { ACTION_INSTRUCTIONS, CHECK_BACK_RULE, CHOICE_INSTRUCTIONS, JOB_CARD_RULE, MAX_ACTIONS, newCustomerDetail, type NewCustomer, CUSTOMER_FIELDS, customerChangesText, type CustomerChange, type CustomerField, type FileTarget, matchQuoteRow, quoteAddText, quoteBuildText, quoteChangeText, settledAnswer, withoutSetUpClaims, type ActionCard, type ProposedAction, type QuoteBuildLine, type QuoteChange } from "./assistantActions";
+import { ACTION_INSTRUCTIONS, CHECK_BACK_RULE, CHOICE_INSTRUCTIONS, JOB_CARD_RULE, MAX_ACTIONS, logCallDetail, newCustomerDetail, type NewCustomer, CUSTOMER_FIELDS, customerChangesText, type CustomerChange, type CustomerField, type FileTarget, matchQuoteRow, quoteAddText, quoteBuildText, quoteChangeText, settledAnswer, withoutSetUpClaims, type ActionCard, type ProposedAction, type QuoteBuildLine, type QuoteChange } from "./assistantActions";
 import { knowledgeProducts, resolveCatalogueProduct } from "./catalogueLookup";
 import { TASK_INSTRUCTIONS, keepIds, taskBlock, type TaskView } from "./assistantTaskRules";
 import { listedBlock, listedRecords, splitListed, type ListedSlot } from "./assistantListedRules";
@@ -3440,6 +3440,43 @@ export async function resolveActions(
         ...(createCustomer ? { createCustomer: true as const } : {}),
         title: `Create a draft quote for ${customerName}`,
         text: quoteBuildText(lines, (cents) => formatZAR(cents, moneyFmt), { fees, ...(createCustomer ? { newCustomer: customerName } : {}) }),
+        confirmKey: `qk_${randomBytes(16).toString("hex")}`,
+        ...(p.reason ? { reason: p.reason } : {}),
+      });
+      continue;
+    }
+    if (p.type === "log_call") {
+      // A call that HAPPENED, on one deal or one customer THIS person may open (Sean, 2026-11-14). Confirm saves it
+      // through the Log a call button's own action (logVoiceDebrief), which checks the permission and access again.
+      if (!(await hasPermission(user, "activities.manage"))) { problems.push("Your role can't log calls."); continue; }
+      if (Boolean(p.leadId) === Boolean(p.contactId)) { problems.push("Which deal or customer was the call with? Look them up and I'll set it up."); continue; }
+      let leadLabel: string;
+      if (p.leadId) {
+        const lead = (await canAccessLead(user, p.leadId)) ? await prisma.lead.findUnique({ where: { id: p.leadId }, select: { name: true, title: true } }) : null;
+        if (!lead) { problems.push(DEAL_GONE); continue; }
+        leadLabel = `${lead.name} — ${lead.title}`;
+      } else {
+        const contact = (await canAccessContact(user, p.contactId!)) ? await prisma.contact.findFirst({ where: { id: p.contactId, deletedAt: null }, select: { firstName: true, lastName: true, company: true } }) : null;
+        if (!contact) { problems.push(CUSTOMER_GONE); continue; }
+        leadLabel = [contact.firstName, contact.lastName].filter(Boolean).join(" ") || contact.company || "the customer";
+      }
+      let followUpLabel: string | undefined;
+      if (p.followUp) {
+        const at = new Date(`${p.followUp.includes("T") ? p.followUp : `${p.followUp}T09:00`}:00+02:00`);
+        if (Number.isNaN(at.getTime())) { problems.push(BAD_TIME); continue; }
+        if (at.getTime() < Date.now() - 60 * 60 * 1000) { problems.push(passed(p.followUp.replace("T", " "))); continue; }
+        followUpLabel = at.toLocaleString("en-ZA", { timeZone: "Africa/Johannesburg", weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+      }
+      const notes = p.notes ?? "";
+      // The schema's default ("call") applies only to a parsed proposal: normalised HERE too, at the boundary, so a
+      // proposal reaching this function any other way is a call unless it says visit (review of #1117).
+      const activity = p.activity === "meeting" ? "meeting" : "call";
+      cards.push({
+        id: `a${index}-${p.leadId ?? p.contactId}-call`, kind: "log_call", leadId: p.leadId ?? null, ...(p.contactId ? { contactId: p.contactId } : {}), leadLabel,
+        title: `Log the ${activity === "call" ? "call" : "visit"}: ${p.summary}`, activity, summary: p.summary, notes,
+        ...(p.followUp ? { followUp: p.followUp } : {}), ...(p.nextStep ? { nextStep: p.nextStep } : {}),
+        detail: logCallDetail({ activity, notes, nextStep: p.nextStep, followUpLabel }),
+        // One Confirm, one call: spent by logVoiceDebrief in the transaction that files it.
         confirmKey: `qk_${randomBytes(16).toString("hex")}`,
         ...(p.reason ? { reason: p.reason } : {}),
       });

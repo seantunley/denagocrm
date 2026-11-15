@@ -409,7 +409,8 @@ export default function AssistantChat({
   const micPress = () => {
     if (handsFreeRunning) return handsFree.stop();
     if (handsFreeOffered && preferHandsFree) return void handsFree.start();
-    return voice.recording ? voice.stop() : void voice.start();
+    // Pressed again while the permission prompt is still open: cancel it (useVoiceRecorder), never a second prompt.
+    return voice.recording || voice.waiting ? voice.stop() : void voice.start();
   };
 
   // In the bubble it reads like a chat: oldest at the top, newest (and the

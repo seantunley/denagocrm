@@ -100,6 +100,7 @@
     "test:assistant-deal-file": "tsx --tsconfig tsconfig.harness.json scripts/test-assistant-deal-file.ts",
     "test:assistant-lost-dates": "tsx --tsconfig tsconfig.harness.json scripts/test-assistant-lost-dates.ts",
     "test:assistant-invoices": "tsx --tsconfig tsconfig.harness.json scripts/test-assistant-invoices.ts",
+    "test:assistant-log-call": "tsx --tsconfig tsconfig.harness.json scripts/test-assistant-log-call.ts",
     "test:assistant-listed": "tsx --tsconfig tsconfig.harness.json scripts/test-assistant-listed.ts",
     "test:assistant-test-drives": "tsx --tsconfig tsconfig.harness.json scripts/test-assistant-test-drives.ts",
     "test:assistant-conversation-manage": "tsx --tsconfig tsconfig.harness.json scripts/test-assistant-conversation-manage.ts",

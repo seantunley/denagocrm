@@ -33,10 +33,10 @@ export async function transcribeVoiceDetailed(
  * As transcribeVoice, but when nothing came back says whether ElevenLabs
  * refused the KEY — so the person is told to fix the key, not their microphone.
  */
-export async function transcribeVoiceChecked(buffer: Buffer, contentType: string): Promise<{ text: string } | SttRefusal | null> {
-  const viaEleven = await elevenLabsSTTChecked(buffer, contentType, { keyterms: await keyterms() });
+export async function transcribeVoiceChecked(buffer: Buffer, contentType: string, opts: { timeoutMs?: number } = {}): Promise<{ text: string } | SttRefusal | null> {
+  const viaEleven = await elevenLabsSTTChecked(buffer, contentType, { keyterms: await keyterms(), timeoutMs: opts.timeoutMs });
   if (viaEleven && "text" in viaEleven) return { text: viaEleven.text };
-  const text = await whisperTranscribe(buffer, contentType);
+  const text = await whisperTranscribe(buffer, contentType, opts.timeoutMs);
   return text ? { text } : viaEleven;
 }
 
@@ -45,7 +45,7 @@ async function keyterms(): Promise<string[]> {
   return import("./voiceKeyterms").then((m) => m.voiceKeyterms()).catch(() => []);
 }
 
-async function whisperTranscribe(buffer: Buffer, contentType: string): Promise<string | null> {
+async function whisperTranscribe(buffer: Buffer, contentType: string, timeoutMs = 30000): Promise<string | null> {
   const apiKey = await getSetting("OPENAI_API_KEY");
   if (!apiKey) return null;
   try {
@@ -65,7 +65,7 @@ async function whisperTranscribe(buffer: Buffer, contentType: string): Promise<s
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}` },
       body: form,
-      signal: AbortSignal.timeout(30000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok) {
       await logError("voice-transcribe", `Whisper ${res.status}`, (await res.text().catch(() => "")).slice(0, 200));
