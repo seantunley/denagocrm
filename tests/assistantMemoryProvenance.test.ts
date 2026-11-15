@@ -170,7 +170,10 @@ test("every prompt read leaves held and expired entries out; the prompt says whe
 
 test("each write says where it came from, and approval/edit stamps the confirmation", () => {
   const store = code("src/lib/assistantMemoryStore.ts");
-  assert.equal(store.match(/source: userId \? "learned" : "tidy"/g)?.length, 2, "notes and playbooks");
+  // Notes, and playbooks through `written` — which a caller may name "outcomes" (learning from won and lost deals).
+  assert.equal(store.match(/source: userId \? "learned" : "tidy"/g)?.length, 1, "notes");
+  assert.match(store, /const written = source \?\? \(userId \? "learned" : "tidy"\);/);
+  assert.match(store, /kind: "playbook", name: book\.name, description: description\.text, content: content\.text, createdById: userId, source: written \}/);
   assert.match(code("src/lib/assistantTidy.ts"), /createdById: null, source: "tidy"/);
   const actions = code("src/app/actions/assistantNotes.ts");
   assert.match(actions, /source: "owner"/);

@@ -46,6 +46,13 @@ export const assistantAndMoreArticles: HelpArticle[] = [
         "A question can be up to 500 characters, and there is a limit of roughly 60 questions an hour per person.",
         "The small window shows today's conversation. The full page keeps your conversations for 30 days. They are private to you.",
       ] },
+      { type: "h", text: "Finding, renaming and deleting conversations" },
+      { type: "list", items: [
+        "**Search**: type in **Search your conversations** on the Ask page. It finds your own conversations by their name or by anything said in them, newest first, with the words around the match.",
+        "**Rename**: open a conversation and press **Rename** next to the search box.",
+        "**Delete**: open a conversation and press **Delete**. It leaves your list and the assistant stops remembering it. Restore it under **Recently deleted** for 60 days; after that it is removed for good. Nothing in the CRM changes.",
+        "Only you can see, search, rename or delete your conversations — the workspace owner included.",
+      ] },
       { type: "callout", tone: "warning", text: "The assistant runs on your workspace's ChatGPT connection. If you see \"This runs on your workspace's ChatGPT connection, which isn't set up yet\", ask your workspace owner to connect it under **Settings → Integrations**. The assistant is part of the Automation & AI module, so it is hidden if that module is off." },
     ],
   },
@@ -196,6 +203,7 @@ export const assistantAndMoreArticles: HelpArticle[] = [
       { type: "h", text: "Asking from WhatsApp" },
       { type: "list", items: [
         "Message the business number with your question, as text or as a voice note.",
+        "Typed messages sent a few seconds apart — a shared contact, then \"New lead\", then the email — are answered together as one question, in the order you sent them. The assistant waits about three seconds after your last message before it starts. A photo, a file, a voice note or a tapped button is answered on its own, as before.",
         "Send a **photo** or a screenshot and it reads it — add a caption to say what you want to know. It cannot read files or videos, and says so if you send one.",
         "While it works on an answer your chat shows **typing…**. WhatsApp marks your message as read at the same moment, and stops showing typing after 25 seconds even if the answer takes longer.",
         "Answers follow your own access, just as they do inside the CRM.",
@@ -249,7 +257,14 @@ export const assistantAndMoreArticles: HelpArticle[] = [
       ] },
       { type: "h", text: "Hearing answers" },
       { type: "p", text: "If the owner has switched on voice replies, each answer in the CRM has a **Listen** button that reads it aloud, and a voice note sent to the assistant on WhatsApp gets a short spoken answer back instead of the text — the full answer is on your Ask page, and you get text whenever a voice note can't be made. Spoken answers work in English and Afrikaans only." },
-      { type: "callout", tone: "info", text: "Speaking a question and hearing an answer both rely on the workspace's voice service, which the owner connects under **Settings → Integrations**. Spoken answers use that service's credit each time, so the audio is made only when you press **Listen**." },
+      { type: "callout", tone: "info", text: "Speaking a question and hearing an answer both rely on the workspace's voice service, which the owner connects under **Settings → Integrations**. Spoken answers use that service's credit each time, so the audio is made only when you press **Listen** — or, in hands-free, for each answer to a question you spoke." },
+      { type: "h", text: "Hands-free (driving, the workshop)" },
+      { type: "p", text: "Where answers can be read aloud, the chat has a **headphones** button next to the microphone. Turn it on (this device remembers it), then tap the microphone once and just talk: when you pause, your question is sent, the answer is read aloud, and it listens again. A bar shows whether it is listening, thinking or speaking, with a big **Stop** button. It never listens while it is speaking." },
+      { type: "list", items: [
+        "It stops on its own when you press Stop, close the chat, switch to another app or tab, after two minutes of silence, or when it can't make out what you said three times in a row.",
+        "It keeps your screen on while it runs.",
+        "Anything that changes the CRM — a note, a task, a message to a customer — still needs a tap on its card. Saying yes doesn't confirm it.",
+      ] },
     ],
   },
   {

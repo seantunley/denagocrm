@@ -22,7 +22,7 @@ import { getCompanyProfile } from "./companyProfile";
 import { searchBotKnowledge } from "./botKnowledge";
 import { getEnabledModuleIds, isModuleEnabled } from "./modules/enabled";
 import { ownedWriteTenantId } from "./tenantWrite";
-import { afterAnswer, conversationTurns, pickConversation } from "./assistantConversation";
+import { afterAnswer, conversationTurns, liveTurnsWhere, pickConversation } from "./assistantConversation";
 import { runAfterResponse } from "./afterResponse";
 import { isCustomerSigner } from "./signing/quoteMirror";
 import { firstCustomerView, memoCustomer } from "./signing/customerView";
@@ -46,7 +46,7 @@ import {
 } from "./permissions";
 import { ASSISTANT_PROFILE_KEY, parseProfile, selfKnowledge, soulText } from "./assistantSoul";
 import { LEARN_INSTRUCTIONS, memoryPrompt, methodInstructions } from "./assistantMemory";
-import { researchGate } from "./assistantResearchGate";
+import { isComparison, missingEvidence, peopleInResult, researchGate } from "./assistantResearchGate";
 import { DEPTH_BUDGETS, HARD_DEADLINE_MS, MIN_CALL_MS, deepen, parseLedger, recheckBudgetMs, researchLeftMs, roundFits, startingDepth, type Depth } from "./assistantDepth";
 import { matchDecisions, parseDecision } from "./assistantDecisions";
 import { CITE_RULE, REPLY_FORMAT, SPOKEN_RULE, STATE_INSTRUCTIONS, citableLinks, resolveCitations, splitReply, type Evidence } from "./assistantReply";
@@ -66,6 +66,7 @@ import { competitorsLookup, targetsLookup } from "./assistantTargetsLookup";
 import { CUSTOM_FIELD_TOOLS, customFieldsLookup, withCustomFields } from "./assistantCustomFieldsLookup";
 import { customersLookup } from "./assistantCustomersLookup";
 import { dealFileLookup, suppliersLookup } from "./assistantDealFileLookup";
+import { fleetsLookup, partsLookup } from "./assistantPartsFleetsLookup";
 import { notesLookup } from "./assistantNotesLookup";
 import { stuckDealsLookup } from "./assistantStuckDeals";
 import { countQuoted, modelsNamed, quoteLineWhere } from "./quotedProducts";
@@ -91,7 +92,8 @@ import { matchVendorByName } from "./vendors";
 import { paymentMethodLabel } from "./accountStatement";
 import { carriedUpload, holdUpload, linkUpload, photoUpload, uploadImage } from "./assistantUpload";
 import { actingTenantId } from "./actingTenant";
-import { ACTION_INSTRUCTIONS, CHECK_BACK_RULE, CHOICE_INSTRUCTIONS, JOB_CARD_RULE, MAX_ACTIONS, newCustomerDetail, type NewCustomer, CUSTOMER_FIELDS, customerChangesText, type CustomerChange, type CustomerField, type FileTarget, matchQuoteRow, quoteAddText, quoteBuildText, quoteChangeText, settledAnswer, withoutSetUpClaims, type ActionCard, type ProposedAction, type QuoteBuildLine, type QuoteChange } from "./assistantActions";
+import { getDefaultPipeline, listPipelineStages } from "./pipelines";
+import { ACTION_INSTRUCTIONS, CHECK_BACK_RULE, CHOICE_INSTRUCTIONS, JOB_CARD_RULE, LEAD_QUOTES_MAX, MAX_ACTIONS, logCallDetail, unlinkedOpenQuotesWhere, newCustomerDetail, type NewCustomer, CUSTOMER_FIELDS, customerChangesText, type CustomerChange, type CustomerField, type FileTarget, matchQuoteRow, quoteAddText, quoteBuildText, quoteChangeText, settledAnswer, withoutSetUpClaims, type ActionCard, type ProposedAction, type QuoteBuildLine, type QuoteChange } from "./assistantActions";
 import { knowledgeProducts, resolveCatalogueProduct } from "./catalogueLookup";
 import { TASK_INSTRUCTIONS, keepIds, taskBlock, type TaskView } from "./assistantTaskRules";
 import { listedBlock, listedRecords, splitListed, type ListedSlot } from "./assistantListedRules";
@@ -117,7 +119,6 @@ import {
   planSaysAnswerNext,
   decisionArgs,
   lookupStatus,
-  isSmallTalk,
   resultsBlock,
   waitingBlock,
   planInstructions,
@@ -132,6 +133,7 @@ import {
   type PriorTurn,
   type ToolStep,
 } from "./crmAssistantPlan";
+import { FOLLOW_UP_CODE, WORDING_EDIT_RULE, followUpRoute } from "./assistantFollowUp";
 
 /**
  * "Ask the CRM" — a sales colleague that answers from the workspace's own
@@ -1196,6 +1198,8 @@ async function recall(user: User, raw: z.infer<typeof recallArgs>): Promise<Tool
      WHERE "tenantId" = ${ownedWriteTenantId()}
        AND "userId" = ${user.id}
        AND "createdAt" >= ${since}
+       -- Never from a conversation its person deleted (assistantConversation.liveTurnsWhere, as SQL).
+       AND NOT EXISTS (SELECT 1 FROM "AssistantConversation" c WHERE c."id" = "AssistantTurn"."conversationId" AND c."deletedAt" IS NOT NULL)
        AND (
          (cardinality(${words}::text[]) = 0 AND cardinality(${refs}::text[]) = 0)
          OR "refs" && ${refs}::text[]
@@ -1207,19 +1211,20 @@ async function recall(user: User, raw: z.infer<typeof recallArgs>): Promise<Tool
      LIMIT ${RECALL_CANDIDATES}`;
   const best = rankRecall(candidates, words, refs).slice(0, RECALL_MATCHES);
   if (!best.length) return { truncated: false, rows: [], data: [{ note: "Nothing in this person's last 30 days of conversations matches." }] };
-  // The turn before and after each match, same South African day.
+  // The turn before and after each match, same South African day — never one from a deleted conversation.
+  const live = await liveTurnsWhere(ownedWriteTenantId(), user.id);
   const around = await Promise.all(
     best.map((t) => {
       const day = dateKey(t.createdAt);
       const dayStart = new Date(`${day}T00:00:00+02:00`);
       return Promise.all([
         prisma.assistantTurn.findFirst({
-          where: { userId: user.id, tenantId: ownedWriteTenantId(), createdAt: { gte: dayStart, lt: t.createdAt } },
+          where: { userId: user.id, tenantId: ownedWriteTenantId(), createdAt: { gte: dayStart, lt: t.createdAt }, AND: [live] },
           orderBy: { createdAt: "desc" },
           select: { question: true, answer: true },
         }),
         prisma.assistantTurn.findFirst({
-          where: { userId: user.id, tenantId: ownedWriteTenantId(), createdAt: { gt: t.createdAt, lt: new Date(dayStart.getTime() + DAY) } },
+          where: { userId: user.id, tenantId: ownedWriteTenantId(), createdAt: { gt: t.createdAt, lt: new Date(dayStart.getTime() + DAY) }, AND: [live] },
           orderBy: { createdAt: "asc" },
           select: { question: true, answer: true },
         }),
@@ -1776,6 +1781,8 @@ async function runTool(user: User, step: ToolStep): Promise<ToolOutput> {
     case "customers": return customersLookup(user, step.args);
     case "deal_file": return dealFileLookup(user, step.args);
     case "suppliers": return suppliersLookup(user, step.args);
+    case "parts": return partsLookup(user, step.args);
+    case "fleets": return fleetsLookup(user, step.args);
     case "notes": return notesLookup(user, step.args);
     case "stuck_deals": return stuckDealsLookup(user);
     case "knowledge": return knowledge(user, step.args);
@@ -1798,6 +1805,11 @@ async function runTool(user: User, step: ToolStep): Promise<ToolOutput> {
 }
 
 /* ── The conversation ────────────────────────────────────────────────────── */
+
+/** The same shape with nothing read — for a route that never researches (assistantFollowUp). */
+async function quietContext(user: User): Promise<Awaited<ReturnType<typeof planContext>>> {
+  return { today: johannesburgDateKey(new Date()), userName: user.name || "the user", stages: [], staff: [], activityTypes: [] };
+}
 
 /** The workspace facts the research step needs to map names to real values. */
 async function planContext(user: User) {
@@ -1852,8 +1864,10 @@ export function describePerson(p: { name: string; jobTitle: string | null; sees:
 
 /** This person's turns in the current conversation (the last few hours), oldest first. */
 async function recentTurns(userId: string): Promise<PriorTurn[]> {
+  const live = await liveTurnsWhere(ownedWriteTenantId(), userId);
   const turns = await prisma.assistantTurn.findMany({
-    where: { userId, createdAt: { gte: new Date(Date.now() - CONVERSATION_WINDOW_MS) } },
+    // Never from a conversation its person deleted.
+    where: { userId, createdAt: { gte: new Date(Date.now() - CONVERSATION_WINDOW_MS) }, AND: [live] },
     orderBy: { createdAt: "desc" },
     take: 6,
     // state: the working memory each answer wrote (parsed and cleaned before
@@ -2297,6 +2311,10 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   // exchanges and its summary are DAX's memory of it. A scheduled answer, watch or alert stands on its own.
   const who = { tenantId: ownedWriteTenantId(), userId: user.id };
   const target = pageTarget(page);
+  // The workspace's assistant profile — read alongside the conversation pick, since the route below needs its NAME
+  // ("Thanks Jarvis" is a thank-you where the assistant is Jarvis). Its failure surfaces where it is awaited.
+  const profileRead = getSetting(ASSISTANT_PROFILE_KEY);
+  profileRead.catch(() => undefined);
   const thread = tasksOn
     ? await pickConversation(who, {
         requested: opts.conversation ?? null,
@@ -2306,15 +2324,21 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
         return null;
       })
     : null;
+  // WHICH WAY IT GOES, before anything is read (assistantFollowUp): a thank-you, a wording-only edit or small talk never
+  // researches, so it skips the CRM context only research and the fast path read — the page's record, the
+  // workspace's stages/staff/activity types, the re-check of listed records. Numbers only in the timings.
+  const profileRaw = await profileRead;
+  const route = followUpRoute(question, Boolean(opts.images?.length), parseProfile(profileRaw).name);
+  const light = route !== "full";
+  timings.followUp = FOLLOW_UP_CODE[route];
   // The connection check rides with the context reads — one round trip, not two.
-  const [connected, whereTheyAre, context, history, learnedNow, person, profileRaw, company, modules, tasks, drafts] = await Promise.all([
+  const [connected, whereTheyAre, context, history, learnedNow, person, company, modules, tasks, drafts] = await Promise.all([
     isCodexConnected(),
-    pageContext(user, page),
-    planContext(user),
+    light ? "" : pageContext(user, page),
+    light ? quietContext(user) : planContext(user),
     thread ? conversationTurns(who, thread.id).then(withListed) : recentTurns(user.id),
     loadLearned(user.id),
     personContext(user).catch(() => ""),
-    getSetting(ASSISTANT_PROFILE_KEY),
     getCompanyProfile().catch(() => null),
     getEnabledModuleIds(),
     // The person's open job sheets (up to 3, last 14 days) — whatever the 3-hour conversation window says.
@@ -2376,7 +2400,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   // "The fourth one": the latest list an answer here showed, each record checked against what this person may open
   // NOW (assistantListed) — fenced as data: its labels are customer names.
   const earlierList = history.findLast((t) => t.listed?.length)?.listed ?? [];
-  const slots: ListedSlot[] = earlierList.length
+  const slots: ListedSlot[] = earlierList.length && !light
     ? await listedNow(user, earlierList).catch(async (error: unknown) => {
         await logError("crm-assistant", "listed records check failed", error instanceof Error ? error.name : "unknown");
         return [];
@@ -2443,7 +2467,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   };
   // A question plain enough to need no research step (assistantFastPath): its
   // lookup runs now. Not with an image — the picture may change what it means.
-  const fast = images.length ? null : fastPath(question, { userName: user.name || "", pageLead: pageLeadFromHint(whereTheyAre) });
+  const fast = images.length || light ? null : fastPath(question, { userName: user.name || "", pageLead: pageLeadFromHint(whereTheyAre) });
   if (fast) timings.fastPath = 1;
   // ChatGPT failing again and again (assistantBreaker): answer from the CRM
   // alone where a lookup needs no model to choose it, else say so at once.
@@ -2479,9 +2503,10 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       `Rounds left: ${budget().maxSteps - step}. Lookups left: ${budget().maxLookups - observations.length}.`,
       insist ? PLAN_INSIST : "",
     ].filter(Boolean).join("\n\n");
-  // Small talk ("thanks", 👍, "who are you?") skips research — it would only say
-  // done — and so does a fast-path question, whose lookup is already known.
-  const research = !(isSmallTalk(question) && !images.length) && !fast;
+  // A thank-you, a wording-only edit and small talk ("thanks", 👍, "who are you?") skip research — it would only say
+  // done — and so does a fast-path question, whose lookup is already known. A fresh photo is always "full".
+  // ponytail: a photo CARRIED from the last question no longer turns "thanks" into research; ask about it and it does.
+  const research = !light && !fast;
   if (fast) await runLookups(fast, 1);
   // The keyword detector is the floor; the fast path and small talk stay quick, so they answer exactly as before.
   depth = startingDepth(question, research);
@@ -2492,6 +2517,10 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   // Stopped by the person (opts.stillWanted): it ends at the next step, having written nothing.
   const stopped = async (final = false) => (opts.stillWanted ? !(await opts.stillWanted(final)) : false);
   const STOPPED: AssistantResult = { ok: false, error: "Stopped." };
+  // A comparison's gate checks the people the QUESTION names (review of #1121), so it needs the workspace's staff
+  // names — looked up only for a comparison. A failed read is "no names": the gate falls back to the lookups' own.
+  const staffNames = research && isComparison(question) ? (await listActingTenantStaff().catch(() => [])).map((s) => s.name) : [];
+  const gateSteps = () => observations.map((o) => ({ tool: o.tool, args: o.args, people: peopleInResult(o.tool, o.output.data) }));
   for (let step = 0; research && step < budget().maxSteps && observations.length < budget().maxLookups; step++) {
     if (await stopped()) return STOPPED;
     // Stop researching if the budget (or the answer reserve) can't fit another round.
@@ -2545,6 +2574,8 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     const gate = researchGate({
       question,
       tools: observations.map((o) => o.tool),
+      steps: gateSteps(),
+      staff: staffNames,
       lastRoundEmpty: lastEmpty,
       planSaysAnswer: enough,
       stepsUsed: step + 1,
@@ -2554,6 +2585,11 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     if (gate === "continue") continue;
     if (gate === "answer" || enough) break;
   }
+  // Research stopped short of what the question's subject needs (out of rounds, or the plan gave up): the answer is
+  // told exactly what wasn't checked, so it says so instead of filling the gap (DAX_Conversational_Upgrades item 4).
+  const evidenceGap = observations.length
+    ? missingEvidence(question, observations.map((o) => o.tool), gateSteps(), staffNames)
+    : null;
   // For the owner's speed view (assistantRun.runSpeed): numbers only — 1 = investigated, 0 = quick; and, when the
   // research step said, whether it still thought another lookup would change the answer when it stopped.
   timings.depth = depth === "investigate" ? 1 : 0;
@@ -2620,6 +2656,8 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       observations.length
         ? resultsBlock("What the CRM returned:", observations.map(observationText).join("\n\n"))
         : "No lookup was needed for this question.",
+      evidenceGap ? `Not checked: ${evidenceGap}. Say plainly that this wasn't checked — don't answer that part from the other results.` : "",
+      route === "wording" ? WORDING_EDIT_RULE : "",
       // Per question (only when the answer will be spoken), so in the prompt and not the cached instructions.
       opts.spoken ? SPOKEN_RULE : "",
     ].filter(Boolean).join("\n\n"),
@@ -3035,10 +3073,31 @@ export async function resolveActions(
       const product = p.productId || p.product ? await resolveCatalogueProduct({ productId: p.productId, product: p.product }) : null;
       if ((p.productId || p.product) && !product) { problems.push(`"${p.product ?? "That product"}" isn't one product in the catalogue — look it up and name it as listed.`); continue; }
       const openDeals = contactId ? await prisma.lead.count({ where: { contactId, status: "open", deletedAt: null } }) : 0;
+      // The stage they named, among the open stages of the pipeline createLead opens it in (its default) — the
+      // same exact-name match as the stage card.
+      let stage: { id: string; name: string } | null = null;
+      if (p.stage) {
+        const pipeline = await getDefaultPipeline();
+        const wanted = p.stage.trim().toLowerCase();
+        stage = pipeline ? (await listPipelineStages(pipeline.id)).find((s) => !s.isClosed && s.name.toLowerCase() === wanted) ?? null : null;
+        if (!stage) { problems.push(`The pipeline new leads open in has no open stage called "${p.stage}".`); continue; }
+      }
+      // The customer's open quotes on no deal yet go on this one (Sean, 2026-11-15: Q-1043 was built for Grant's Auto
+      // Spares, then the lead opened without it). Only ones this person may edit, and one currency: a lead's
+      // currency is fixed by its quotes, so the newest quote's sets it and others wait.
+      const quotes = contactId && (await hasPermission(user, "quotes.edit"))
+        ? await prisma.quote.findMany({ where: unlinkedOpenQuotesWhere(contactId), orderBy: { createdAt: "desc" }, take: LEAD_QUOTES_MAX, select: { id: true, number: true, status: true, currency: true } })
+        : [];
+      const mine: typeof quotes = [];
+      for (const q of quotes) if (q.currency === quotes[0].currency && (await canAccessQuote(user, q.id))) mine.push(q);
       cards.push({
         id: `a${index}-new-lead`, kind: "create_lead", leadId: null, leadLabel: who,
         title: `Open a lead for ${who}${product ? ` — ${product.name}` : ""}`,
-        lead: { contactId, name: who, phone, email, productId: product?.id ?? null, notes: p.notes ?? null },
+        lead: {
+          contactId, name: who, phone, email, productId: product?.id ?? null, notes: p.notes ?? null,
+          ...(stage ? { stageId: stage.id } : {}),
+          ...(mine.length ? { quotes: mine.map((q) => ({ id: q.id, number: q.number })), currency: mine[0].currency } : {}),
+        },
         detail: [
           contactId ? `Customer: ${who} (already in the CRM)` : `New customer: ${who} — created with the lead`,
           ...(phone ? [`Phone: ${phone}`] : []),
@@ -3046,7 +3105,8 @@ export async function resolveActions(
           ...(product ? [`Interested in: ${product.name}`] : []),
           ...(p.notes ? [`Notes: ${p.notes}`] : []),
           ...(openDeals > 0 ? [`${who} already has ${openDeals} open deal${openDeals === 1 ? "" : "s"}.`] : []),
-          "Opens in the first stage, given to you. The customer is not contacted.",
+          ...(mine.length ? [`Puts ${mine.map((q) => `Q-${q.number} (${q.status})`).join(", ")} on this lead.`] : []),
+          `Opens in ${stage ? stage.name : "the first stage"}, given to you. The customer is not contacted.`,
         ].join("\n"),
         // One Confirm, one lead: reserved and spent at Confirm (assistantConfirmKey).
         confirmKey: `qk_${randomBytes(16).toString("hex")}`,
@@ -3359,7 +3419,7 @@ export async function resolveActions(
         ? quoteSheet.details.lines.map((line) => ({ productId: line.productId, product: line.product || undefined, qty: line.qty, discountPct: line.discountPct, colour: line.colour }))
         : p.lines ?? [];
       const askedFees = quoteSheet?.details.fees?.length ? quoteSheet.details.fees : p.fees ?? [];
-      if (!askedLines.length) { problems.push("Which products go on the quote, and how many of each?"); continue; }
+      if (!askedLines.length) { problems.push("Which products go on the quote?"); continue; }
       let forDeal: { id: string; label: string } | null = null;
       let customerId: string | null = null;
       let customerName = "";
@@ -3435,6 +3495,43 @@ export async function resolveActions(
         ...(createCustomer ? { createCustomer: true as const } : {}),
         title: `Create a draft quote for ${customerName}`,
         text: quoteBuildText(lines, (cents) => formatZAR(cents, moneyFmt), { fees, ...(createCustomer ? { newCustomer: customerName } : {}) }),
+        confirmKey: `qk_${randomBytes(16).toString("hex")}`,
+        ...(p.reason ? { reason: p.reason } : {}),
+      });
+      continue;
+    }
+    if (p.type === "log_call") {
+      // A call that HAPPENED, on one deal or one customer THIS person may open (Sean, 2026-11-14). Confirm saves it
+      // through the Log a call button's own action (logVoiceDebrief), which checks the permission and access again.
+      if (!(await hasPermission(user, "activities.manage"))) { problems.push("Your role can't log calls."); continue; }
+      if (Boolean(p.leadId) === Boolean(p.contactId)) { problems.push("Which deal or customer was the call with? Look them up and I'll set it up."); continue; }
+      let leadLabel: string;
+      if (p.leadId) {
+        const lead = (await canAccessLead(user, p.leadId)) ? await prisma.lead.findUnique({ where: { id: p.leadId }, select: { name: true, title: true } }) : null;
+        if (!lead) { problems.push(DEAL_GONE); continue; }
+        leadLabel = `${lead.name} — ${lead.title}`;
+      } else {
+        const contact = (await canAccessContact(user, p.contactId!)) ? await prisma.contact.findFirst({ where: { id: p.contactId, deletedAt: null }, select: { firstName: true, lastName: true, company: true } }) : null;
+        if (!contact) { problems.push(CUSTOMER_GONE); continue; }
+        leadLabel = [contact.firstName, contact.lastName].filter(Boolean).join(" ") || contact.company || "the customer";
+      }
+      let followUpLabel: string | undefined;
+      if (p.followUp) {
+        const at = new Date(`${p.followUp.includes("T") ? p.followUp : `${p.followUp}T09:00`}:00+02:00`);
+        if (Number.isNaN(at.getTime())) { problems.push(BAD_TIME); continue; }
+        if (at.getTime() < Date.now() - 60 * 60 * 1000) { problems.push(passed(p.followUp.replace("T", " "))); continue; }
+        followUpLabel = at.toLocaleString("en-ZA", { timeZone: "Africa/Johannesburg", weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+      }
+      const notes = p.notes ?? "";
+      // The schema's default ("call") applies only to a parsed proposal: normalised HERE too, at the boundary, so a
+      // proposal reaching this function any other way is a call unless it says visit (review of #1117).
+      const activity = p.activity === "meeting" ? "meeting" : "call";
+      cards.push({
+        id: `a${index}-${p.leadId ?? p.contactId}-call`, kind: "log_call", leadId: p.leadId ?? null, ...(p.contactId ? { contactId: p.contactId } : {}), leadLabel,
+        title: `Log the ${activity === "call" ? "call" : "visit"}: ${p.summary}`, activity, summary: p.summary, notes,
+        ...(p.followUp ? { followUp: p.followUp } : {}), ...(p.nextStep ? { nextStep: p.nextStep } : {}),
+        detail: logCallDetail({ activity, notes, nextStep: p.nextStep, followUpLabel }),
+        // One Confirm, one call: spent by logVoiceDebrief in the transaction that files it.
         confirmKey: `qk_${randomBytes(16).toString("hex")}`,
         ...(p.reason ? { reason: p.reason } : {}),
       });

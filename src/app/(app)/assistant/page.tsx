@@ -4,10 +4,13 @@ import { PageHeader } from "@/components/page-header";
 import { requireAnyPermission } from "@/lib/permissions";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { isCodexConnected } from "@/lib/codex";
-import { getSetting } from "@/lib/settings";
+import { getSetting, getWorkspaceSetting } from "@/lib/settings";
+import { openingLineFor } from "@/lib/daxBrief";
 import { isTenantOwner } from "@/lib/auth";
 import { ASSISTANT_PROFILE_KEY, parseProfile } from "@/lib/assistantSoul";
-import { conversationHistory, defaultConversation, recentConversations, updatesHistory } from "@/lib/assistantConversation";
+import { conversationHistory, defaultConversation, deletedConversations, liveConversation, recentConversations, searchConversations, updatesHistory } from "@/lib/assistantConversation";
+import { TITLE_MAX, TRASH_DAYS } from "@/lib/assistantConversationRules";
+import { deleteAssistantConversation, renameAssistantConversation, restoreAssistantConversation } from "@/app/actions/assistantConversations";
 import { ownedWriteTenantId } from "@/lib/tenantWrite";
 import { formatDistanceToNowStrict } from "date-fns";
 import { markScheduledTurnsSeen } from "@/lib/assistantScheduleRun";
@@ -37,7 +40,7 @@ import { linkRefusalText, maskWaId } from "@/lib/assistantWhatsAppRules";
 import AssistantWhatsAppCard from "@/components/AssistantWhatsAppCard";
 import AssistantProactiveCard from "@/components/AssistantProactiveCard";
 import AssistantGoalsCard from "@/components/AssistantGoalsCard";
-import { ASSISTANT_PROACTIVE_KEY, BRIEF_DEFAULT, briefPersonKey, chatbotProblemsKey, chatbotProblemsOn, mondayStuckKey, parseBriefAt, proactiveOn, proactivePersonKey } from "@/lib/proactiveRules";
+import { ASSISTANT_PROACTIVE_KEY, BRIEF_DEFAULT, briefPersonKey, chatbotProblemsKey, chatbotProblemsOn, mondayStuckKey, openingLineKey, openingLineOn, parseBriefAt, proactiveOn, proactivePersonKey } from "@/lib/proactiveRules";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Ask the CRM" };
@@ -52,6 +55,83 @@ export const metadata = { title: "Ask the CRM" };
  * by what they are about, DAX's own updates, and what was asked before conversations existed. Links, so each is a
  * page of its own that the browser's back button returns to.
  */
+type Found = Awaited<ReturnType<typeof searchConversations>>;
+type Deleted = Awaited<ReturnType<typeof deletedConversations>>;
+
+/**
+ * Search, rename, delete (Sean, 2026-11-14: "no search across past conversations, and no rename or delete"). The
+ * search is a plain GET form, so a result is a link like any other; rename and delete show only when a conversation
+ * of theirs is open; deleted ones wait under "Recently deleted" for 60 days.
+ */
+function ConversationTools({ name, picked, title, query, found, deleted }: { name: string; picked: string; title: string | null; query: string; found: Found | null; deleted: Deleted }) {
+  return (
+    <div className="space-y-2 text-sm">
+      <div className="flex flex-wrap items-center gap-3">
+        <form method="get" action="/assistant" role="search" className="flex min-w-0 flex-1 gap-2">
+          <input type="hidden" name="c" value={picked} />
+          <input type="search" name="q" defaultValue={query} maxLength={100} placeholder="Search your conversations" aria-label="Search your conversations" className="input min-w-0 flex-1" />
+          <button type="submit" className="btn-secondary btn-sm">Search</button>
+        </form>
+        {title !== null && (
+          <div className="flex shrink-0 items-center gap-3">
+            <details className="relative">
+              <summary className="cursor-pointer list-none text-xs text-muted-foreground hover:text-foreground">Rename</summary>
+              <SaveForm action={renameAssistantConversation.bind(null, picked)} resetOnSuccess={false} success="Renamed" className="absolute right-0 z-10 mt-2 flex w-72 gap-2 rounded-md border border-border bg-background p-2 shadow">
+                <input name="title" defaultValue={title} maxLength={TITLE_MAX} required aria-label="Conversation name" className="input min-w-0 flex-1" />
+                <SaveButton className="btn-primary btn-sm">Save</SaveButton>
+              </SaveForm>
+            </details>
+            <ConfirmActionDialog
+              trigger={<button type="button" className="text-xs text-muted-foreground hover:text-destructive">Delete</button>}
+              title="Delete this conversation?"
+              description={`It leaves your list and ${name} stops remembering it. You can restore it under "Recently deleted" for ${TRASH_DAYS} days; after that it is gone for good. Nothing in the CRM changes.`}
+              confirmLabel="Delete"
+              destructive
+              onConfirm={deleteAssistantConversation.bind(null, picked)}
+            />
+          </div>
+        )}
+      </div>
+      {found && (
+        <section aria-label="Search results" className="card p-3">
+          {found.length === 0 ? (
+            <p className="text-muted-foreground">None of your conversations mention &ldquo;{query}&rdquo;.</p>
+          ) : (
+            <ul className="divide-y divide-border/50">
+              {found.map((conv) => (
+                <li key={conv.id} className="py-2">
+                  <Link href={`/assistant?c=${conv.id}`} className="font-medium text-primary hover:underline">{conv.title}</Link>
+                  <span className="ml-2 text-xs text-muted-foreground">{formatDistanceToNowStrict(conv.updatedAt, { addSuffix: true })}</span>
+                  {conv.snippet && <p className="text-xs text-muted-foreground">{conv.snippet}</p>}
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
+      {deleted.length > 0 && (
+        <details className="text-xs">
+          <summary className="cursor-pointer text-muted-foreground">Recently deleted ({deleted.length})</summary>
+          <ul className="mt-2 divide-y divide-border/50">
+            {deleted.map((conv) => (
+              <li key={conv.id} className="flex items-center justify-between gap-3 py-2">
+                <span className="min-w-0 truncate">{conv.title}</span>
+                <ConfirmActionDialog
+                  trigger={<button type="button" className="shrink-0 text-muted-foreground hover:text-foreground">Restore</button>}
+                  title="Restore this conversation?"
+                  description={`It comes back to your list, and ${name} remembers it again.`}
+                  confirmLabel="Restore"
+                  onConfirm={restoreAssistantConversation.bind(null, conv.id)}
+                />
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </div>
+  );
+}
+
 function ConversationPicker({ conversations, picked }: { conversations: { id: string; title: string; updatedAt: Date }[]; picked: string }) {
   const chip = (active: boolean) =>
     `inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-full border px-3 text-xs pointer-fine:min-h-8 ${active ? "border-primary bg-primary/10 font-medium text-foreground" : "border-border text-muted-foreground hover:border-primary hover:text-foreground"}`;
@@ -83,7 +163,7 @@ async function whatsappCard(userId: string): Promise<{ linked: string | null; re
   return { linked: link?.waId && link.verifiedAt ? maskWaId(link.waId) : null, refused: linkRefusalText(link?.refusedReason), updates: link?.updatesOnWhatsApp ?? true };
 }
 
-export default async function AssistantPage({ searchParams }: { searchParams: Promise<{ c?: string }> }) {
+export default async function AssistantPage({ searchParams }: { searchParams: Promise<{ c?: string; q?: string }> }) {
   const user = await requireAnyPermission(
     "leads.view_all", "leads.view_owned",
     "quotes.view_all", "quotes.view_owned",
@@ -94,11 +174,19 @@ export default async function AssistantPage({ searchParams }: { searchParams: Pr
   // scheduled answers and alerts, ?c=earlier what was asked before conversations. Default: the one that moved in
   // the last three hours, else a new one.
   const who = { tenantId: ownedWriteTenantId(), userId: user.id };
-  const { c } = await searchParams;
-  const conversations = await recentConversations(who);
-  const picked = c === "new" || c === "updates" || c === "earlier"
-    ? c
-    : conversations.find((conv) => conv.id === c)?.id ?? defaultConversation(conversations);
+  const { c, q } = await searchParams;
+  const query = (q ?? "").trim().slice(0, 100);
+  const special = c === "new" || c === "updates" || c === "earlier";
+  const [recent, found, deleted, asked] = await Promise.all([
+    recentConversations(who),
+    query ? searchConversations(who, query) : Promise.resolve(null),
+    deletedConversations(who),
+    // ?c=<id> beyond the recent chips (an older search result): theirs, live, or nothing.
+    c && !special ? liveConversation(who, c) : Promise.resolve(null),
+  ]);
+  // An older conversation opened by id joins the chips, so it shows as picked and Rename/Delete find it.
+  const conversations = asked && !recent.some((conv) => conv.id === asked.id) ? [...recent, asked] : recent;
+  const picked = special && c ? c : asked?.id ?? defaultConversation(recent);
   const historyFor = picked === "new" ? Promise.resolve([])
     : picked === "updates" ? updatesHistory(who)
       : conversationHistory(who, picked === "earlier" ? null : picked);
@@ -134,6 +222,9 @@ export default async function AssistantPage({ searchParams }: { searchParams: Pr
     // Being on this page is seeing them: the bubble's unread dot goes.
     markScheduledTurnsSeen(user.id),
   ]);
+  // DAX speaks first — only into an empty conversation (not DAX's own Updates); a failure never stops the page.
+  const opening = connected && picked !== "updates" && history.length === 0 ? await openingLineFor(user).catch(() => null) : null;
+  const openingOn = openingLineOn(await getWorkspaceSetting(who.tenantId, openingLineKey(user.id)).catch(() => null));
   const openSheets = tasks.filter((t) => t.status === "open");
   const pastSheets = tasks.filter((t) => t.status !== "open");
   // Multi-step plans: the person's own, from the last 30 days (assistantPlan).
@@ -180,6 +271,16 @@ export default async function AssistantPage({ searchParams }: { searchParams: Pr
       <SavedAssistantCards name={profile.name} cards={savedCards} />
       <AssistantPlans plans={plans} />
       {connected && <ConversationPicker conversations={conversations} picked={picked} />}
+      {connected && (
+        <ConversationTools
+          name={profile.name}
+          picked={picked}
+          title={conversations.find((conv) => conv.id === picked)?.title ?? null}
+          query={query}
+          found={found}
+          deleted={deleted}
+        />
+      )}
       {connected ? (
         <AssistantChat
           key={picked}
@@ -189,6 +290,7 @@ export default async function AssistantPage({ searchParams }: { searchParams: Pr
           listen={listen}
           // Asking from "Updates" or "Earlier" carries on in the current conversation, as the default rule picks.
           conversation={picked === "updates" || picked === "earlier" ? null : picked}
+          opening={opening}
         />
       ) : (
         <p className="card p-5 text-sm text-muted-foreground">
@@ -343,7 +445,7 @@ export default async function AssistantPage({ searchParams }: { searchParams: Pr
         )}
       </section>
       <AssistantGoalsCard userId={user.id} name={profile.name} />
-      <AssistantProactiveCard name={profile.name} workspaceOn={proactiveWorkspace} on={proactiveMe} briefAt={briefAt} mondayStuck={mondayStuck} chatbotProblems={chatbotProblems} />
+      <AssistantProactiveCard name={profile.name} workspaceOn={proactiveWorkspace} on={proactiveMe} briefAt={briefAt} mondayStuck={mondayStuck} chatbotProblems={chatbotProblems} openingOn={openingOn} />
       {whatsapp &&<AssistantWhatsAppCard name={profile.name} linked={whatsapp.linked} refused={whatsapp.refused} updates={whatsapp.updates} />}
       <details className="card p-4 text-sm">
         <summary className="cursor-pointer font-medium">

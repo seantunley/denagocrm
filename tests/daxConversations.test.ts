@@ -14,9 +14,9 @@ const lib = src("src/lib/assistantConversation.ts");
 test("a question belongs to one conversation: picked, new, the record's on its page, or the one you were in", () => {
   const pick = lib.slice(lib.indexOf("export async function pickConversation"), lib.indexOf("export async function currentConversation"));
   // Only the person's own, in this workspace.
-  assert.match(pick, /findFirst\(\{ where: \{ id: opts\.requested, tenantId, userId \}, select \}\)/);
+  assert.match(pick, /findFirst\(\{ where: \{ id: opts\.requested, tenantId, userId, deletedAt: null \}, select \}\)/);
   // On a deal's or customer's page: THAT record's, however old.
-  assert.match(pick, /where: \{ tenantId, userId, \.\.\.record \}, orderBy: \{ updatedAt: "desc" \}/);
+  assert.match(pick, /where: \{ tenantId, userId, deletedAt: null, \.\.\.record \}, orderBy: \{ updatedAt: "desc" \}/);
   // Otherwise the one that moved in the last three hours, else a new one.
   assert.match(pick, /updatedAt: \{ gte: new Date\(Date\.now\(\) - CONTINUE_WITHIN_MS\) \}/);
   assert.match(pick, /create\(\{ data: \{ tenantId, userId, title: NEW_TITLE, \.\.\.\(record \?\? \{\}\) \}, select \}\)/);

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { unsupportedFigures } from "../src/lib/assistantVerify";
+import { unsupportedFigures, unsupportedNote } from "../src/lib/assistantVerify";
 
 /*
  * The checker binds a sentence to the record it names (DAX roadmap, Phase 2): a figure must be on THAT quote,
@@ -76,4 +76,118 @@ test("an email is never \"delivered\" or \"read\"", () => {
   assert.deepEqual(unsupportedFigures("The quote email bounced, so it was not delivered.", [quotes]), []);
   assert.deepEqual(unsupportedFigures("Our mail server accepted the email; no open detected.", [quotes]), []);
   assert.deepEqual(unsupportedFigures("We delivered her cart and emailed the invoice.", [quotes]), []);
+});
+
+/* ── Which record each claim belongs to (DAX_Conversational_Upgrades §5, 2026-11-14) ── */
+
+test("ACCEPTANCE: two customers' totals swapped in one sentence — both caught, though both numbers are in the evidence", () => {
+  assert.deepEqual(
+    unsupportedFigures("Werner's quote is R 88 500 and Anna's is R 256 500.", [quotes]),
+    ["R 88 500 (not on Q-1040)", "R 256 500 (not on Q-1041)"],
+  );
+  assert.deepEqual(unsupportedFigures("Werner's quote is R 256 500 and Anna's is R 88 500.", [quotes]), [], "the right way round passes");
+  assert.deepEqual(unsupportedFigures("Q-1040 comes to R 88 500, Q-1041 to R 256 500.", [quotes]), ["R 88 500 (not on Q-1040)", "R 256 500 (not on Q-1041)"], "by quote number too");
+  // A comma inside an amount is not a clause break.
+  assert.deepEqual(unsupportedFigures("Werner's quote is R 256 500,00 and Anna's is R 88 500,00.", [quotes]), []);
+});
+
+test("by customer, without the word 'quote': a figure that is someone else's and nothing of theirs is flagged", () => {
+  assert.deepEqual(unsupportedFigures("Werner's total is R 88 500.", [quotes]), ["R 88 500 (that's Anna Jacobs's, not Werner Kilian's)"]);
+  assert.deepEqual(unsupportedFigures("Werner's total is R 256 500.", [quotes]), []);
+  // Two customers named in one clause: no guess — a combined figure passes as before.
+  assert.deepEqual(unsupportedFigures("Werner and Anna together come to R 345 000.", [quotes]), []);
+  // Nobody named: only the presence check, as before.
+  assert.deepEqual(unsupportedFigures("The biggest is R 256 500.", [quotes]), []);
+  // What someone SAID is not the record's.
+  assert.deepEqual(unsupportedFigures("Werner said Anna's was R 88 500.", [quotes]), []);
+});
+
+test("a deposit only requested is never 'paid'; a cleared one is — said with or without 'quote'", () => {
+  assert.deepEqual(unsupportedFigures("Werner has paid his deposit.", [brief]), ["deposit paid (not on Q-1040)"], "brief shows it not paid");
+  assert.deepEqual(unsupportedFigures("Anna has paid her deposit.", [deliveries]), []);
+  // No lookup said anything about the deposit: nothing to contradict, no false alarm.
+  assert.deepEqual(unsupportedFigures("Anna has paid her deposit.", [quotes]), []);
+});
+
+test("delivered (done) and delivery booked (promised) are different facts", () => {
+  // Werner's delivery is BOOKED for 31 Oct; it hasn't happened.
+  assert.deepEqual(unsupportedFigures("Werner's delivery is booked for 31 Oct.", [brief]), []);
+  assert.deepEqual(unsupportedFigures("Werner's cart was delivered on 31 Oct.", [brief]), ["delivered 31 Oct (not on Q-1040)"]);
+  const done = [{ quote: "Q-1041", link: "/quotes/anna", customer: "Anna Jacobs", deposit: "paid 2026-10-20", deliveryDate: "2026-11-04", delivered: "2026-11-04" }];
+  assert.deepEqual(unsupportedFigures("Anna's cart was delivered on 4 Nov.", [done]), []);
+  // Said without "quote", a delivery date is checked only against a quote whose lookup carried one.
+  assert.deepEqual(unsupportedFigures("Anna's delivery is on 9 Dec.", [quotes]), []);
+});
+
+test("review of #1116: deposit and delivery claims are checked per owner, with negation scoped to its own part", () => {
+  const annaDelivered = [{ quote: "Q-1041", link: "/quotes/anna", customer: "Anna Jacobs", deposit: "paid 2026-10-20", deliveryDate: "2026-11-04", delivered: "2026-11-04" }];
+  // 1. Two paid claims, only Anna's true: Anna's paid deposit no longer vouches for Werner's.
+  assert.deepEqual(unsupportedFigures("Werner has paid his deposit and Anna has paid hers.", [brief, deliveries]), ["deposit paid (not on Q-1040)"]);
+  assert.deepEqual(unsupportedFigures("Anna has paid her deposit and Werner has paid his.", [brief, deliveries]), ["deposit paid (not on Q-1040)"], "either order");
+  // 2. Two delivered claims, only Anna's true: Werner's is booked, not delivered.
+  assert.deepEqual(unsupportedFigures("Werner's cart was delivered on 31 Oct and Anna's was delivered on 4 Nov.", [brief, annaDelivered]), ["delivered 31 Oct (not on Q-1040)"]);
+  assert.deepEqual(unsupportedFigures("Werner's cart was delivered on 31 Oct and Anna's on 4 Nov.", [brief, annaDelivered]), ["delivered 31 Oct (not on Q-1040)"], "the verb carried into the second part");
+  assert.deepEqual(unsupportedFigures("Werner's delivery is booked for 31 Oct and Anna's was delivered on 4 Nov.", [brief, annaDelivered]), [], "both true");
+  // 3. A negated second part doesn't silence the first.
+  assert.deepEqual(unsupportedFigures("Werner has paid his deposit and Anna has not paid hers.", [brief, deliveries]), ["deposit paid (not on Q-1040)"]);
+  assert.deepEqual(unsupportedFigures("Anna has paid her deposit but Werner hasn't paid his.", [brief, deliveries]), [], "the negated part is not a claim");
+  // One claim across several clauses still belongs to its owner.
+  assert.deepEqual(unsupportedFigures("Werner's deposit, R 10 000, is paid.", [brief, deliveries]), ["R 10 000 (not on Q-1040)", "deposit paid (not on Q-1040)"]);
+  // A part naming nobody, in a sentence about several quotes: no guess.
+  assert.deepEqual(unsupportedFigures("The deposit is paid, for Werner and Anna.", [brief, deliveries]), []);
+  // Missing lookup data is never a false flag, even when "quote" is said.
+  assert.deepEqual(unsupportedFigures("Anna's quote deposit is paid.", [quotes]), []);
+});
+
+test("review of #1116: a quote named by number is THAT quote, not the same customer's other one", () => {
+  // Werner has two quotes; every fact claimed below for Q-1040 belongs only to Q-1042.
+  const sameCustomer = [
+    { quote: "Q-1040", link: "/quotes/w1", customer: "Werner Kilian", total: "R 256 500,00", deposit: "not paid", deliveryDate: "2026-10-31", delivered: null },
+    { quote: "Q-1042", link: "/quotes/w2", customer: "Werner Kilian", total: "R 88 500,00", deposit: "paid 2026-10-20", deliveryDate: "2026-11-04", delivered: "2026-11-04" },
+  ];
+  // The review's three reproductions: each used to pass.
+  assert.deepEqual(unsupportedFigures("Werner's quote Q-1040 is R 88 500.", [sameCustomer]), ["R 88 500 (not on Q-1040)"]);
+  assert.deepEqual(unsupportedFigures("Werner has paid the deposit on Q-1040.", [sameCustomer]), ["deposit paid (not on Q-1040)"]);
+  assert.deepEqual(unsupportedFigures("Werner's Q-1040 was delivered on 4 Nov.", [sameCustomer]), ["delivered 4 Nov (not on Q-1040)"]);
+  // The same claims about the quote that holds them pass.
+  assert.deepEqual(unsupportedFigures("Werner's quote Q-1042 is R 88 500.", [sameCustomer]), []);
+  assert.deepEqual(unsupportedFigures("Werner has paid the deposit on Q-1042.", [sameCustomer]), []);
+  assert.deepEqual(unsupportedFigures("Werner's Q-1042 was delivered on 4 Nov.", [sameCustomer]), []);
+  // By link, the same.
+  assert.deepEqual(unsupportedFigures("Werner's quote is R 88 500 [[/quotes/w1]].", [sameCustomer]), ["R 88 500 (not on Q-1040)"]);
+  // Two quotes named on purpose, in one clause: their combined figures. (A total after an "and" is its own clause and
+  // is checked against the quote named there — as before this change.)
+  assert.deepEqual(unsupportedFigures("Q-1040 plus Q-1042 come to R 345 000.", [sameCustomer]), []);
+  // No quote named: the customer's quotes, as before.
+  assert.deepEqual(unsupportedFigures("Werner's quote is R 88 500.", [sameCustomer]), []);
+  // A named quote the lookups didn't return never borrows another of the customer's figures.
+  assert.deepEqual(unsupportedFigures("Werner's quote Q-1099 is R 88 500.", [sameCustomer]), ["Q-1099"]);
+  // Another customer named beside a numbered quote still reaches their own.
+  assert.deepEqual(unsupportedFigures("Werner's Q-1040 is R 256 500 and Anna has paid her deposit.", [sameCustomer, deliveries]), []);
+  assert.deepEqual(unsupportedFigures("Werner's Q-1040 is R 88 500 and Anna's is R 256 500.", [sameCustomer, deliveries]), ["R 88 500 (not on Q-1040)", "R 256 500 (not on Q-1041)"]);
+});
+
+test("review of #1126: a number and a link that disagree are never combined; an unknown quote link is flagged", () => {
+  const sameCustomer = [
+    { quote: "Q-1040", link: "/quotes/w1", customer: "Werner Kilian", total: "R 256 500,00", deposit: "not paid", deliveryDate: "2026-10-31", delivered: null },
+    { quote: "Q-1042", link: "/quotes/w2", customer: "Werner Kilian", total: "R 88 500,00", deposit: "paid 2026-10-20", deliveryDate: "2026-11-04", delivered: "2026-11-04" },
+  ];
+  // The review's reproductions: Q-1040 written, Q-1042's link cited — each used to pass on Q-1042's facts.
+  assert.deepEqual(unsupportedFigures("Werner's Q-1040 is R 88 500 [[/quotes/w2]].", [sameCustomer]), ["Q-1040 cited with Q-1042's link", "R 88 500 (not on Q-1040)"]);
+  assert.deepEqual(unsupportedFigures("Werner has paid his deposit on Q-1040 [[/quotes/w2]].", [sameCustomer]), ["Q-1040 cited with Q-1042's link", "deposit paid (not on Q-1040)"]);
+  assert.deepEqual(unsupportedFigures("Werner's Q-1040 was delivered on 4 Nov [[/quotes/w2]].", [sameCustomer]), ["Q-1040 cited with Q-1042's link", "delivered 4 Nov (not on Q-1040)"]);
+  // A link to no quote the lookups returned: flagged, and the customer's other quote is no stand-in.
+  assert.deepEqual(unsupportedFigures("Werner's quote is R 88 500 [[/quotes/missing]].", [sameCustomer]), ["[[/quotes/missing]] (not a quote the lookups returned)"]);
+  // Number and link that agree, one or several, still pass — combined totals too.
+  assert.deepEqual(unsupportedFigures("Werner's Q-1042 is R 88 500 [[/quotes/w2]].", [sameCustomer]), []);
+  assert.deepEqual(unsupportedFigures("Q-1040 [[/quotes/w1]] plus Q-1042 [[/quotes/w2]] come to R 345 000.", [sameCustomer]), []);
+});
+
+test("end to end, as the answer is checked: evidence shaped like the live call (question, history, lookups) → the note", () => {
+  // crmAssistant: evidenceNow = [question, ...history questions, ...observations' data]; then unsupportedNote.
+  const evidenceNow = ["Compare Werner's and Anna's quotes", "How are my deals?", quotes, deliveries];
+  const swapped = unsupportedFigures("Werner's quote is R 88 500 and Anna's is R 256 500. Anna has paid her deposit.", evidenceNow);
+  assert.deepEqual(swapped, ["R 88 500 (not on Q-1040)", "R 256 500 (not on Q-1041)"]);
+  assert.match(unsupportedNote(swapped), /R 88 500 \(not on Q-1040\), R 256 500 \(not on Q-1041\)\. They may be worked out from them, or wrong/);
+  assert.deepEqual(unsupportedFigures("Werner's quote is R 256 500 and Anna's is R 88 500. Anna has paid her deposit.", evidenceNow), []);
 });

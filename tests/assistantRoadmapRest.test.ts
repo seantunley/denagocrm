@@ -26,7 +26,8 @@ test("team answers coach person by person, the advice labelled as judgement", ()
 
 test("the nightly review reads this week's 👎 answers and their reasons, and only proposes", () => {
   const tidy = code("src/lib/assistantTidy.ts");
-  assert.match(tidy, /where: \{ feedback: "down", feedbackAt: \{ gte: new Date\(Date\.now\(\) - 7 \* 24 \* 60 \* 60 \* 1000\) \} \}/);
+  // …never from a conversation its person deleted (AND: [live]).
+  assert.match(tidy, /where: \{ feedback: "down", feedbackAt: \{ gte: new Date\(Date\.now\(\) - 7 \* 24 \* 60 \* 60 \* 1000\) \}, AND: \[live\] \}/);
   assert.match(tidy, /"Answers rated wrong this week:",\s*\.\.\.wrong\.map\(\(t\) => stripInvisible\(/, "cleaned, inside the fenced block");
   assert.match(tidy, /if \(notes\.length < 2 && turns\.length === 0 && wrong\.length === 0\) return 0;/);
   // What it learns goes the usual way: an unreviewed playbook the owner approves.
@@ -36,6 +37,7 @@ test("the nightly review reads this week's 👎 answers and their reasons, and o
 
 test("the ChatGPT connection check rides with the context reads, and still stops the question", () => {
   const lib = code("src/lib/crmAssistant.ts");
-  assert.match(lib, /const \[connected, whereTheyAre, context, history, learnedNow, person, profileRaw, company, modules, tasks, drafts\] = await Promise\.all\(\[\s*isCodexConnected\(\),/);
+  // The assistant profile is read just before (alongside the conversation pick): the follow-up route needs its name.
+  assert.match(lib, /const \[connected, whereTheyAre, context, history, learnedNow, person, company, modules, tasks, drafts\] = await Promise\.all\(\[\s*isCodexConnected\(\),/);
   assert.match(lib, /mark\("context"\);\s*if \(!connected\) return \{ ok: false, error: AI_NOT_CONNECTED \};/);
 });

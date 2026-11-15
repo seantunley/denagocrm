@@ -55,6 +55,13 @@ test("each cause gets the message that points at its fix", () => {
 
 test("the recorder's server action uses the checked transcriber and the shared wording", () => {
   const voice = readFileSync(new URL("../src/app/actions/voice.ts", import.meta.url), "utf8");
-  assert.match(voice, /const heard = await transcribeVoiceChecked\(Buffer\.from\(await audio\.arrayBuffer\(\)\), audio\.type\);/);
+  // The ONE checked transcriber for every recording: a voice note or question keeps the normal 30 s wait ({}), a
+  // recorded call (#1117, up to 15 minutes) gets 180 s.
+  assert.match(voice, /const heard = await transcribeVoiceChecked\(Buffer\.from\(await audio\.arrayBuffer\(\)\), audio\.type, call \? \{ timeoutMs: 180_000 \} : \{\}\);/);
+  assert.equal((voice.match(/transcribeVoiceChecked\(/g) ?? []).length, 1, "no second, unchecked path");
+  const transcribe = readFileSync(new URL("../src/lib/transcribe.ts", import.meta.url), "utf8");
+  assert.match(transcribe, /elevenLabsSTTChecked\(buffer, contentType, \{ keyterms: await keyterms\(\), timeoutMs: opts\.timeoutMs \}\)/);
+  const eleven = readFileSync(new URL("../src/lib/elevenlabs.ts", import.meta.url), "utf8");
+  assert.match(eleven, /signal: AbortSignal\.timeout\(opts\.timeoutMs \?\? 30000\)/, "30 s unless a call asks for longer");
   assert.match(voice, /return \{ ok: false, error: notHeard\(heard, await isElevenLabsConfigured\(\)\) \};/);
 });

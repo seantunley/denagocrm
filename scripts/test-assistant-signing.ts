@@ -158,6 +158,18 @@ async function main() {
     const ownerApprovals = await approvals(ownerA);
     check("the owner sees both", ownerApprovals.includes("Delivery note rep") && ownerApprovals.includes("Delivery note owner"), JSON.stringify(ownerApprovals));
 
+    // RE-REVIEW OF #1111 (#1114): 101 OLDER pending steps for someone else, on a request the rep can open — more than the
+    // panel's 100-row limit, all ahead of the rep's own in its order.
+    await basePrisma.approvalStep.createMany({
+      data: Array.from({ length: 101 }, (_, i) => ({ tenantId: A, requestId: repNote, nodeId: `o${i}`, label: `Other ${SFX}`, assigneeType: "staff", assigneeUserId: a.ownerUserId, token: token(), createdAt: ago(10) })),
+    });
+    const repBehind = await approvals(rep);
+    check("the rep still sees their own step — behind 101 older steps of someone else's", repBehind.includes("Delivery note rep"), JSON.stringify(repBehind));
+    check("…and only their own", repBehind.length === 1, String(repBehind.length));
+    // The owner may decide EVERY step, so the panel is the oldest 100 of them — a display limit, stated and pinned.
+    const ownerCapped = await approvals(ownerA);
+    check("the owner's panel is the oldest 100 pending steps (its stated limit)", ownerCapped.length === 100, String(ownerCapped.length));
+
     console.log("\nRefused, and the other workspace");
     const refused = await lookup(A, noSigning, { status: "any" });
     check("no signing permission: refused", /can't open signing requests/.test(refused.note ?? "") && !refused.requests, JSON.stringify(refused));

@@ -1,6 +1,8 @@
 "use server";
 
 import { requireAnyPermission } from "@/lib/permissions";
+import { openingLineFor } from "@/lib/daxBrief";
+import type { OpeningLine } from "@/lib/daxBriefRules";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { customerClash, detailClash, pageTarget } from "@/lib/crmAssistant";
@@ -10,6 +12,7 @@ import { contactFormFor } from "@/lib/contactFormFor";
 import { completeConfirmKey, releaseConfirmKey, reserveConfirmKey } from "@/lib/assistantConfirmKey";
 import { MAX_IMAGE_BYTES } from "@/lib/assistantImage";
 import { heldUpload } from "@/lib/assistantUpload";
+import { putQuotesOnNewLead } from "@/lib/assistantLeadQuotes";
 import { uploadDocument } from "@/app/actions/documents";
 import { recordQuotePayment } from "@/app/actions/quotePayments";
 import { markDepositPaid, rescheduleDelivery, scheduleDelivery } from "@/app/actions/fulfilment";
@@ -17,7 +20,7 @@ import { johannesburgDateKey } from "@/lib/activityDay";
 import { getSetting, getRegionalSettings } from "@/lib/settings";
 import { isCodexConnected } from "@/lib/codex";
 import { ASSISTANT_PROFILE_KEY, parseProfile } from "@/lib/assistantSoul";
-import { CONFIRM_KEY, CUSTOMER_FIELDS, QUOTE_ADD_MAX_FEES, QUOTE_ADD_MAX_FEE_RANDS, QUOTE_BUILD_MAX_LINES, STALE_CARD, type ActionCard } from "@/lib/assistantActions";
+import { CONFIRM_KEY, CUSTOMER_FIELDS, leadQuotesReply, QUOTE_ADD_MAX_FEES, QUOTE_ADD_MAX_FEE_RANDS, QUOTE_BUILD_MAX_LINES, STALE_CARD, type ActionCard } from "@/lib/assistantActions";
 import { editorDefaults, quoteFromLeadDefaults } from "@/lib/quoteFromLead";
 import { QUOTE_PDF_SOURCE } from "@/lib/assistantWhatsAppRules";
 import { tenantOrigin } from "@/lib/tenantOrigin";
@@ -28,7 +31,7 @@ import { withCurrency } from "@/lib/currencyRules";
 /** How long a Confirm in the CRM waits for a built quote's PDF to go to WhatsApp before leaving it to the sweep. */
 const QUOTE_PDF_SEND_WAIT_MS = 4_000;
 import { prisma } from "@/lib/db";
-import { cancelActivity, rescheduleActivity, scheduleActivity, scheduleFollowUp } from "@/app/actions/activities";
+import { cancelActivity, logVoiceDebrief, rescheduleActivity, scheduleActivity, scheduleFollowUp } from "@/app/actions/activities";
 import { addCommunication } from "@/app/actions/communications";
 import { assignLead, convertLeadToContact, createLead, markLost, moveLead, reactivateNurturedLead, reopenLead } from "@/app/actions/leads";
 import { saveLeadNurture } from "@/app/actions/nurture";
@@ -256,6 +259,29 @@ export async function runAssistantAction(
           ? { ok: true, success: "Follow-up scheduled", href: `/contacts/${on.contactId}` }
           : { ok: true, success: "Added to your calendar", href: "/calendar" };
       }
+      case "log_call": {
+        // The Log a call button's own save: activities.manage, access to THIS deal or customer, a completed call, its
+        // notes on the timeline and the follow-up — all checked again here, nothing taken from the card on trust.
+        // Its key is spent with the call: a second Confirm of this card files nothing more.
+        if (!CONFIRM_KEY.test(String(card.confirmKey ?? ""))) return untouched(STALE_CARD);
+        const on = card.leadId ? { leadId: card.leadId } : { contactId: card.contactId ?? null };
+        const result = await logVoiceDebrief({
+          ...on,
+          type: card.activity === "meeting" ? "meeting" : "call",
+          summary: card.summary,
+          notes: [card.notes, card.nextStep && `Next step: ${card.nextStep}`].filter(Boolean).join("\n\n"),
+          followUpDate: card.followUp,
+          nextStep: card.nextStep,
+          opKey: card.confirmKey,
+        });
+        // A delegate's error is returned unproven (the house rule). logVoiceDebrief is all or nothing and keyed, so a
+        // refusal wrote nothing and a retry of this card can never file the call twice.
+        if (!result.ok) return { ok: false, error: result.error ?? "Couldn't log it." };
+        const visit = card.activity === "meeting";
+        await confirmedOn(visit ? "log a visit" : "log a call", { leadId: card.leadId, contactId: card.contactId ?? null });
+        const success = card.followUp ? "Logged, and the follow-up is booked" : "Logged on the timeline";
+        return card.leadId ? { ok: true, success } : { ok: true, success, href: `/contacts/${card.contactId}` };
+      }
       case "note": {
         const shot = screenshotFile(card.image);
         if (shot === false) return untouched(BAD_SCREENSHOT);
@@ -326,16 +352,30 @@ export async function runAssistantAction(
         // (assistantConfirmKey). A second Confirm gets the lead the first made; two at once, one lead.
         const tenantId = ownedWriteTenantId();
         const reserved = await reserveConfirmKey(tenantId, user.id, card.confirmKey, "a new lead");
+        // TWO STEPS, EACH ONCE (review of #1125): the key is spent with the lead as soon as it exists, so no Confirm can
+        // ever open a second one. The quotes are the second step and run on EVERY Confirm of the card — one already on
+        // the lead counts as done — so a Confirm again after a failure finishes only what is left.
+        const withQuotes = async (leadId: string, again: boolean) => {
+          const href = `/leads/${leadId}`;
+          if (!Array.isArray(l.quotes) || !l.quotes.length) return { ok: true, success: again ? `That lead is already open for ${card.leadLabel}` : `Lead opened for ${card.leadLabel}`, href };
+          try {
+            return { ok: true, success: leadQuotesReply(card.leadLabel, await putQuotesOnNewLead(user, leadId, l.quotes), again), href };
+          } catch (error) {
+            // Not "the quote changed": the database didn't answer, and nothing moved. Logged without client data.
+            await logError("assistant-actions", "putting quotes on a new lead failed", error instanceof Error ? error.name : "unknown").catch(() => {});
+            const numbers = l.quotes.map((q) => `Q-${q.number}`).join(", ");
+            return { ...resumable(`The lead for ${card.leadLabel} is open, but ${numbers} couldn't be put on it just now. Tap Confirm again to finish — the lead won't be opened twice.`), href };
+          }
+        };
         if (reserved.state === "done") {
           const made = typeof reserved.result.leadId === "string" ? reserved.result.leadId : null;
-          return made
-            ? { ok: true, success: `That lead is already open for ${card.leadLabel}`, href: `/leads/${made}` }
-            : { ok: false, error: LEAD_UNSURE };
+          return made ? withQuotes(made, true) : { ok: false, error: LEAD_UNSURE };
         }
         if (reserved.state === "busy") return { ok: false, error: "That lead is being opened right now — check the CRM in a moment." };
         const form = new FormData();
         form.set("name", l.name);
-        for (const [key, value] of [["contactId", l.contactId], ["phone", l.phone], ["email", l.email], ["productId", l.productId], ["notes", l.notes]] as const) {
+        // stageId: createLead refuses a closed or missing stage itself. currency: its quotes' (null = the base).
+        for (const [key, value] of [["contactId", l.contactId], ["phone", l.phone], ["email", l.email], ["productId", l.productId], ["notes", l.notes], ["stageId", l.stageId], ["currency", l.currency]] as const) {
           if (value) form.set(key, value);
         }
         // Retry only on proof that nothing was written: an error from createLead may come after the lead (or its new
@@ -354,7 +394,7 @@ export async function runAssistantAction(
         }
         await completeConfirmKey(tenantId, card.confirmKey, "a new lead", { leadId });
         await confirmed("open a lead", leadId);
-        return { ok: true, success: `Lead opened for ${card.leadLabel}`, href: `/leads/${leadId}` };
+        return withQuotes(leadId, false);
       }
       case "attach_file": {
         // THE DOCUMENTS FORM'S OWN DOOR (uploadDocument): documents.upload, access to THE one record, the size limit,
@@ -1183,7 +1223,7 @@ export async function rateAssistantAnswer(turnId: string, rating: "up" | "down",
  * are marked seen, so the unread dot goes on the next page.
  */
 export async function openAssistantBubble(page?: string | null): Promise<
-  { ok: true; name: string; connected: boolean; listen: boolean; history: { id: string; question: string; answer: string; source: string }[]; conversation: string | null } | { ok: false }
+  { ok: true; name: string; connected: boolean; listen: boolean; history: { id: string; question: string; answer: string; source: string }[]; conversation: string | null; opening: OpeningLine | null } | { ok: false }
 > {
   return withActingStaffScope(async () => {
     const user = await requireAnyPermission(...ASSISTANT_PERMISSIONS);
@@ -1201,6 +1241,8 @@ export async function openAssistantBubble(page?: string | null): Promise<
       markScheduledTurnsSeen(user.id),
       assistantVoiceRepliesOn().catch(() => false),
     ]);
-    return { ok: true, name: profile.name, connected, listen, history, conversation };
+    // DAX speaks first — only into an empty conversation; a failure here never stops the panel opening.
+    const opening = connected && history.length === 0 ? await openingLineFor(user).catch(() => null) : null;
+    return { ok: true, name: profile.name, connected, listen, history, conversation, opening };
   });
 }

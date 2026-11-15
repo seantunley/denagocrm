@@ -458,7 +458,12 @@ test("review of #905: the customer record was made, then the quote failed — th
   // Two places. record_payment is not one (review of #934): its key records the payment once, its proof is filed once
   // under its own key, and a proof that may not have been filed is said plainly — never offered for a blind retry.
   // nurture IS (2026-11-02): a lost deal reopened and then not parked — the retry finds it open and only parks it.
-  assert.equal(action.match(/resumable\(/g)?.length, 2, "quote_build after the customer; nurture after the reopen");
+  // create_lead IS (review of #1125): the lead opened and its key spent, then putting the customer's quotes on it threw —
+  // Confirm again finds the lead by its key and only puts the quotes on.
+  assert.equal(action.match(/resumable\(/g)?.length, 3, "quote_build after the customer; nurture after the reopen; create_lead's quotes after the lead");
+  const newLead = action.slice(action.indexOf('case "create_lead": {'), action.indexOf('case "attach_file": {'));
+  assert.ok(newLead.indexOf('await completeConfirmKey(tenantId, card.confirmKey, "a new lead", { leadId });') < newLead.indexOf("return withQuotes(leadId, false);"));
+  assert.match(newLead, /\} catch \(error\) \{[\s\S]*?return \{ \.\.\.resumable\(/, "resumable only from the quote step, after the lead exists");
   const nurture = action.slice(action.indexOf('case "nurture": {'), action.indexOf('case "quote": {'));
   assert.ok(nurture.indexOf("await reopenLead(card.leadId)") < nurture.indexOf("await saveLeadNurture(card.leadId, form)"));
   assert.match(nurture, /return reopened \|\| reopenedAlready\s*\? resumable\(/, "resumable only once the deal WAS reopened");
@@ -525,7 +530,10 @@ test("A PINNED NOTE WHOSE PIN FAILS IS NOT WRITTEN TWICE: the note was saved, so
   // (Round 2 item 4, four of reopen's — the deal not theirs any more, gone, no longer lost as shown, a role that
   // can't — all before reopenLead, its one write.)
   // (2026-11-09, one more of attach_file's — a supplier that isn't an id — before fileHeldUpload, its one write.)
-  assert.equal((run.match(/return untouched\(/g) ?? []).length, 76);
+  // (2026-11-14, review of #1117, one of log_call's — no confirm key — before logVoiceDebrief, its one write.)
+  assert.equal((run.match(/return untouched\(/g) ?? []).length, 77);
+  const logCall = run.slice(run.indexOf('case "log_call": {'), run.indexOf('case "note": {'));
+  assert.ok(logCall.indexOf("return untouched(STALE_CARD)") < logCall.indexOf("await logVoiceDebrief("));
   const buildCase = run.slice(run.indexOf('case "quote_build": {'), run.indexOf('case "quote_pdf": {'));
   assert.ok(buildCase.indexOf("The catalogue changed since DAX suggested this") < buildCase.indexOf("convertLeadToContact("), "every check before the customer record is made");
   const quotePdfCase = run.slice(run.indexOf('case "quote_pdf": {'), run.indexOf('case "quote_change": {'));
