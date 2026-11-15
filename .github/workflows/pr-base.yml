@@ -1,0 +1,54 @@
+name: PR targets main
+
+# BEFORE the merge, the other half of prs-landed.yml (which checks AFTER it).
+#
+# PR #548 fixed an unauthenticated webhook hole in #538 and was based on #538's
+# branch. #538 merged to main; #548 then merged into #538's dead branch, showed
+# MERGED, and main shipped the hole (AGENTS.md). Nothing flagged it, because
+# GitHub will merge into a branch that is already gone.
+#
+# So a PR whose base is not main fails here, in plain sight on the PR, unless it
+# is deliberately stacked (label `stacked`). And even a stacked PR fails once
+# its base branch has itself been merged: from then on, merging it ships nothing,
+# and it must be retargeted to main (gh pr edit <n> --base main).
+#
+# Re-runs when the base changes (edited) or the label does.
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, edited, labeled, unlabeled, ready_for_review]
+
+permissions:
+  pull-requests: read
+
+concurrency:
+  group: pr-base-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  base:
+    name: PR is aimed at main
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check the base branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BASE: ${{ github.event.pull_request.base.ref }}
+          STACKED: ${{ contains(github.event.pull_request.labels.*.name, 'stacked') }}
+        run: |
+          if [ "$BASE" = "main" ]; then
+            echo "Base is main."
+            exit 0
+          fi
+          # The #548 trap: the branch this PR merges into has already landed.
+          landed=$(gh pr list --repo "$REPO" --state merged --head "$BASE" --json number --jq '.[0].number // empty')
+          if [ -n "$landed" ]; then
+            echo "::error::This PR merges into '$BASE', which was already merged (PR #$landed). Merging this ships NOTHING. Retarget it: gh pr edit ${{ github.event.pull_request.number }} --base main"
+            exit 1
+          fi
+          if [ "$STACKED" != "true" ]; then
+            echo "::error::This PR merges into '$BASE', not main, so merging it does not ship it. Retarget it to main, or — only if it truly depends on code that exists only on '$BASE' — add the label 'stacked' (AGENTS.md)."
+            exit 1
+          fi
+          echo "::warning::Stacked on '$BASE' (label 'stacked'). When '$BASE' merges, retarget this PR to main before merging it."
