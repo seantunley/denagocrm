@@ -23,6 +23,26 @@ export type DealFacts = {
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 
+/** How close a done activity and its timeline message are when they are one event (both are written in one save). */
+export const SAME_EVENT_MS = 2 * 60_000;
+
+/**
+ * ONE INTERACTION, COUNTED ONCE (review of #1119). Logging a call (logVoiceDebrief) or ticking an activity done with a
+ * note (finishActivity) stores it twice: the done Activity and, seconds later, an outbound Communication of the same
+ * channel on the same deal. Each done activity is paired with at most one such message; a paired one is dropped. An
+ * activity with no message, and a message with no activity, each stay one touch.
+ */
+export function uniqueTouches(messages: Touch[], done: Touch[], withinMs = SAME_EVENT_MS): Touch[] {
+  const used = new Set<number>();
+  const unpaired = done.filter((a) => {
+    const i = messages.findIndex((m, j) => !used.has(j) && m.channel === a.channel && Math.abs(m.at.getTime() - a.at.getTime()) <= withinMs);
+    if (i < 0) return true;
+    used.add(i);
+    return false;
+  });
+  return [...messages, ...unpaired];
+}
+
 /** Days from `from` to the first touch at or after it, before the deal closed. */
 function nextTouchDays(from: Date | null, touches: Touch[]): number | null | undefined {
   if (!from) return undefined;

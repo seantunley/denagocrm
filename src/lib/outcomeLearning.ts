@@ -4,6 +4,7 @@ import { getWorkspaceSetting, putWorkspaceSetting } from "./settings";
 import { logAudit } from "./audit";
 import { applyLearn } from "./assistantMemoryStore";
 import { isModuleEnabled } from "./modules/enabled";
+import { DEFAULT_TENANT_ID } from "./tenant";
 import {
   PLAYBOOK_DESCRIPTION,
   dealFacts,
@@ -11,6 +12,7 @@ import {
   playbookName,
   playbookText,
   replyTiming,
+  uniqueTouches,
   type MessageFact,
   type Touch,
 } from "./outcomeLearningRules";
@@ -75,10 +77,11 @@ export async function closedDealFacts(tenantId: string, now = new Date()) {
     dates.filter((d): d is Date => Boolean(d)).reduce<Date | null>((a, d) => (!a || d < a ? d : a), null);
   const deals = leads.map((lead) => {
     const outbound = comms.filter((c) => c.leadId === lead.id && c.direction !== "inbound");
-    const touches: Touch[] = [
-      ...outbound.map((c) => ({ at: c.occurredAt, channel: c.type })),
-      ...activities.filter((a) => a.leadId === lead.id).map((a) => ({ at: a.doneAt!, channel: a.type })),
-    ];
+    // A logged call is a done Activity AND its timeline message: one touch, not two (uniqueTouches).
+    const touches: Touch[] = uniqueTouches(
+      outbound.map((c) => ({ at: c.occurredAt, channel: c.type })),
+      activities.filter((a) => a.leadId === lead.id).map((a) => ({ at: a.doneAt!, channel: a.type })),
+    );
     const ownQuotes = quotes.filter((q) => q.leadId === lead.id);
     const ownQuoteIds = new Set(ownQuotes.map((q) => q.id));
     return dealFacts({
@@ -102,6 +105,14 @@ export async function closedDealFacts(tenantId: string, now = new Date()) {
     });
   return { deals, messages };
 }
+
+/**
+ * The research cron's call, per runCronPerTenant slice. A null tenantId is the runner's "not enforcing" report, not
+ * "no workspace": it has bound the founding workspace's scope, so that is the workspace — as automations and
+ * signing-jobs read it (review of #1119: skipping null meant the weekly run never happened with enforcement off).
+ */
+export const runOutcomeLearningForCron = (tenantId: string | null, opts: { now?: Date } = {}) =>
+  runOutcomeLearning(tenantId ?? DEFAULT_TENANT_ID, opts);
 
 /**
  * Work it out and file the proposal. Not due (a week since the last), switched off, or nothing clear enough: no

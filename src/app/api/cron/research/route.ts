@@ -5,7 +5,7 @@ import { warmUpForCron } from "@/lib/cronPreflight";
 import { runAutoResearch, AUTO_RESEARCH_RESERVE_MS } from "@/lib/ai";
 import { runCronPerTenant } from "@/lib/tenantCron";
 import { runAssistantTidy, TIDY_RESERVE_MS } from "@/lib/assistantTidy";
-import { runOutcomeLearning } from "@/lib/outcomeLearning";
+import { runOutcomeLearningForCron } from "@/lib/outcomeLearning";
 
 /**
  * Automatic research on new leads, once per tenant per tick.
@@ -55,9 +55,10 @@ export async function GET(req: NextRequest) {
             return null;
           });
       // Learning from outcomes: once a week, database reads only (no model call), filed for the owner to approve.
-      const outcomesLearned = !tenantId || budget.shouldStop(MIN_START_BUDGET_MS)
+      // With enforcement off tenantId is null and the founding workspace is bound — it runs there (never skipped).
+      const outcomesLearned = budget.shouldStop(MIN_START_BUDGET_MS)
         ? null
-        : await runOutcomeLearning(tenantId).catch((error: unknown) => {
+        : await runOutcomeLearningForCron(tenantId).catch((error: unknown) => {
             logError("assistant-outcome-learning", error);
             return null;
           });

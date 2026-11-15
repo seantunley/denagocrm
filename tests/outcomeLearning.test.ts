@@ -8,6 +8,8 @@ import {
   playbookName,
   playbookText,
   replyTiming,
+  SAME_EVENT_MS,
+  uniqueTouches,
   type DealFacts,
 } from "../src/lib/outcomeLearningRules";
 import { scanEntry } from "../src/lib/assistantMemory";
@@ -106,6 +108,28 @@ test("filed as an unreviewed playbook by nobody, so no one's DAX uses it until t
   assert.match(actions, /export async function saveOutcomeLearning[\s\S]*?requireTenantOwner\(\)/);
   assert.match(actions, /export async function checkOutcomesNow[\s\S]*?requireTenantOwner\(\)/);
   assert.match(code("src/app/(app)/settings/assistant/page.tsx"), /Suggest playbook updates from won deals/);
-  // Weekly, from the research cron.
-  assert.match(code("src/app/api/cron/research/route.ts"), /await runOutcomeLearning\(tenantId\)/);
+  // Weekly, from the research cron — never skipped for the runner's null (enforcement off; review of #1119).
+  const cron = code("src/app/api/cron/research/route.ts");
+  assert.match(cron, /await runOutcomeLearningForCron\(tenantId\)/);
+  assert.doesNotMatch(cron, /!tenantId/);
+  assert.match(lib, /export const runOutcomeLearningForCron = \(tenantId: string \| null, opts: \{ now\?: Date \} = \{\}\) =>\s*runOutcomeLearning\(tenantId \?\? DEFAULT_TENANT_ID, opts\);/);
+});
+
+test("a logged call is one touch: its done activity and its timeline message pair up (review of #1119)", () => {
+  const call = (ms: number) => ({ at: at(ms), channel: "call" });
+  const email = { at: at(-D), channel: "email" };
+  // logVoiceDebrief: the activity, then its message seconds later; plus one email → 2, not 3.
+  assert.equal(uniqueTouches([email, call(5_000)], [call(0)]).length, 2);
+  // A message of another channel, or too far apart, is its own touch.
+  assert.equal(uniqueTouches([{ at: at(5_000), channel: "email" }], [call(0)]).length, 2);
+  assert.equal(uniqueTouches([call(SAME_EVENT_MS + 1)], [call(0)]).length, 2);
+  // One message pairs with ONE activity: two calls a minute apart with one note between them are two touches.
+  assert.equal(uniqueTouches([call(30_000)], [call(0), call(60_000)]).length, 2);
+  // Activity-only and message-only calls stay.
+  assert.equal(uniqueTouches([], [call(0)]).length, 1);
+  assert.equal(uniqueTouches([call(0)], []).length, 1);
+  // The three-touch habit sees the deduped count.
+  const facts = dealFacts({ won: true, createdAt: at(-2 * D), closedAt: at(D), touches: uniqueTouches([email, call(5_000)], [call(0)]), quoteSentAt: null, quoteViewedAt: null });
+  assert.equal(facts.touches, 2);
+  assert.match(code("src/lib/outcomeLearning.ts"), /const touches: Touch\[\] = uniqueTouches\(/);
 });
