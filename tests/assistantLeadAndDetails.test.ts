@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
-import { ACTION_INSTRUCTIONS, customerChangesText, parseActionList, unlinkedOpenQuotesWhere } from "../src/lib/assistantActions";
+import { ACTION_INSTRUCTIONS, customerChangesText, leadQuotesReply, parseActionList, unlinkedOpenQuotesWhere } from "../src/lib/assistantActions";
 import { WHATSAPP_CONFIRMABLE } from "../src/lib/assistantWhatsAppRules";
 import { contactFormFor, type ContactRecord } from "../src/lib/contactFormFor";
 
@@ -90,8 +90,13 @@ test("lead card: leads.create first, a customer they may open, the catalogue's p
   const action = code("src/app/actions/assistant.ts");
   const run = action.slice(action.indexOf('case "create_lead": {'), action.indexOf('case "attach_file": {'));
   assert.equal((run.match(/await [a-zA-Z.]+\(/g) ?? []).filter((call) => !/canAccessContact|createLead|confirmed|reserveConfirmKey|completeConfirmKey|putQuotesOnNewLead|logError/.test(call)).length, 0, "createLead, then the customer's quotes, are the only writes");
-  // The quotes go on AFTER the lead is open and its key spent: a failure there never re-opens the lead.
-  assert.ok(run.indexOf('await completeConfirmKey(tenantId, card.confirmKey, "a new lead", { leadId });') < run.indexOf("await putQuotesOnNewLead(user, leadId, l.quoteIds)"));
+  // TWO STEPS, EACH ONCE (review of #1125): the key is spent with the lead the moment it exists, then the quotes go
+  // on; a Confirm again ("done") runs only the quote step, so a failed link is finished without a second lead.
+  assert.ok(run.indexOf('await completeConfirmKey(tenantId, card.confirmKey, "a new lead", { leadId });') < run.indexOf("return withQuotes(leadId, false);"));
+  assert.match(run, /return made \? withQuotes\(made, true\) : \{ ok: false, error: LEAD_UNSURE \};/);
+  // A throw is the database, not a changed quote: Confirm again is offered (resumable), and nothing names the customer in the log.
+  assert.match(run, /await logError\("assistant-actions", "putting quotes on a new lead failed", error instanceof Error \? error\.name : "unknown"\)/);
+  assert.match(run, /resumable\(`The lead for \$\{card\.leadLabel\} is open, but \$\{numbers\} couldn't be put on it just now\. Tap Confirm again to finish/);
   // ONE CONFIRM, ONE LEAD (review of #933): the card's key is reserved BEFORE createLead, and spent after — "done"
   // with the lead it made, or "didn't complete" on any error (retry only on proof that nothing was written).
   assert.ok(run.indexOf("await reserveConfirmKey(tenantId, user.id, card.confirmKey, \"a new lead\")") < run.indexOf("await createLead(form)"));
@@ -111,13 +116,26 @@ test("a customer's open quotes on no deal go on the lead opened for them — re-
   assert.match(branch, /contactId && \(await hasPermission\(user, "quotes\.edit"\)\)/);
   assert.match(branch, /prisma\.quote\.findMany\(\{ where: unlinkedOpenQuotesWhere\(contactId\), orderBy: \{ createdAt: "desc" \}, take: LEAD_QUOTES_MAX,/);
   assert.match(branch, /q\.currency === quotes\[0\]\.currency && \(await canAccessQuote\(user, q\.id\)\)/, "one currency, and only quotes they may open");
-  const action = code("src/app/actions/assistant.ts");
-  const put = action.slice(action.indexOf("async function putQuotesOnNewLead("), action.indexOf("async function fileHeldUpload("));
-  assert.ok(put.indexOf('hasPermission(user, "quotes.edit")') < put.indexOf("prisma.lead.findFirst"), "the permission first");
-  assert.match(put, /if \(typeof id === "string" && \(await canAccessQuote\(user, id\)\)\) ids\.push\(id\);/, "each quote, again");
-  assert.match(put, /const where = \{ \.\.\.unlinkedOpenQuotesWhere\(lead\.contactId\), id: \{ in: ids \}, tenantId: lead\.tenantId, currency: lead\.currency \};/, "still open, on no deal, the lead's customer, workspace and currency");
+  const put = code("src/lib/assistantLeadQuotes.ts");
+  assert.match(put, /: !\(await canAccessQuote\(user, row\.id\)\) \? "you can't open it any more"/, "each quote, again");
+  assert.match(put, /where: \{ id: \{ in: asked\.map\(\(q\) => q\.id\) \}, tenantId: lead\.tenantId \}/, "only the lead's workspace");
+  assert.match(put, /const where = \{ \.\.\.unlinkedOpenQuotesWhere\(lead\.contactId\), id: \{ in: eligible\.map\(\(q\) => q\.id\) \}, tenantId: lead\.tenantId, currency: lead\.currency \};/, "still open, on no deal, the lead's customer, workspace and currency");
   assert.match(put, /prisma\.\$transaction\(async \(tx\) => \{/);
-  assert.match(put, /if \(done\.count !== rows\.length\) throw new Error/, "a quote changed in between rolls the lot back");
+  assert.match(put, /if \(done\.count !== eligible\.length\) throw new Error/, "a quote changed in between: nothing moves, and Confirm again sorts it");
+  assert.match(put, /if \(row\.leadId === leadId\) \{ out\.already\.push\(row\.number\); continue; \}/, "on the lead already: done, not skipped — so Confirm again is safe");
+});
+
+test("the Confirm reply names every quote the card promised — on the lead, or staying on the customer, and why", () => {
+  assert.equal(leadQuotesReply("Cara", { moved: [1044], already: [], skipped: [] }, false), "Lead opened for Cara, with Q-1044 on it");
+  assert.equal(
+    leadQuotesReply("Cara", { moved: [1044], already: [], skipped: [{ number: 1043, why: "it's declined now" }] }, false),
+    "Lead opened for Cara, with Q-1044 on it. Q-1043 stays on the customer: it's declined now.",
+  );
+  assert.equal(
+    leadQuotesReply("Cara", { moved: [], already: [], skipped: [{ number: 1043, why: "it was deleted" }, { number: 1045, why: "it's on another deal now" }] }, false),
+    "Lead opened for Cara. Q-1043 stays on the customer: it was deleted. Q-1045 stays on the customer: it's on another deal now.",
+  );
+  assert.equal(leadQuotesReply("Cara", { moved: [1045], already: [1044], skipped: [] }, true), "That lead is already open for Cara, with Q-1045, Q-1044 on it");
 });
 
 test("update card: contacts.edit and access first; Confirm refuses a field changed since, then updateContact", () => {

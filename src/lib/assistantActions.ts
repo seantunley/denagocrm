@@ -866,15 +866,25 @@ export const STALE_CARD ="This changed since DAX suggested it — ask again to s
 export type NewCustomer = { firstName: string; lastName: string | null; company: string | null; phone: string | null; email: string | null };
 /** The ONE record a file is filed on — the documents form's own four (a deal's file goes on its customer). */
 export type FileTarget = { contactId: string } | { vehicleId: string } | { jobCardId: string } | { quoteId: string };
-// stageId: the stage they named (else the first open one). quoteIds: the customer's open quotes on no deal yet,
-// put on this lead at Confirm (Sean, 2026-11-15: Q-1043 was built for the customer, then the lead opened without it).
-// Both optional: a card saved before them still confirms.
-export type NewLead = { contactId: string | null; name: string; phone: string | null; email: string | null; productId: string | null; notes: string | null; stageId?: string | null; quoteIds?: string[]; currency?: string | null };
+// stageId: the stage they named (else the first open one). quotes: the customer's open quotes on no deal yet, put on
+// this lead at Confirm (Sean, 2026-11-15: Q-1043 was built for the customer, then the lead opened without it) — the
+// number is what the card promised, so the reply can name each one. All optional: a card saved before them still confirms.
+export type NewLead = { contactId: string | null; name: string; phone: string | null; email: string | null; productId: string | null; notes: string | null; stageId?: string | null; quotes?: { id: string; number: number }[]; currency?: string | null };
 
 /** A customer's quotes that belong on the deal opened for them: still open, current, on no deal yet. At most this many. */
 export const LEAD_QUOTES_MAX = 5;
 export function unlinkedOpenQuotesWhere(contactId: string) {
   return { contactId, leadId: null, deletedAt: null, supersededAt: null, status: { in: ["draft", "sent"] } };
+}
+
+/** What became of each quote a new-lead card promised: put on it now, on it already (an earlier Confirm), or left, and why. */
+export type LeadQuotesOutcome = { moved: number[]; already: number[]; skipped: { number: number; why: string }[] };
+
+/** The Confirm reply: every promised quote is named — on the lead, or staying on the customer with the reason (review of #1125). */
+export function leadQuotesReply(who: string, outcome: LeadQuotesOutcome, again: boolean): string {
+  const on = [...outcome.moved, ...outcome.already].map((n) => `Q-${n}`);
+  const head = `${again ? "That lead is already open" : "Lead opened"} for ${who}${on.length ? `, with ${on.join(", ")} on it` : ""}`;
+  return [head, ...outcome.skipped.map((s) => `Q-${s.number} stays on the customer: ${s.why}`)].join(". ") + (outcome.skipped.length ? "." : "");
 }
 
 /** The customer fields DAX may change (update_customer), with the words the card uses. */

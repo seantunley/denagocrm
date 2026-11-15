@@ -10,6 +10,7 @@ import { contactFormFor } from "@/lib/contactFormFor";
 import { completeConfirmKey, releaseConfirmKey, reserveConfirmKey } from "@/lib/assistantConfirmKey";
 import { MAX_IMAGE_BYTES } from "@/lib/assistantImage";
 import { heldUpload } from "@/lib/assistantUpload";
+import { putQuotesOnNewLead } from "@/lib/assistantLeadQuotes";
 import { uploadDocument } from "@/app/actions/documents";
 import { recordQuotePayment } from "@/app/actions/quotePayments";
 import { markDepositPaid, rescheduleDelivery, scheduleDelivery } from "@/app/actions/fulfilment";
@@ -17,7 +18,7 @@ import { johannesburgDateKey } from "@/lib/activityDay";
 import { getSetting, getRegionalSettings } from "@/lib/settings";
 import { isCodexConnected } from "@/lib/codex";
 import { ASSISTANT_PROFILE_KEY, parseProfile } from "@/lib/assistantSoul";
-import { CONFIRM_KEY, CUSTOMER_FIELDS, LEAD_QUOTES_MAX, unlinkedOpenQuotesWhere, QUOTE_ADD_MAX_FEES, QUOTE_ADD_MAX_FEE_RANDS, QUOTE_BUILD_MAX_LINES, STALE_CARD, type ActionCard } from "@/lib/assistantActions";
+import { CONFIRM_KEY, CUSTOMER_FIELDS, leadQuotesReply, QUOTE_ADD_MAX_FEES, QUOTE_ADD_MAX_FEE_RANDS, QUOTE_BUILD_MAX_LINES, STALE_CARD, type ActionCard } from "@/lib/assistantActions";
 import { editorDefaults, quoteFromLeadDefaults } from "@/lib/quoteFromLead";
 import { QUOTE_PDF_SOURCE } from "@/lib/assistantWhatsAppRules";
 import { tenantOrigin } from "@/lib/tenantOrigin";
@@ -87,36 +88,6 @@ const resumable = (error: string) => ({ ok: false as const, error, resumable: tr
 const BAD_SCREENSHOT = "That screenshot can't be attached — send it to DAX again.";
 const UPLOAD_GONE = "That file is no longer held (it is kept for a day) — send it to DAX again.";
 const FILE_UNSURE = "That didn't complete, and the file may have been filed anyway — so it won't be tried again. Check the record's documents, and send the file to DAX again if it's missing.";
-
-/**
- * The customer's open quotes a create_lead card listed, put on the lead it just opened (Sean, 2026-11-15). Each is
- * checked again here: this person may still edit it, and it is STILL open, current, on no deal, the lead's customer's,
- * in the lead's workspace and currency. One transaction, and the count must match the rows read: a quote linked or
- * changed in between rolls the lot back rather than reporting one that didn't move. Returns the quote numbers moved.
- */
-async function putQuotesOnNewLead(user: Parameters<typeof canAccessQuote>[0], leadId: string, quoteIds: unknown[]): Promise<number[]> {
-  if (!(await hasPermission(user, "quotes.edit"))) return [];
-  const lead = await prisma.lead.findFirst({ where: { id: leadId, deletedAt: null }, select: { tenantId: true, contactId: true, currency: true } });
-  if (!lead?.tenantId || !lead.contactId) return [];
-  const ids: string[] = [];
-  for (const id of quoteIds.slice(0, LEAD_QUOTES_MAX)) if (typeof id === "string" && (await canAccessQuote(user, id))) ids.push(id);
-  if (!ids.length) return [];
-  const where = { ...unlinkedOpenQuotesWhere(lead.contactId), id: { in: ids }, tenantId: lead.tenantId, currency: lead.currency };
-  const moved = await prisma.$transaction(async (tx) => {
-    const rows = await tx.quote.findMany({ where, select: { id: true, number: true } });
-    if (!rows.length) return [];
-    const done = await tx.quote.updateMany({ where: { ...where, id: { in: rows.map((r) => r.id) } }, data: { leadId } });
-    if (done.count !== rows.length) throw new Error("quotes changed while being put on the lead");
-    return rows.map((r) => r.number);
-  });
-  if (moved.length) {
-    await logAudit({
-      action: "quote.lead_linked", summary: `Put ${moved.map((n) => `Q-${n}`).join(", ")} on the new lead`,
-      user, leadId, contactId: lead.contactId, metadata: { quoteNumbers: moved, via: "assistant" },
-    });
-  }
-  return moved;
-}
 
 /**
  * FILE A HELD UPLOAD ONCE (review of #934), through the documents form's own door (uploadDocument). Two rules:
@@ -379,11 +350,24 @@ export async function runAssistantAction(
         // (assistantConfirmKey). A second Confirm gets the lead the first made; two at once, one lead.
         const tenantId = ownedWriteTenantId();
         const reserved = await reserveConfirmKey(tenantId, user.id, card.confirmKey, "a new lead");
+        // TWO STEPS, EACH ONCE (review of #1125): the key is spent with the lead as soon as it exists, so no Confirm can
+        // ever open a second one. The quotes are the second step and run on EVERY Confirm of the card — one already on
+        // the lead counts as done — so a Confirm again after a failure finishes only what is left.
+        const withQuotes = async (leadId: string, again: boolean) => {
+          const href = `/leads/${leadId}`;
+          if (!Array.isArray(l.quotes) || !l.quotes.length) return { ok: true, success: again ? `That lead is already open for ${card.leadLabel}` : `Lead opened for ${card.leadLabel}`, href };
+          try {
+            return { ok: true, success: leadQuotesReply(card.leadLabel, await putQuotesOnNewLead(user, leadId, l.quotes), again), href };
+          } catch (error) {
+            // Not "the quote changed": the database didn't answer, and nothing moved. Logged without client data.
+            await logError("assistant-actions", "putting quotes on a new lead failed", error instanceof Error ? error.name : "unknown").catch(() => {});
+            const numbers = l.quotes.map((q) => `Q-${q.number}`).join(", ");
+            return { ...resumable(`The lead for ${card.leadLabel} is open, but ${numbers} couldn't be put on it just now. Tap Confirm again to finish — the lead won't be opened twice.`), href };
+          }
+        };
         if (reserved.state === "done") {
           const made = typeof reserved.result.leadId === "string" ? reserved.result.leadId : null;
-          return made
-            ? { ok: true, success: `That lead is already open for ${card.leadLabel}`, href: `/leads/${made}` }
-            : { ok: false, error: LEAD_UNSURE };
+          return made ? withQuotes(made, true) : { ok: false, error: LEAD_UNSURE };
         }
         if (reserved.state === "busy") return { ok: false, error: "That lead is being opened right now — check the CRM in a moment." };
         const form = new FormData();
@@ -408,20 +392,7 @@ export async function runAssistantAction(
         }
         await completeConfirmKey(tenantId, card.confirmKey, "a new lead", { leadId });
         await confirmed("open a lead", leadId);
-        if (!Array.isArray(l.quoteIds) || !l.quoteIds.length) return { ok: true, success: `Lead opened for ${card.leadLabel}`, href: `/leads/${leadId}` };
-        // The lead is open whatever happens next: a quote that can't be put on it stays on the customer, and says so.
-        const put = await putQuotesOnNewLead(user, leadId, l.quoteIds).catch(async (error) => {
-          await logError("assistant-actions", "putting quotes on a new lead failed", error instanceof Error ? error.name : "unknown").catch(() => {});
-          return [];
-        });
-        const quotes = put.map((n) => `Q-${n}`).join(", ");
-        return {
-          ok: true,
-          success: put.length
-            ? `Lead opened for ${card.leadLabel}, with ${quotes} on it`
-            : `Lead opened for ${card.leadLabel} — its quote${l.quoteIds.length === 1 ? "" : "s"} changed since, so ${l.quoteIds.length === 1 ? "it stays" : "they stay"} on the customer`,
-          href: `/leads/${leadId}`,
-        };
+        return withQuotes(leadId, false);
       }
       case "attach_file": {
         // THE DOCUMENTS FORM'S OWN DOOR (uploadDocument): documents.upload, access to THE one record, the size limit,

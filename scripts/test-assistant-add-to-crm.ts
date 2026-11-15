@@ -27,6 +27,7 @@ import { canAccessContact, type PermissionUser } from "../src/lib/permissions";
 import type { ActionCard } from "../src/lib/assistantActions";
 import { resolveActions } from "../src/lib/crmAssistant";
 import { runAssistantAction } from "../src/app/actions/assistant";
+import { __failNextQuoteLinkForTests } from "../src/lib/assistantLeadQuotes";
 import { signFreshSession } from "../src/lib/session";
 import { runAsSession, type ActingSession } from "./harness/actingSession";
 import { readFile, rm } from "node:fs/promises";
@@ -72,7 +73,7 @@ const TAG = id("tag");
 const PRODUCT = id("product");
 const STAGE = id("stage");
 const STAGE_QUOTED = id("stage-quoted");
-const CARA_QUOTES = ["q-draft", "q-sent", "q-declined"].map(id);
+const CARA_QUOTES = ["q-draft", "q-sent", "q-declined", "q-later"].map(id);
 const scoped = <R>(fn: () => Promise<R>) => runInTenantScope({ tenantId: T, system: false }, fn);
 
 async function seed() {
@@ -298,7 +299,7 @@ async function main() {
     check("a stage the pipeline doesn't have: no card, and it says why", !nowhere.card && /no open stage called "Nowhere"/.test(nowhere.problems.join(" ")), nowhere.problems.join(" | "));
     const forCara = await lead({ contactId: id("c-cara"), stage: `Quoted ${SFX}` });
     check("the card lists her open quotes on no deal, newest first, and the stage named — never the declined one",
-      JSON.stringify(forCara.card?.lead.quoteIds) === JSON.stringify([id("q-sent"), id("q-draft")]) && forCara.card?.lead.stageId === STAGE_QUOTED
+      JSON.stringify(forCara.card?.lead.quotes) === JSON.stringify([{ id: id("q-sent"), number: n + 1 }, { id: id("q-draft"), number: n }]) && forCara.card?.lead.stageId === STAGE_QUOTED
       && forCara.card.detail.includes(`Puts Q-${n + 1} (sent), Q-${n} (draft) on this lead.`) && forCara.card.detail.includes(`Opens in Quoted ${SFX}`) && !forCara.card.detail.includes(`Q-${n + 2}`), JSON.stringify(forCara));
     // Between the card and Confirm the draft is declined: only what is STILL open moves.
     await basePrisma.quote.update({ where: { id: id("q-draft") }, data: { status: "declined" } });
@@ -306,15 +307,37 @@ async function main() {
     const caraLead = opened.href ? await basePrisma.lead.findUnique({ where: { id: opened.href.split("/").pop()! } }) : null;
     const linked = await basePrisma.quote.findMany({ where: { contactId: id("c-cara") }, select: { id: true, leadId: true } });
     const on = (key: string) => linked.find((q) => q.id === id(key))?.leadId ?? null;
-    check("Confirm: the lead opens in the stage named, with the sent quote on it — the declined ones stay off",
+    // A PARTIAL link is never silent (review of #1125): the reply names the promised quote that stayed behind, and why.
+    check("Confirm: the lead opens in the stage named, with the sent quote on it — and the reply names the draft that was declined since",
       opened.ok && caraLead?.stageId === STAGE_QUOTED && on("q-sent") === caraLead.id && on("q-draft") === null && on("q-declined") === null
-      && opened.success === `Lead opened for Cara Quoted${SFX}, with Q-${n + 1} on it`, JSON.stringify({ opened, caraLead, linked }));
-    // A card naming a quote that isn't open (forged, or changed since): the lead opens, the quote stays put, and it says so.
+      && opened.success === `Lead opened for Cara Quoted${SFX}, with Q-${n + 1} on it. Q-${n} stays on the customer: it's declined now.`, JSON.stringify({ opened, caraLead, linked }));
+    // A card naming a quote that isn't open (forged, or changed since): the lead opens, the quote stays put, and it says which and why.
     const forged = await lead({ contactId: id("c-cara") });
-    const forgedCard = { ...forged.card!, lead: { ...forged.card!.lead, quoteIds: [id("q-declined")] } };
+    const forgedCard = { ...forged.card!, lead: { ...forged.card!.lead, quotes: [{ id: id("q-declined"), number: n + 2 }] } };
     const refused = await runAsSession(repSession, () => scoped(() => runAssistantAction(forgedCard)));
-    check("a quote that isn't open is never moved, and the reply says it stays on the customer",
-      refused.ok && /stays on the customer/.test(refused.success ?? "") && (await basePrisma.quote.findUnique({ where: { id: id("q-declined") } }))?.leadId === null, JSON.stringify(refused));
+    check("a quote that isn't open is never moved, and the reply names it and why",
+      refused.ok && refused.success?.endsWith(`Q-${n + 2} stays on the customer: it's declined now.`) === true && (await basePrisma.quote.findUnique({ where: { id: id("q-declined") } }))?.leadId === null, JSON.stringify(refused));
+
+    // THE LINK FAILS ONCE after the lead is open (the database didn't answer): Confirm again finishes it — one lead,
+    // the quote on it exactly once — and it is never reported as "changed".
+    await quoteFor("q-later", n + 3, "draft", 1);
+    const caraLeads = () => basePrisma.lead.count({ where: { contactId: id("c-cara"), deletedAt: null } });
+    const retryCard = (await lead({ contactId: id("c-cara") })).card!;
+    check("a fresh card promises the new draft", JSON.stringify(retryCard.lead.quotes) === JSON.stringify([{ id: id("q-later"), number: n + 3 }]), JSON.stringify(retryCard));
+    const before = await caraLeads();
+    __failNextQuoteLinkForTests();
+    const broke = await runAsSession(repSession, () => scoped(() => runAssistantAction(retryCard)));
+    const brokeLead = broke.href?.split("/").pop() ?? "";
+    check("the link throws: the lead is open, nothing moved, and Confirm again is offered (resumable) — not 'changed'",
+      !broke.ok && broke.resumable === true && /couldn't be put on it just now\. Tap Confirm again/.test(broke.error ?? "") && (await caraLeads()) === before + 1
+      && (await basePrisma.quote.findUnique({ where: { id: id("q-later") } }))?.leadId === null, JSON.stringify(broke));
+    const finished = await runAsSession(repSession, () => scoped(() => runAssistantAction(retryCard)));
+    const third = await runAsSession(repSession, () => scoped(() => runAssistantAction(retryCard)));
+    const linkedOnce = await basePrisma.auditLog.count({ where: { action: "quote.lead_linked", leadId: brokeLead } });
+    check("Confirm again: the same lead, now with the quote on it — no second lead, linked exactly once",
+      finished.ok && finished.href === broke.href && finished.success === `That lead is already open for Cara Quoted${SFX}, with Q-${n + 3} on it`
+      && third.ok && third.href === broke.href && (await caraLeads()) === before + 1
+      && (await basePrisma.quote.findUnique({ where: { id: id("q-later") } }))?.leadId === brokeLead && linkedOnce === 1, JSON.stringify({ finished, third, linkedOnce }));
   }
 
   console.log("\nChange a customer's details");

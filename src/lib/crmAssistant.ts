@@ -3081,7 +3081,7 @@ export async function resolveActions(
         lead: {
           contactId, name: who, phone, email, productId: product?.id ?? null, notes: p.notes ?? null,
           ...(stage ? { stageId: stage.id } : {}),
-          ...(mine.length ? { quoteIds: mine.map((q) => q.id), currency: mine[0].currency } : {}),
+          ...(mine.length ? { quotes: mine.map((q) => ({ id: q.id, number: q.number })), currency: mine[0].currency } : {}),
         },
         detail: [
           contactId ? `Customer: ${who} (already in the CRM)` : `New customer: ${who} — created with the lead`,
