@@ -757,6 +757,12 @@ jobs:
       - name: Assistant -- editing a question withdraws only what that answer offered
         run: npm run test:assistant-edit
 
+      # DAX_Conversational_Upgrades §1: a draft four turns back comes back word for word — full body, deal, subject,
+      # Cc — and an email stays (Cc and all) beside its WhatsApp variant; never a colleague's, another conversation's
+      # or another workspace's.
+      - name: Assistant -- earlier drafts come back word for word, only this person's in this conversation
+        run: npm run test:assistant-drafts
+
       # DAX report PDFs (review of #1093): with tenant enforcement OFF, the same person's answer from another
       # workspace is "not found" — never printed under this workspace's name and logo.
       - name: Assistant -- a report PDF only from an answer in this workspace
@@ -792,11 +798,28 @@ jobs:
       - name: DAX opening line -- only the person's own brief, and switchable
         run: npm run test:assistant-opening-line
 
+      # Sean, 2026-11-14: "no search across past conversations, and no rename or delete". Search finds only the
+      # person's own live conversations; rename/delete writes can't reach a colleague's or another workspace's; a
+      # deleted conversation leaves the list, the picker and what DAX recalls; the purge removes it after 60 days.
+      - name: DAX conversations -- search, rename and delete, only your own
+        run: npm run test:assistant-conversation-manage
+
       # A scheduled briefing going to a linked phone: what is waiting, claimed
       # before it is sent and released when it could not be, the template nudge
       # claimed once. No WhatsApp connection here, so nothing is ever sent.
       - name: Assistant -- updates to a linked phone are claimed, released and never lost
         run: npm run test:assistant-updates-whatsapp
+
+      - name: DAX invoices -- held to the Invoices page's rule, owing per currency, never a payment reference
+        # Sean, 2026-11-14: "DAX must have knowledge of those things, permission based". deliveries.view + Automotive,
+        # only quotes the person may open; outstanding per currency; Xero filter; no reference; read-only.
+        run: npm run test:assistant-invoices
+
+      - name: DAX log a call -- filed only on Confirm, on deals and customers the rep may open
+        # Sean, 2026-11-14: "Record or dictate a call, and DAX writes the summary, files it and proposes the
+        # follow-up". The card writes nothing; Confirm files the call, its notes and the follow-up; never another
+        # rep's deal or customer, never the other workspace.
+        run: npm run test:assistant-log-call
 
       # "Whose number is this?" is raw SQL, so the soft-delete filter is not
       # applied for it. A number on a lead binned months earlier still matched:

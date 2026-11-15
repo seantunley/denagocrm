@@ -16,14 +16,14 @@ test("signing: every kind of request, waiting by default, up to 60", () => {
   assert.match(plan, /"who still has to sign their delivery note"/);
 });
 
-test("signing is held to the Signatures page's rule, and stricter for delivery notes", () => {
+test("signing is held to the Signatures page's own rule (which holds a delivery note to its quote)", () => {
   const src = code("src/lib/assistantSigningLookup.ts");
   assert.match(src, /hasAnyPermission\(user, "signing\.view", "signing\.manage"\)/);
   assert.match(src, /accessibleSignatureRequestWhere\(user\)/);
   // ANDed with everything, never spread; the workspace named.
-  assert.match(src, /const where = \{\s*tenantId,\s*deletedAt: null,\s*AND: \[\s*mine,\s*deliveryNotes,/);
-  // A delivery note only with its quote — spelled as an OR so a request with no subject is never dropped.
-  assert.match(src, /\{ OR: \[\{ subjectType: null \}, \{ subjectType: \{ not: DELIVERY_NOTE \} \}, \{ subjectId: \{ in: quoteIds \} \}\] \}/);
+  assert.match(src, /const where = \{\s*tenantId,\s*deletedAt: null,\s*AND: \[\s*mine,/);
+  // The delivery-note rule lives in the shared filter (signing/binding.ts, pinned in signingStaffSide.test.ts).
+  assert.match(code("src/lib/signing/binding.ts"), /\{ quoteId: null, subjectType: DELIVERY_NOTE, subjectId: among\(ids\.quoteIds\) \}/);
   // Never selected, so never shown: tokens, emails, phones, IPs, hashes, signature images.
   const selected = src.slice(src.indexOf("recipients: { where:"), src.indexOf("prisma.signatureRequest.count"));
   assert.doesNotMatch(selected, /token|email|phone|signerIp|signatureRef|Hash|PdfRef/);

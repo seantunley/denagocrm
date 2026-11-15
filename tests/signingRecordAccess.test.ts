@@ -99,7 +99,7 @@ test("ONE authoritative binding decides, not whichever one the caller can reach"
   // document is GENERATED from the quote and the contact is merely its
   // customer, so neither is evidence of access to the deal.
   const { governingBinding } = await import("../src/lib/signing/binding");
-  const none = { quoteId: null, jobCardId: null, documentId: null, contactId: null, createdById: null };
+  const none = { quoteId: null, jobCardId: null, documentId: null, contactId: null, createdById: null, subjectType: null, subjectId: null };
 
   assert.deepEqual(
     governingBinding({ ...none, quoteId: "q1", jobCardId: "j1", documentId: "d1", contactId: "c1" }),
@@ -116,6 +116,11 @@ test("ONE authoritative binding decides, not whichever one the caller can reach"
   );
   assert.deepEqual(governingBinding({ ...none, contactId: "c1" }), { kind: "contact", id: "c1" });
   assert.equal(governingBinding(none), null, "an unbound request has no governing record");
+  assert.deepEqual(
+    governingBinding({ ...none, subjectType: "delivery_note", subjectId: "q1", documentId: "d1", contactId: "c1" }),
+    { kind: "quote", id: "q1" },
+    "a delivery note is governed by its quote, not its customer or document",
+  );
 });
 
 test("the decision never widens by asking several bindings at once", () => {

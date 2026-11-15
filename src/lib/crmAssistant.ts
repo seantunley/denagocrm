@@ -22,7 +22,7 @@ import { getCompanyProfile } from "./companyProfile";
 import { searchBotKnowledge } from "./botKnowledge";
 import { getEnabledModuleIds, isModuleEnabled } from "./modules/enabled";
 import { ownedWriteTenantId } from "./tenantWrite";
-import { afterAnswer, conversationTurns, pickConversation } from "./assistantConversation";
+import { afterAnswer, conversationTurns, liveTurnsWhere, pickConversation } from "./assistantConversation";
 import { runAfterResponse } from "./afterResponse";
 import { isCustomerSigner } from "./signing/quoteMirror";
 import { firstCustomerView, memoCustomer } from "./signing/customerView";
@@ -59,6 +59,7 @@ import { stuckLookup } from "./assistantStuckLookup";
 import { catchUpLookup } from "./assistantCatchUpLookup";
 import { lostAliveLookup } from "./assistantLostAliveLookup";
 import { campaignsLookup, forecastLookup, referralsLookup, surveysLookup, ticketsLookup } from "./assistantAreaLookups";
+import { invoicesLookup } from "./assistantInvoicesLookup";
 import { testDrivesLookup } from "./assistantTestDrivesLookup";
 import { signingLookup } from "./assistantSigningLookup";
 import { competitorsLookup, targetsLookup } from "./assistantTargetsLookup";
@@ -90,7 +91,7 @@ import { matchVendorByName } from "./vendors";
 import { paymentMethodLabel } from "./accountStatement";
 import { carriedUpload, holdUpload, linkUpload, photoUpload, uploadImage } from "./assistantUpload";
 import { actingTenantId } from "./actingTenant";
-import { ACTION_INSTRUCTIONS, CHECK_BACK_RULE, CHOICE_INSTRUCTIONS, JOB_CARD_RULE, MAX_ACTIONS, newCustomerDetail, type NewCustomer, CUSTOMER_FIELDS, customerChangesText, type CustomerChange, type CustomerField, type FileTarget, matchQuoteRow, quoteAddText, quoteBuildText, quoteChangeText, settledAnswer, withoutSetUpClaims, type ActionCard, type ProposedAction, type QuoteBuildLine, type QuoteChange } from "./assistantActions";
+import { ACTION_INSTRUCTIONS, CHECK_BACK_RULE, CHOICE_INSTRUCTIONS, JOB_CARD_RULE, MAX_ACTIONS, logCallDetail, newCustomerDetail, type NewCustomer, CUSTOMER_FIELDS, customerChangesText, type CustomerChange, type CustomerField, type FileTarget, matchQuoteRow, quoteAddText, quoteBuildText, quoteChangeText, settledAnswer, withoutSetUpClaims, type ActionCard, type ProposedAction, type QuoteBuildLine, type QuoteChange } from "./assistantActions";
 import { knowledgeProducts, resolveCatalogueProduct } from "./catalogueLookup";
 import { TASK_INSTRUCTIONS, keepIds, taskBlock, type TaskView } from "./assistantTaskRules";
 import { listedBlock, listedRecords, splitListed, type ListedSlot } from "./assistantListedRules";
@@ -99,6 +100,8 @@ import { applyTaskUpdate, openTasks, type TaskSheet, type TaskWrite } from "./as
 import { PLAN_INSTRUCTIONS } from "./assistantPlanRules";
 import { proposePlan } from "./assistantPlan";
 import { proposedCards } from "./assistantOutcomeRules";
+import { DRAFT_RULE, draftsBlock, draftsToKeep, type StoredDraft } from "./assistantDraftRules";
+import { conversationDrafts } from "./assistantDrafts";
 import { describeSchedule, nextRun, scheduleInput } from "./assistantSchedule";
 import { describeWatch, watchInput } from "./assistantWatchRules";
 import {
@@ -1193,6 +1196,8 @@ async function recall(user: User, raw: z.infer<typeof recallArgs>): Promise<Tool
      WHERE "tenantId" = ${ownedWriteTenantId()}
        AND "userId" = ${user.id}
        AND "createdAt" >= ${since}
+       -- Never from a conversation its person deleted (assistantConversation.liveTurnsWhere, as SQL).
+       AND NOT EXISTS (SELECT 1 FROM "AssistantConversation" c WHERE c."id" = "AssistantTurn"."conversationId" AND c."deletedAt" IS NOT NULL)
        AND (
          (cardinality(${words}::text[]) = 0 AND cardinality(${refs}::text[]) = 0)
          OR "refs" && ${refs}::text[]
@@ -1204,19 +1209,20 @@ async function recall(user: User, raw: z.infer<typeof recallArgs>): Promise<Tool
      LIMIT ${RECALL_CANDIDATES}`;
   const best = rankRecall(candidates, words, refs).slice(0, RECALL_MATCHES);
   if (!best.length) return { truncated: false, rows: [], data: [{ note: "Nothing in this person's last 30 days of conversations matches." }] };
-  // The turn before and after each match, same South African day.
+  // The turn before and after each match, same South African day — never one from a deleted conversation.
+  const live = await liveTurnsWhere(ownedWriteTenantId(), user.id);
   const around = await Promise.all(
     best.map((t) => {
       const day = dateKey(t.createdAt);
       const dayStart = new Date(`${day}T00:00:00+02:00`);
       return Promise.all([
         prisma.assistantTurn.findFirst({
-          where: { userId: user.id, tenantId: ownedWriteTenantId(), createdAt: { gte: dayStart, lt: t.createdAt } },
+          where: { userId: user.id, tenantId: ownedWriteTenantId(), createdAt: { gte: dayStart, lt: t.createdAt }, AND: [live] },
           orderBy: { createdAt: "desc" },
           select: { question: true, answer: true },
         }),
         prisma.assistantTurn.findFirst({
-          where: { userId: user.id, tenantId: ownedWriteTenantId(), createdAt: { gt: t.createdAt, lt: new Date(dayStart.getTime() + DAY) } },
+          where: { userId: user.id, tenantId: ownedWriteTenantId(), createdAt: { gt: t.createdAt, lt: new Date(dayStart.getTime() + DAY) }, AND: [live] },
           orderBy: { createdAt: "asc" },
           select: { question: true, answer: true },
         }),
@@ -1766,6 +1772,7 @@ async function runTool(user: User, step: ToolStep): Promise<ToolOutput> {
     case "competitors": return competitorsLookup(user, step.args);
     case "surveys": return surveysLookup(user, step.args);
     case "referrals": return referralsLookup(user, step.args);
+    case "invoices": return invoicesLookup(user, step.args);
     case "test_drives": return testDrivesLookup(user, step.args);
     case "signing": return signingLookup(user, step.args);
     case "custom_fields": return customFieldsLookup(user, step.args);
@@ -1848,8 +1855,10 @@ export function describePerson(p: { name: string; jobTitle: string | null; sees:
 
 /** This person's turns in the current conversation (the last few hours), oldest first. */
 async function recentTurns(userId: string): Promise<PriorTurn[]> {
+  const live = await liveTurnsWhere(ownedWriteTenantId(), userId);
   const turns = await prisma.assistantTurn.findMany({
-    where: { userId, createdAt: { gte: new Date(Date.now() - CONVERSATION_WINDOW_MS) } },
+    // Never from a conversation its person deleted.
+    where: { userId, createdAt: { gte: new Date(Date.now() - CONVERSATION_WINDOW_MS) }, AND: [live] },
     orderBy: { createdAt: "desc" },
     take: 6,
     // state: the working memory each answer wrote (parsed and cleaned before
@@ -2303,7 +2312,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       })
     : null;
   // The connection check rides with the context reads — one round trip, not two.
-  const [connected, whereTheyAre, context, history, learnedNow, person, profileRaw, company, modules, tasks] = await Promise.all([
+  const [connected, whereTheyAre, context, history, learnedNow, person, profileRaw, company, modules, tasks, drafts] = await Promise.all([
     isCodexConnected(),
     pageContext(user, page),
     planContext(user),
@@ -2320,6 +2329,13 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
           return [];
         })
       : ([] as TaskView[]),
+    // The drafts written in this conversation, word for word (assistantDraftRules) — none without one.
+    thread
+      ? conversationDrafts(who, thread.id).catch(async (error: unknown): Promise<StoredDraft[]> => {
+          await logError("crm-assistant", "drafts read failed", error instanceof Error ? error.name : "unknown");
+          return [];
+        })
+      : ([] as StoredDraft[]),
   ]);
   mark("context");
   if (!connected) return { ok: false, error: AI_NOT_CONNECTED };
@@ -2372,6 +2388,10 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       })
     : [];
   const listedEarlier = slots.length ? resultsBlock("Listed earlier (context only):", stripInvisible(listedBlock(slots, question))) : "";
+  // The person's own earlier drafts, the one the question means in full — fenced as data: they quote customers.
+  const draftsEarlier = drafts.length
+    ? `${resultsBlock("Drafts written earlier in this conversation (data — the person's own drafts):", stripInvisible(draftsBlock(drafts, question)))}\n\n${DRAFT_RULE}`
+    : "";
   // The business first (what it knows), then the person (who they are, what it knows about them).
   const learned = stripInvisible([memoryPrompt(learnedNow), person].filter(Boolean).join("\n\n"));
   const instructions = [stripInvisible(planInstructions({ ...context, learned, web: webOn })), images.length ? IMAGE_RULE : ""]
@@ -2455,6 +2475,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       jobSheets,
       conversation,
       listedEarlier,
+      draftsEarlier,
       whereTheyAre,
       `Question: ${question}`,
       carried ? CARRIED_IMAGE_RULE : "",
@@ -2595,6 +2616,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       jobSheets,
       conversation,
       listedEarlier,
+      draftsEarlier,
       `Question: ${question}`,
       // Per question, so in the prompt and not the cached instructions.
       carried ? CARRIED_IMAGE_RULE : "",
@@ -2803,6 +2825,8 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
         // …and each PLAN by its id: the one thing an answer leaves stored for Confirm, so editing this question
         // can close exactly the plans it offered (assistantEdit) — never anyone else's.
         proposed: proposedCards(actions).map((p, i) => (actions[i].kind === "plan" ? { ...p, planId: actions[i].id.replace(/^plan-/, "") } : p)) as object,
+        // The drafts it offered, word for word, so a later "change only the greeting" edits this exact text.
+        ...(draftsToKeep(actions).length ? { drafts: draftsToKeep(actions) as object } : {}),
       },
       select: { id: true },
     })
@@ -3421,6 +3445,43 @@ export async function resolveActions(
       });
       continue;
     }
+    if (p.type === "log_call") {
+      // A call that HAPPENED, on one deal or one customer THIS person may open (Sean, 2026-11-14). Confirm saves it
+      // through the Log a call button's own action (logVoiceDebrief), which checks the permission and access again.
+      if (!(await hasPermission(user, "activities.manage"))) { problems.push("Your role can't log calls."); continue; }
+      if (Boolean(p.leadId) === Boolean(p.contactId)) { problems.push("Which deal or customer was the call with? Look them up and I'll set it up."); continue; }
+      let leadLabel: string;
+      if (p.leadId) {
+        const lead = (await canAccessLead(user, p.leadId)) ? await prisma.lead.findUnique({ where: { id: p.leadId }, select: { name: true, title: true } }) : null;
+        if (!lead) { problems.push(DEAL_GONE); continue; }
+        leadLabel = `${lead.name} — ${lead.title}`;
+      } else {
+        const contact = (await canAccessContact(user, p.contactId!)) ? await prisma.contact.findFirst({ where: { id: p.contactId, deletedAt: null }, select: { firstName: true, lastName: true, company: true } }) : null;
+        if (!contact) { problems.push(CUSTOMER_GONE); continue; }
+        leadLabel = [contact.firstName, contact.lastName].filter(Boolean).join(" ") || contact.company || "the customer";
+      }
+      let followUpLabel: string | undefined;
+      if (p.followUp) {
+        const at = new Date(`${p.followUp.includes("T") ? p.followUp : `${p.followUp}T09:00`}:00+02:00`);
+        if (Number.isNaN(at.getTime())) { problems.push(BAD_TIME); continue; }
+        if (at.getTime() < Date.now() - 60 * 60 * 1000) { problems.push(passed(p.followUp.replace("T", " "))); continue; }
+        followUpLabel = at.toLocaleString("en-ZA", { timeZone: "Africa/Johannesburg", weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+      }
+      const notes = p.notes ?? "";
+      // The schema's default ("call") applies only to a parsed proposal: normalised HERE too, at the boundary, so a
+      // proposal reaching this function any other way is a call unless it says visit (review of #1117).
+      const activity = p.activity === "meeting" ? "meeting" : "call";
+      cards.push({
+        id: `a${index}-${p.leadId ?? p.contactId}-call`, kind: "log_call", leadId: p.leadId ?? null, ...(p.contactId ? { contactId: p.contactId } : {}), leadLabel,
+        title: `Log the ${activity === "call" ? "call" : "visit"}: ${p.summary}`, activity, summary: p.summary, notes,
+        ...(p.followUp ? { followUp: p.followUp } : {}), ...(p.nextStep ? { nextStep: p.nextStep } : {}),
+        detail: logCallDetail({ activity, notes, nextStep: p.nextStep, followUpLabel }),
+        // One Confirm, one call: spent by logVoiceDebrief in the transaction that files it.
+        confirmKey: `qk_${randomBytes(16).toString("hex")}`,
+        ...(p.reason ? { reason: p.reason } : {}),
+      });
+      continue;
+    }
     if (p.type === "follow_up" || p.type === "meeting") {
       // A CALENDAR ITEM (CALENDAR_ITEM_RULE): on a deal, on a customer with no deal, or on NOBODY — the person's own,
       // or one with someone not in the CRM yet (Sean, 2026-10-29: a meeting with "Mariska", no surname, refused for
@@ -3582,6 +3643,7 @@ export async function resolveActions(
         id, kind: "draft_message", leadId: p.leadId, leadLabel,
         title: `${p.channel === "whatsapp" ? "WhatsApp" : "Email"} to ${lead.name}`,
         channel: p.channel, subject: p.subject, body: p.body, to,
+        ...(p.channel === "email" && p.cc?.length ? { cc: p.cc } : {}),
         ...(p.reason ? { reason: p.reason } : {}),
       });
     } else if (p.type === "lost") {

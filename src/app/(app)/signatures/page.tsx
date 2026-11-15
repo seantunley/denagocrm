@@ -9,8 +9,7 @@ import {
 } from "@/lib/signing/status";
 import { ApprovalActions } from "./ApprovalActions";
 import { COMPLETION_BLOCKED_EVENT } from "@/lib/signing/complete";
-import { accessibleSignatureRequestWhere } from "@/lib/signing/access";
-import { canActOnStep } from "@/lib/signing/approvals";
+import { accessibleSignatureRequestWhere, pendingApprovalsFor } from "@/lib/signing/access";
 import { finishingStalledWhere, stuckSteps } from "@/lib/signing/stuck";
 import { allSignersSigned, stuckLabel, worstStep } from "@/lib/signing/stuckText";
 import { retryStuckSteps } from "@/app/actions/signhub";
@@ -109,24 +108,15 @@ export default async function SignaturesPage({
   const requestedPage = typeof query.page === "string" ? Number(query.page) : 1;
   const safeRequestedPage = Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1;
 
-  const [statusGroups, allPendingApprovals, completionSamples] = await Promise.all([
+  const [statusGroups, pendingApprovals, completionSamples] = await Promise.all([
     prisma.signatureRequest.groupBy({
       by: ["status"],
       where: { deletedAt: null, AND: [mine] },
       _count: { _all: true },
     }),
-    prisma.approvalStep.findMany({
-      where: {
-        status: "pending",
-        request: {
-          deletedAt: null,
-          status: { notIn: [...CLOSED_REQUEST_STATUSES] },
-        },
-      },
-      include: { request: { select: { id: true, title: true } } },
-      orderBy: { createdAt: "asc" },
-      take: 100,
-    }),
+    // The approvals THIS person can decide, on requests they may open (lib/signing/access.ts). Listing everyone's put
+    // Approve and Reject beside steps the action then refused, and named documents the viewer could not open.
+    pendingApprovalsFor(user),
     prisma.signatureRequest.findMany({
       where: {
         deletedAt: null,
@@ -141,10 +131,6 @@ export default async function SignaturesPage({
     }),
   ]);
 
-  // The approvals THIS person can decide. Listing everyone's put Approve and
-  // Reject beside steps the action then refused ("You are not the assigned
-  // approver"), and named documents the viewer could not open.
-  const pendingApprovals = allPendingApprovals.filter((step) => canActOnStep(step, user));
   const statusCounts = new Map(statusGroups.map((group) => [group.status, group._count._all]));
   const requestCounts = statusGroups.reduce<Record<SignatureRequestView, number>>(
     (counts, group) => {

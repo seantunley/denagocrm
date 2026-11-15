@@ -1,7 +1,7 @@
 import "server-only";
 import { prisma } from "./db";
 import { ownedWriteTenantId } from "./tenantWrite";
-import { getAccessibleQuoteIds, hasAnyPermission, type PermissionUser } from "./permissions";
+import { hasAnyPermission, type PermissionUser } from "./permissions";
 import { accessibleSignatureRequestWhere } from "./signing/access";
 import { DELIVERY_NOTE } from "./signing/subject";
 import { johannesburgDateKey } from "./activityDay";
@@ -11,8 +11,8 @@ import { johannesburgDateKey } from "./activityDay";
  * must have knowledge of those things, permission based"). It knew only whether a QUOTE was signed.
  *
  * HELD TO THE SIGNATURES PAGE'S OWN RULE: signing.view or signing.manage, and only the requests that page lists for
- * this person (accessibleSignatureRequestWhere — by the record each request is for, quote first). One rule stricter:
- * a delivery note is about a QUOTE (its subjectId), so it is shown only to someone who may open that quote.
+ * this person (accessibleSignatureRequestWhere — by the record each request is for, quote first; a delivery note's
+ * quote is its subjectId, so it is shown only to someone who may open that quote).
  * The workspace is named in every query; access filters are ANDed, never spread.
  *
  * NEVER IN THE OUTPUT: signing tokens or links, email addresses, phone numbers, IP addresses, hashes, signature
@@ -53,12 +53,7 @@ export async function signingLookup(user: PermissionUser, args: SigningArgs): Pr
     return { rows: [], data: [{ note: "This person can't open signing requests." }], truncated: false };
   }
   const tenantId = ownedWriteTenantId();
-  const [mine, quoteIds] = await Promise.all([accessibleSignatureRequestWhere(user), getAccessibleQuoteIds(user)]);
-  // A delivery note's quote is its subjectId: shown only with access to THAT quote. Spelled as an OR with the NULL
-  // case named — a NOT over a nullable column would also drop every request with no subject at all.
-  const deliveryNotes = quoteIds === null
-    ? {}
-    : { OR: [{ subjectType: null }, { subjectType: { not: DELIVERY_NOTE } }, { subjectId: { in: quoteIds } }] };
+  const mine = await accessibleSignatureRequestWhere(user);
 
   let customer: object = {};
   if (args.customer) {
@@ -92,7 +87,6 @@ export async function signingLookup(user: PermissionUser, args: SigningArgs): Pr
     deletedAt: null,
     AND: [
       mine,
-      deliveryNotes,
       signingStatusWhere(args.status),
       customer,
       ...titleWords.map((w) => ({ title: contains(w) })),
