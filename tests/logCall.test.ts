@@ -154,8 +154,13 @@ test("saving a call is all or nothing, once: checked first, one transaction, its
   assert.ok(body.indexOf("assistantPendingAction.findFirst({ where: { id: data.opKey") < firstWrite, "a repeat returns before writing");
   const tx = body.slice(firstWrite, body.indexOf("}).catch("));
   assert.ok(tx.indexOf("findStaffAvailabilityConflict(") < tx.indexOf("tx.activity.create"), "a clash returns before the first write");
-  for (const write of ["tx.activity.create", "tx.communication.create", "tx.assistantPendingAction.create"]) assert.ok(tx.includes(write), write);
+  for (const write of ["tx.activity.create", "tx.assistantPendingAction.create"]) assert.ok(tx.includes(write), write);
   assert.doesNotMatch(tx, /prisma\.(activity|communication)\./, "every write on the transaction");
+  // The timeline message after the commit: db.ts refuses a communication inside a transaction (CI caught it on #1117).
+  assert.doesNotMatch(tx, /communication\.create/);
+  const after = body.slice(body.indexOf("}).catch("));
+  assert.ok(after.indexOf('if ("repeated" in written)') < after.indexOf("await prisma.communication.create("), "a repeat returns before the message");
+  assert.ok(after.indexOf("written.conflict") < after.indexOf("await prisma.communication.create("), "a clash returns before the message");
   assert.doesNotMatch(body, /scheduleFollowUpBody\(/, "the follow-up is booked inside the transaction, not after it");
   assert.match(body, /code === "P2002"\) return \{ repeated: true \}/, "two Saves at once: the second is the first's repeat");
   // Both callers send one key per draft / card.

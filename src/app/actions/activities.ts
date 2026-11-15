@@ -656,8 +656,9 @@ async function scheduleFollowUpBody(data: {
  * their Save or Confirm. `followUpDate` is YYYY-MM-DD (09:00) or YYYY-MM-DDTHH:MM.
  *
  * ALL OR NOTHING, ONCE (review of #1117). Everything is checked first — the follow-up's time and the person's
- * calendar included — then the call, its timeline note, the follow-up and the spent `opKey` are written in ONE
- * transaction. A refused follow-up leaves nothing behind, so Save again after fixing the date files the call once.
+ * calendar included — then the call (with its notes), the follow-up and the spent `opKey` are written in ONE
+ * transaction, and the timeline message just after it commits (db.ts refuses one inside a transaction). A refused
+ * follow-up leaves nothing behind, so Save again after fixing the date files the call once.
  * `opKey` (CONFIRM_KEY, minted once per draft or DAX card) is spent as an AssistantPendingAction row in that same
  * transaction — the record job cards and quotes use — so a repeat with the same key files nothing more.
  */
@@ -737,20 +738,6 @@ export async function logVoiceDebrief(data: {
               tenantId,
             },
           });
-          if (notes) {
-            await tx.communication.create({
-              data: {
-                type: data.type,
-                direction: "outbound",
-                subject: `🎙 ${data.type === "call" ? "Call" : "Visit"}: ${summary}`,
-                body: notes,
-                leadId,
-                contactId,
-                userId: user.id,
-                tenantId,
-              },
-            });
-          }
           // With the call or not at all: a second Save at the same moment collides on this key and is undone whole.
           await tx.assistantPendingAction.create({
             data: {
@@ -766,6 +753,23 @@ export async function logVoiceDebrief(data: {
         if ("repeated" in written) return { ok: true, repeated: true };
         if ("conflict" in written && written.conflict) {
           return { ok: false, error: `${availabilityConflictMessage(written.conflict)} Nothing was saved — pick another follow-up time and save again.` };
+        }
+        // The timeline message AFTER the commit: db.ts refuses one inside a transaction (attaching it to its
+        // conversation runs on another connection). The call above already holds the notes, and the spent key stops
+        // a repeat before here, so this is written once.
+        if (notes) {
+          await prisma.communication.create({
+            data: {
+              type: data.type,
+              direction: "outbound",
+              subject: `🎙 ${data.type === "call" ? "Call" : "Visit"}: ${summary}`,
+              body: notes,
+              leadId,
+              contactId,
+              userId: user.id,
+              tenantId,
+            },
+          });
         }
         const page = leadId ? `/leads/${leadId}` : `/contacts/${contactId}`;
         await logAudit({
