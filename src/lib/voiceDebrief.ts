@@ -9,9 +9,10 @@ import { z } from "zod";
  */
 
 export const DEBRIEF_INSTRUCTIONS = [
-  "You turn a salesperson's spoken debrief of a customer call or visit into CRM notes.",
+  "You turn a customer call or visit into CRM notes. What you get is one of: a salesperson's spoken debrief afterwards, " +
+    "their typed notes, or a transcript of the call itself (two or more people talking — tell them apart from what is said).",
   'Output JSON only: {"summary":"<what happened, max 80 chars>","notes":["<fact>", ...],"nextStep":"<the agreed next action, or empty>","followUpDays":<whole days from today until that next action, or null>}',
-  "Notes: 2–6 short factual points — what the customer wants, objections, prices or dates mentioned, what was promised.",
+  "Notes: 2–6 short factual points — who was on the call, what the customer wants, decisions made, objections, prices or dates mentioned, what was promised.",
   "Use only what was said. Never invent names, prices or dates. Keep the language the salesperson used.",
 ].join("\n");
 

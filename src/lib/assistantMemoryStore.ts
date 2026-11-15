@@ -82,8 +82,9 @@ export async function markNotesUsed(ids: string[]): Promise<void> {
  * person it learned from; null for the nightly tidy-up, which has no person
  * and so never touches a profile.
  */
-export async function applyLearn(userId: string | null, learn: LearnBlock): Promise<number> {
+export async function applyLearn(userId: string | null, learn: LearnBlock, source?: "outcomes"): Promise<number> {
   const tenantId = ownedWriteTenantId();
+  const written = source ?? (userId ? "learned" : "tidy");
   return prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`assistant-notes:${tenantId}`})::bigint)`;
     let changed = 0;
@@ -146,7 +147,7 @@ export async function applyLearn(userId: string | null, learn: LearnBlock): Prom
         const myUnreviewed = await tx.assistantNote.count({ where: { tenantId, kind: "playbook", createdById: userId, status: { not: "approved" } } });
         if (myUnreviewed >= UNREVIEWED_PLAYBOOKS_PER_PERSON) continue;
         await tx.assistantNote.create({
-          data: { tenantId, kind: "playbook", name: book.name, description: description.text, content: content.text, createdById: userId, source: userId ? "learned" : "tidy" },
+          data: { tenantId, kind: "playbook", name: book.name, description: description.text, content: content.text, createdById: userId, source: written },
         });
       }
       changed++;

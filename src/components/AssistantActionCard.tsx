@@ -85,6 +85,7 @@ export default function AssistantActionCard({
   const leadLink =
     card.kind === "schedule" || card.kind === "watch" ? null
     : card.kind === "customer_note" ? `/contacts/${card.contactId}`
+    : card.kind === "log_call" && !card.leadId ? `/contacts/${card.contactId}`
     : card.kind === "update_customer" ? `/contacts/${card.contactId}`
     : card.kind === "create_lead" && card.lead.contactId ? `/contacts/${card.lead.contactId}`
     : card.kind === "job_card" ? `/vehicles/${card.vehicleId}`
@@ -123,6 +124,8 @@ export default function AssistantActionCard({
       {/* The whole quote, line by line at catalogue prices: what Confirm will create, as a draft. */}
       {(card.kind === "quote_build" || card.kind === "quote_add" || card.kind === "quote_change") && <p className="mt-2 whitespace-pre-line text-xs text-muted-foreground">{card.text}</p>}
       {card.kind === "schedule" && <p className="mt-2 whitespace-pre-line text-xs">&ldquo;{card.question}&rdquo;</p>}
+      {/* A call to file: its notes, next step and follow-up — everything Confirm saves. */}
+      {card.kind === "log_call" && <p className="mt-1 whitespace-pre-line text-xs text-muted-foreground">{card.detail}</p>}
       {(card.kind === "job_card" || card.kind === "meeting" || card.kind === "test_drive" || card.kind === "block_time") && <p className="mt-1 whitespace-pre-line text-xs text-muted-foreground">{card.detail}</p>}
       {/* The screenshot Confirm will attach to the note — seen before it is saved. */}
       {(card.kind === "note" || card.kind === "customer_note") && card.image && (
