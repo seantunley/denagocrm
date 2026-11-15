@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { requireTenantOwner } from "@/lib/auth";
 import { getSetting, getWorkspaceSetting, putSetting, putWorkspaceSetting } from "@/lib/settings";
+import { ownedWriteTenantId } from "@/lib/tenantWrite";
 import { OUTCOME_LEARNING_KEY, outcomeLearningOn, runOutcomeLearning } from "@/lib/outcomeLearning";
 import { logAudit } from "@/lib/audit";
 import { withActingStaffScope, actingOwnerTenantId } from "@/lib/actingScope";
@@ -17,7 +18,7 @@ import {
   parseProfile,
 } from "@/lib/assistantSoul";
 import { ASSISTANT_VOICE_REPLIES_KEY, voiceRepliesSwitchOn } from "@/lib/assistantVoiceRules";
-import { ASSISTANT_PROACTIVE_KEY, BRIEF_DEFAULT, BRIEF_TIMES, briefPersonKey, chatbotProblemsKey, chatbotProblemsOn, mondayStuckKey, proactiveOn, proactivePersonKey } from "@/lib/proactiveRules";
+import { ASSISTANT_PROACTIVE_KEY, BRIEF_DEFAULT, BRIEF_TIMES, briefPersonKey, chatbotProblemsKey, chatbotProblemsOn, mondayStuckKey, openingLineKey, openingLineOn, proactiveOn, proactivePersonKey } from "@/lib/proactiveRules";
 import { requireAnyPermission } from "@/lib/permissions";
 import { ASSISTANT_PERMISSIONS } from "@/lib/assistantUser";
 import { saveAssistantWhatsApp } from "@/app/actions/assistantWhatsApp";
@@ -250,6 +251,30 @@ export async function setMyProactive(on: boolean) {
         revalidatePath("/assistant");
       }
       return { success: on === true ? "On — DAX will come to you when a customer acts" : "Off" };
+    }),
+  );
+}
+
+/**
+ * The caller's OWN "say what's new when I open the chat" (DAX speaks first). Theirs alone — named by their own id —
+ * and read in THIS workspace. On until switched off: in-app only, no AI, contacts no one.
+ */
+export async function setMyOpeningLine(on: boolean) {
+  return asActionResult(() =>
+    withActingStaffScope(async () => {
+      const user = await requireAnyPermission(...ASSISTANT_PERMISSIONS);
+      const tenantId = ownedWriteTenantId();
+      const key = openingLineKey(user.id);
+      if ((on === true) !== openingLineOn(await getWorkspaceSetting(tenantId, key))) {
+        await putWorkspaceSetting(tenantId, key, on === true ? "on" : "off");
+        await logAudit({
+          action: on === true ? "assistant.opening_line_on" : "assistant.opening_line_off",
+          summary: on === true ? "Asked the assistant to say what's new when they open the chat" : "Turned off the assistant's opening line",
+          user,
+        });
+        revalidatePath("/assistant");
+      }
+      return { success: on === true ? "On — what's new is said when you open a new chat" : "Off" };
     }),
   );
 }

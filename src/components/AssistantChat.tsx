@@ -21,6 +21,22 @@ import AssistantActionCard from "@/components/AssistantActionCard";
 import AssistantPlanCard from "@/components/AssistantPlanCard";
 import { wantsReport } from "@/lib/assistantReport";
 import AnswerMarkup from "@/components/AnswerMarkup";
+import type { OpeningLine } from "@/lib/daxBriefRules";
+
+/** DAX speaks first: "Hi — 1 customer waiting for a reply (…); 2 quotes expiring (…)." Each fact links to its list. */
+function Opening({ opening, className }: { opening: OpeningLine; className: string }) {
+  return (
+    <p className={className}>
+      Hi 👋{" "}
+      {opening.facts.map((fact, i) => (
+        <span key={fact.href + i}>
+          <Link href={fact.href} className="underline decoration-muted-foreground/40 underline-offset-2 hover:text-primary">{fact.text}</Link>
+          {i < opening.facts.length - 1 ? "; " : "."}
+        </span>
+      ))}
+    </p>
+  );
+}
 
 type Turn = {
   question: string; answer?: string; cited?: string; evidence?: Evidence[]; turnId?: string;
@@ -160,8 +176,11 @@ export default function AssistantChat({
   autoAsk,
   listen = false,
   conversation = null,
+  opening = null,
 }: {
   name: string;
+  /** DAX speaks first (lib/daxBrief openingLineFor): shown while the conversation is empty; never saved as a turn. */
+  opening?: OpeningLine | null;
   history?: { id?: string; question: string; answer: string; source?: string }[];
   /** The conversation it asks in (assistantConversation): an id, "new", or null to let the server pick. */
   conversation?: string | null;
@@ -654,11 +673,13 @@ export default function AssistantChat({
     const thread = [...turns].reverse();
     return (
       <div className="flex min-h-full flex-col gap-3">
-        {thread.length === 0 && !pending && (
+        {thread.length === 0 && !pending && (opening ? (
+          <Opening opening={opening} className="max-w-[92%] rounded-2xl rounded-bl-sm bg-muted/50 px-3 py-2 text-sm" />
+        ) : (
           <p className="py-6 text-center text-sm text-muted-foreground">
             Hi 👋 Ask me anything about your leads, quotes, calendar or customers — type or tap the mic.
           </p>
-        )}
+        ))}
         {thread.map((turn, index) => (
           <div key={index} className="space-y-2">
             {scheduledLabel(turn)}
@@ -703,6 +724,8 @@ export default function AssistantChat({
   return (
     <div className="space-y-5">
       {composer}
+
+      {turns.length === 0 && !pending && opening && <Opening opening={opening} className="card p-4 text-sm" />}
 
       {turns.length === 0 && !pending && (
         <div className="flex flex-wrap gap-2">

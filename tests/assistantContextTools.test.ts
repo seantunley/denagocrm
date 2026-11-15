@@ -136,7 +136,7 @@ test("in the bubble it reads like a chat: oldest first, composer at the bottom, 
   assert.ok(compact.indexOf("thread.map(") < compact.indexOf("{composer}"), "the composer comes after the thread");
   assert.match(chat, /const voice = useVoiceRecorder\(/, "the same mic in the bubble and the page");
   // Keyed by page AND conversation: "＋ New" or another page starts it afresh (assistantConversation).
-  assert.match(code("src/components/AssistantBubble.tsx"), /<AssistantChat\s+key=\{`\$\{pathname\}:\$\{data\.conversation \?\? "pick"\}`\}\s+name=\{data\.name\}\s+history=\{data\.history\}\s+page=\{pathname \?\? undefined\}\s+autoAsk=\{autoAsk \?\? undefined\}\s+listen=\{data\.listen\}\s+conversation=\{data\.conversation\}\s+compact\s+\/>/);
+  assert.match(code("src/components/AssistantBubble.tsx"), /<AssistantChat\s+key=\{`\$\{pathname\}:\$\{data\.conversation \?\? "pick"\}`\}\s+name=\{data\.name\}\s+history=\{data\.history\}\s+page=\{pathname \?\? undefined\}\s+autoAsk=\{autoAsk \?\? undefined\}\s+listen=\{data\.listen\}\s+conversation=\{data\.conversation\}\s+opening=\{data\.opening\}\s+compact\s+\/>/);
 });
 
 test("the bubble: same gate as the page, the page's own conversation, no load until opened", () => {

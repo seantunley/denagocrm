@@ -105,6 +105,7 @@
     "test:assistant-log-call": "tsx --tsconfig tsconfig.harness.json scripts/test-assistant-log-call.ts",
     "test:assistant-listed": "tsx --tsconfig tsconfig.harness.json scripts/test-assistant-listed.ts",
     "test:assistant-test-drives": "tsx --tsconfig tsconfig.harness.json scripts/test-assistant-test-drives.ts",
+    "test:assistant-opening-line": "tsx --tsconfig tsconfig.harness.json scripts/test-assistant-opening-line.ts",
     "test:assistant-conversation-manage": "tsx --tsconfig tsconfig.harness.json scripts/test-assistant-conversation-manage.ts",
     "test:assistant-updates-whatsapp": "tsx --tsconfig tsconfig.scripts.json scripts/test-assistant-updates-whatsapp.ts",
     "test:phone-match": "tsx --tsconfig tsconfig.scripts.json scripts/test-phone-match.ts",

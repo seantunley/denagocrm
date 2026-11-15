@@ -35,3 +35,26 @@ So:
 The last point generalises past this case. A PR reports what happened to *a
 branch*. If what you care about is that a change reached production, check the
 branch that deploys.
+
+# A new feature goes in its own file
+
+Decided 2026-11-15, after a risk review (DenagoCRM_Vibe_Coding_Risk_Assessment.md)
+found that this week's review blockers all came from features colliding in the
+same few big files. `src/lib/crmAssistant.ts` is about 3,900 lines, and
+`src/app/actions/assistant.ts` and `src/lib/assistantWhatsApp.ts` are about 1,100
+each. When every feature edits them, PRs conflict with each other and one change
+breaks another.
+
+So:
+
+- **New feature logic lives in its own file**, for example
+  `src/lib/assistantWhatsAppBurst.ts`, `assistantResearchGate.ts` or
+  `assistantLeadQuotes.ts`.
+- **A shared file only gets the call into it:** an import and the few lines that
+  use it. A quote-verification change should not need to edit WhatsApp delivery
+  code, and the reverse.
+- **Pure rules go in a pure file** with their own unit tests, apart from
+  database and I/O code.
+- **Don't split for its own sake.** Move a piece of an existing big file out only
+  when a change touches it anyway; a wholesale split causes its own bugs.
+  Equally, don't make a file for five lines.

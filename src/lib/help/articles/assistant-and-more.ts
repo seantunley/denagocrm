@@ -203,6 +203,7 @@ export const assistantAndMoreArticles: HelpArticle[] = [
       { type: "h", text: "Asking from WhatsApp" },
       { type: "list", items: [
         "Message the business number with your question, as text or as a voice note.",
+        "Typed messages sent a few seconds apart — a shared contact, then \"New lead\", then the email — are answered together as one question, in the order you sent them. The assistant waits about three seconds after your last message before it starts. A photo, a file, a voice note or a tapped button is answered on its own, as before.",
         "Send a **photo** or a screenshot and it reads it — add a caption to say what you want to know. It cannot read files or videos, and says so if you send one.",
         "While it works on an answer your chat shows **typing…**. WhatsApp marks your message as read at the same moment, and stops showing typing after 25 seconds even if the answer takes longer.",
         "Answers follow your own access, just as they do inside the CRM.",
