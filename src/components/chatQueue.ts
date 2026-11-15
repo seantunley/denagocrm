@@ -17,7 +17,12 @@ export type ChatQueueAction<I = unknown> =
   /** Too late to stop — it had finished; its answer arrives as usual. */
   | { type: "stopRefused" }
   /** Taken out of the queue (removed, or back into the composer to edit). */
-  | { type: "remove"; id: number };
+  | { type: "remove"; id: number }
+  /**
+   * Apply correction: queued message `id` becomes the corrected question, FIRST in the queue — so it is what goes
+   * next whether the running answer is then stopped or had already finished; anything else queued waits behind it.
+   */
+  | { type: "correct"; id: number; text: string; image?: I | null };
 
 export const emptyChatQueue = <I>(): ChatQueue<I> => ({ running: null, queue: [], stopping: false, nextId: 1 });
 
@@ -42,5 +47,10 @@ export function chatQueue<I>(state: ChatQueue<I>, action: ChatQueueAction<I>): C
       return { ...state, stopping: false };
     case "remove":
       return { ...state, queue: state.queue.filter((item) => item.id !== action.id) };
+    case "correct": {
+      if (!state.queue.some((item) => item.id === action.id)) return state;
+      const corrected = { id: state.nextId, text: action.text.trim(), image: action.image ?? null };
+      return { ...state, queue: [corrected, ...state.queue.filter((item) => item.id !== action.id)], nextId: state.nextId + 1 };
+    }
   }
 }
