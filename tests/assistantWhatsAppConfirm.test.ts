@@ -135,9 +135,14 @@ const state = {
   seq: 0,
 };
 type Where = Record<string, unknown>;
-const matches = (row: Pending, where: Where) =>
+const matches = (row: Pending, where: Where): boolean =>
   Object.entries(where).every(([key, want]) => {
     const have = (row as unknown as Record<string, unknown>)[key];
+    if (key === "AND") return (want as Where[]).every((w) => matches(row, w));
+    if (key === "NOT") return !matches(row, want as Where);
+    if (want && typeof want === "object" && typeof (want as { startsWith?: unknown }).startsWith === "string") {
+      return typeof have === "string" && have.startsWith((want as { startsWith: string }).startsWith);
+    }
     if (key === "expiresAt") {
       const range = want as { gt?: Date; lt?: Date };
       return range.gt ? row.expiresAt.getTime() > range.gt.getTime() : row.expiresAt.getTime() < range.lt!.getTime();
@@ -233,7 +238,7 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
 let asUser: string | null = null;
 
 const require_ = createRequire(import.meta.url);
-const { PENDING_ACTION_RETENTION_MS, confirmAllFromWhatsApp, confirmFromWhatsApp, offerConfirmations, prunePendingActions, waitingForConfirm, withdrawWaiting } = require_("../src/lib/assistantWhatsAppConfirm.ts") as typeof import("../src/lib/assistantWhatsAppConfirm");
+const { BOOKKEEPING_ID_PREFIXES, PENDING_ACTION_RETENTION_MS, confirmAllFromWhatsApp, confirmFromWhatsApp, offerConfirmations, prunePendingActions, waitingForConfirm, withdrawWaiting } = require_("../src/lib/assistantWhatsAppConfirm.ts") as typeof import("../src/lib/assistantWhatsAppConfirm");
 
 const LEAD = "cmabcdefghijklmnopqrstuv";
 const PHONE = "27821234567";
@@ -926,6 +931,24 @@ test("what is waiting: how many, and the newest offer's tasks in the order offer
   assert.deepEqual(after.newest, []);
   assert.equal(after.total, 1);
   assert.equal(after.only?.title, "Older");
+});
+
+test("'yes to all' right after a Confirm: a spent confirm key or plan step is not 'the newest offer'", async () => {
+  // Confirming one card spends its key as a row in the same table, newer than the offer (and a plan step claims
+  // one too). They used to be read as the newest offer, so "yes to all" said nothing was waiting.
+  const offeredAt = new Date(Date.now() - 60_000);
+  const a = pendingRow({ createdAt: offeredAt, card: { ...NOTE, title: "A" } });
+  const b = pendingRow({ createdAt: offeredAt, card: { ...NOTE, title: "B" } });
+  for (const id of [`qk_${"a".repeat(32)}`, `ps_${"b".repeat(32)}`]) {
+    pendingRow({ id, createdAt: new Date(), confirmedAt: new Date(), completedAt: new Date(), card: { kind: "confirm_key", what: "a logged call" } });
+  }
+  const waiting = await waitingForConfirm("t1", "u1");
+  assert.deepEqual(waiting.newest.map((t) => t.title), ["A", "B"], "the offer is still the newest set waiting");
+  state.ran = [];
+  await confirmAllFromWhatsApp("t1", me, PHONE, null);
+  assert.deepEqual(state.ran.map((run) => run.card.title), ["A", "B"]);
+  assert.ok(a.completedAt && b.completedAt);
+  assert.deepEqual([...BOOKKEEPING_ID_PREFIXES], ["qk_", "ps_"]);
 });
 
 /* ── change a waiting task by voice (Sean, 2026-11-02, round 2) ─────────── */
