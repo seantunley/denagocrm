@@ -5,11 +5,15 @@
  *
  * Each case: given these lookups so far and a plan that says "answer", the gate must say `expect`.
  */
-export type Lookup = { tool: string; args?: Record<string, unknown> };
+export type Lookup = { tool: string; args?: Record<string, unknown>; people?: string[] };
 export type ScenarioCase = { lookups: Lookup[]; expect: "answer" | "continue"; why: string };
-export type Scenario = { id: string; question: string; subject: string; cases: ScenarioCase[] };
+/** `staff`: the workspace's staff names, so a comparison is checked against the people the QUESTION names. */
+export type Scenario = { id: string; question: string; subject: string; staff?: string[]; cases: ScenarioCase[] };
 
 const t = (tool: string, args?: Record<string, unknown>): Lookup => ({ tool, ...(args ? { args } : {}) });
+/** A team-wide sales_stats whose per-person breakdown lists these people. */
+const team = (period: string, people: string[]): Lookup => ({ tool: "sales_stats", args: { period }, people });
+const STAFF = ["Donovan Hodgman", "Kristina Botha", "Sean Tunley"];
 
 export const RESEARCH_SUBJECT_SCENARIOS: Scenario[] = [
   {
@@ -26,12 +30,18 @@ export const RESEARCH_SUBJECT_SCENARIOS: Scenario[] = [
     id: "compare-people-same-period",
     question: "Compare Donovan's and Kristina's pipelines this month",
     subject: "people",
+    staff: STAFF,
     cases: [
       { lookups: [t("sales_stats", { period: "this_month", assignedTo: "Donovan" }), t("sales_stats", { period: "this_month", assignedTo: "Kristina" })], expect: "answer", why: "both people, same period" },
       { lookups: [t("sales_stats", { period: "this_month", assignedTo: "Donovan" }), t("sales_stats", { period: "last_month", assignedTo: "Kristina" })], expect: "continue", why: "two different periods are not a comparison" },
       { lookups: [t("sales_stats", { period: "this_month", assignedTo: "Donovan" })], expect: "continue", why: "only one of the two people" },
-      { lookups: [t("sales_stats", { period: "this_month" })], expect: "answer", why: "the whole team's numbers cover both" },
+      { lookups: [team("this_month", ["Donovan Hodgman", "Kristina Botha"])], expect: "answer", why: "the team's per-person breakdown lists both" },
       { lookups: [t("find_leads", { assignedTo: "Donovan" }), t("find_leads", { assignedTo: "Kristina" })], expect: "answer", why: "a list for each, same (default) period" },
+      // Review of #1121: each of these used to clear the gate.
+      { lookups: [t("sales_stats", { period: "this_month" })], expect: "continue", why: "a team total alone is not either person's figures" },
+      { lookups: [team("this_month", ["Donovan Hodgman", "Sean Tunley"])], expect: "continue", why: "the breakdown doesn't list Kristina" },
+      { lookups: [t("sales_stats", { period: "this_month", assignedTo: "Donovan" }), t("sales_stats", { period: "last_month", assignedTo: "Donovan" })], expect: "continue", why: "Donovan twice, Kristina never" },
+      { lookups: [t("sales_stats", { period: "this_month", assignedTo: "Donovan" }), t("sales_stats", { period: "this_month", assignedTo: "Sean" })], expect: "continue", why: "a person nobody asked about doesn't stand in for Kristina" },
     ],
   },
   {
@@ -57,6 +67,7 @@ export const RESEARCH_SUBJECT_SCENARIOS: Scenario[] = [
     id: "compare-won-lost",
     question: "Compare won and lost leads this month",
     subject: "deal",
+    staff: STAFF,
     cases: [
       { lookups: [t("find_leads", { status: "won" }), t("find_leads", { status: "lost" })], expect: "answer", why: "a list for each side, no person named" },
       { lookups: [t("knowledge")], expect: "continue", why: "the catalogue is not the pipeline" },
@@ -66,9 +77,22 @@ export const RESEARCH_SUBJECT_SCENARIOS: Scenario[] = [
     id: "compare-one-person-two-months",
     question: "Compare Donovan's sales this month vs last month",
     subject: "people",
+    staff: STAFF,
     cases: [
       { lookups: [t("sales_stats", { period: "this_month", assignedTo: "Donovan" }), t("sales_stats", { period: "last_month", assignedTo: "Donovan" })], expect: "answer", why: "one person, both periods" },
       { lookups: [t("sales_stats", { period: "this_month", assignedTo: "Donovan" })], expect: "continue", why: "one period is one side" },
+      { lookups: [t("sales_stats", { period: "this_month", assignedTo: "Kristina" }), t("sales_stats", { period: "last_month", assignedTo: "Kristina" })], expect: "continue", why: "the wrong person's two months" },
+      { lookups: [t("sales_stats", { period: "this_month" })], expect: "continue", why: "this month's team total has no last month for Donovan" },
+    ],
+  },
+  {
+    id: "compare-one-person-vs-team",
+    question: "Compare Donovan with the rest of the team this month",
+    subject: "people",
+    staff: STAFF,
+    cases: [
+      { lookups: [team("this_month", ["Donovan Hodgman", "Kristina Botha"])], expect: "answer", why: "the team's numbers, with Donovan's own line in them" },
+      { lookups: [t("sales_stats", { period: "this_month" })], expect: "continue", why: "the team total without Donovan's own line" },
     ],
   },
   {

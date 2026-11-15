@@ -12,6 +12,7 @@ export function misrouted() {
         question: s.question,
         tools: c.lookups.map((l) => l.tool),
         steps: c.lookups,
+        staff: s.staff,
         lastRoundEmpty: false,
         planSaysAnswer: true,
         stepsUsed: c.lookups.length,

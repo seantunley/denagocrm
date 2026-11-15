@@ -46,7 +46,7 @@ import {
 } from "./permissions";
 import { ASSISTANT_PROFILE_KEY, parseProfile, selfKnowledge, soulText } from "./assistantSoul";
 import { LEARN_INSTRUCTIONS, memoryPrompt, methodInstructions } from "./assistantMemory";
-import { missingEvidence, researchGate } from "./assistantResearchGate";
+import { isComparison, missingEvidence, peopleInResult, researchGate } from "./assistantResearchGate";
 import { DEPTH_BUDGETS, HARD_DEADLINE_MS, MIN_CALL_MS, deepen, parseLedger, recheckBudgetMs, researchLeftMs, roundFits, startingDepth, type Depth } from "./assistantDepth";
 import { matchDecisions, parseDecision } from "./assistantDecisions";
 import { CITE_RULE, REPLY_FORMAT, SPOKEN_RULE, STATE_INSTRUCTIONS, citableLinks, resolveCitations, splitReply, type Evidence } from "./assistantReply";
@@ -2497,6 +2497,10 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   // Stopped by the person (opts.stillWanted): it ends at the next step, having written nothing.
   const stopped = async (final = false) => (opts.stillWanted ? !(await opts.stillWanted(final)) : false);
   const STOPPED: AssistantResult = { ok: false, error: "Stopped." };
+  // A comparison's gate checks the people the QUESTION names (review of #1121), so it needs the workspace's staff
+  // names — looked up only for a comparison. A failed read is "no names": the gate falls back to the lookups' own.
+  const staffNames = research && isComparison(question) ? (await listActingTenantStaff().catch(() => [])).map((s) => s.name) : [];
+  const gateSteps = () => observations.map((o) => ({ tool: o.tool, args: o.args, people: peopleInResult(o.tool, o.output.data) }));
   for (let step = 0; research && step < budget().maxSteps && observations.length < budget().maxLookups; step++) {
     if (await stopped()) return STOPPED;
     // Stop researching if the budget (or the answer reserve) can't fit another round.
@@ -2550,7 +2554,8 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     const gate = researchGate({
       question,
       tools: observations.map((o) => o.tool),
-      steps: observations.map((o) => ({ tool: o.tool, args: o.args })),
+      steps: gateSteps(),
+      staff: staffNames,
       lastRoundEmpty: lastEmpty,
       planSaysAnswer: enough,
       stepsUsed: step + 1,
@@ -2563,7 +2568,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   // Research stopped short of what the question's subject needs (out of rounds, or the plan gave up): the answer is
   // told exactly what wasn't checked, so it says so instead of filling the gap (DAX_Conversational_Upgrades item 4).
   const evidenceGap = observations.length
-    ? missingEvidence(question, observations.map((o) => o.tool), observations.map((o) => ({ tool: o.tool, args: o.args })))
+    ? missingEvidence(question, observations.map((o) => o.tool), gateSteps(), staffNames)
     : null;
   // For the owner's speed view (assistantRun.runSpeed): numbers only — 1 = investigated, 0 = quick; and, when the
   // research step said, whether it still thought another lookup would change the answer when it stopped.
