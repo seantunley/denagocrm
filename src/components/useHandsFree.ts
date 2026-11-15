@@ -5,8 +5,9 @@ import { speakAssistantAnswer } from "@/app/actions/assistantVoice";
 import { transcribeQuestion } from "@/app/actions/voice";
 import { audioForm, microphoneError, MAX_RECORDING_SECONDS } from "@/components/useVoiceRecorder";
 import {
-  HANDS_FREE_OFF, HIDDEN_STOPPED, IDLE_STOPPED, freshVad, handsFreeStep, mayRecord, micStarter, rms, vadStep, type Phase,
+  HANDS_FREE_OFF, HIDDEN_STOPPED, IDLE_STOPPED, freshVad, handsFreeStep, mayRecord, rms, vadStep, type Phase,
 } from "@/lib/handsFree";
+import { micStarter } from "@/lib/micStarter";
 
 // An empty WAV: played on the tap that starts hands-free, it unlocks the ONE audio element every answer is then
 // spoken through (iPhone Safari only lets audio play that a tap started).
@@ -48,7 +49,7 @@ export function useHandsFree(onQuestion: (text: string) => void) {
   const wake = useRef<{ release: () => Promise<void> } | null>(null);
   // The question hands-free asked: only ITS answer is spoken, not one typed meanwhile.
   const asked = useRef<string | null>(null);
-  // Getting the microphone, cancellably (lib/handsFree micStarter): a grant that lands after Stop starts nothing.
+  // Getting the microphone, cancellably (lib/micStarter): a grant that lands after Stop starts nothing.
   const starter = useRef<ReturnType<typeof micStarter<MediaStream, WakeLockSentinel>> | null>(null);
   // Which run this is: a transcript or spoken answer that comes back after Stop (or a restart) belongs to none.
   const session = useRef(0);

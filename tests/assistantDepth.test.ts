@@ -162,8 +162,8 @@ test("in askCrm, depth is set only after research is decided, and the answer use
   const lib = code("src/lib/crmAssistant.ts");
   const loop = lib.slice(lib.indexOf("let depth: Depth"), lib.indexOf("const rows = dedupeRows(observations.flatMap((o) => o.output.rows));\n  const tools"));
   assert.match(loop, /let depth: Depth = "quick";/);
-  // Research is decided exactly as before (small talk, image, fast path) — then the depth.
-  const research = loop.indexOf("const research = !(isSmallTalk(question) && !images.length) && !fast;");
+  // Research is decided first (the follow-up route — small talk, thanks, wording edits — and the fast path), then the depth.
+  const research = loop.indexOf("const research = !light && !fast;");
   const start = loop.indexOf("depth = startingDepth(question, research);");
   assert.ok(research > 0 && start > research, "depth follows the unchanged research decision");
   assert.match(loop, /if \(fast\) await runLookups\(fast, 1\);/);

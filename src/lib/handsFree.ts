@@ -91,53 +91,7 @@ export const HANDS_FREE_LABEL: Record<Exclude<Phase, "off">, string> = {
 export const IDLE_STOPPED = "Hands-free stopped — nothing heard for 2 minutes. Tap the mic to start again.";
 export const HIDDEN_STOPPED = "Hands-free stopped — the page went to the background.";
 
-/**
- * GETTING THE MICROPHONE, cancellably (review of #1113). Asking for it waits on a permission prompt, and Stop, closing
- * the chat or leaving the tab can all happen during that wait. A stream that arrives after any of them must be let go
- * at once and must start nothing — and a second start replaces the first, whose stream is let go the same way.
- *
- * Each start takes a ticket; cancel() and any newer start make it stale. After EVERY wait the ticket is checked, and a
- * stale one stops the stream's tracks, releases the wake lock and resolves null. Injected, so a test can hold the
- * prompt open.
- */
-type Stream = { getTracks(): { stop(): void }[] };
-type WakeLock = { release(): Promise<void> };
-export type MicDeps<S extends Stream, W extends WakeLock> = { getMic: () => Promise<S>; wakeLock: () => Promise<W | null> };
-
-export function micStarter<S extends Stream, W extends WakeLock>(deps: MicDeps<S, W>) {
-  let ticket = 0;
-  const letGo = (stream: S, wake: W | null) => {
-    stream.getTracks().forEach((track) => track.stop());
-    void wake?.release().catch(() => undefined);
-  };
-  return {
-    /** The microphone (and the screen kept on, if the browser allows), or null when stopped or replaced meanwhile. */
-    async start(): Promise<{ stream: S; wake: W | null } | null> {
-      const mine = ++ticket;
-      let stream: S;
-      try {
-        stream = await deps.getMic();
-      } catch (error) {
-        if (mine !== ticket) return null; // stopped meanwhile: a refusal now is nobody's error
-        throw error;
-      }
-      if (mine !== ticket) {
-        letGo(stream, null);
-        return null;
-      }
-      const wake = await deps.wakeLock().catch(() => null);
-      if (mine !== ticket) {
-        letGo(stream, wake);
-        return null;
-      }
-      return { stream, wake };
-    },
-    /** Stop, toggle off, close, unmount, tab hidden: whatever start is waiting comes to nothing. */
-    cancel() {
-      ticket++;
-    },
-  };
-}
+// Getting the microphone, cancellably, is lib/micStarter — shared with the recorder (useVoiceRecorder).
 
 /** Silence detection, one frame of microphone level at a time. */
 export type Vad = { floor: number; speechMs: number; silenceMs: number; quietMs: number; warmMs: number };
