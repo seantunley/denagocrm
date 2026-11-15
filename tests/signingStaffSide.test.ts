@@ -133,6 +133,9 @@ test("the request page checks the record, not just the Signatures permission", (
   const access = code("src/lib/signing/access.ts");
   assert.match(access, /request: \{ deletedAt: null, status: \{ notIn: \[\.\.\.CLOSED_REQUEST_STATUSES\] \}, AND: \[mine\] \}/);
   assert.match(access, /return steps\.filter\(\(step\) => canActOnStep\(step, user\)\);/);
+  // The assignee rule is also in the query, so the 100-row limit can't hide this person's steps behind others'.
+  assert.match(access, /\.\.\.\(user\.role === "owner" \? \{\} : \{ assigneeType: "staff", assigneeUserId: user\.id \}\),/);
+  assert.ok(access.indexOf('assigneeUserId: user.id }') < access.indexOf("take: 100"), "filtered before the limit");
 });
 
 /** Evaluate the Prisma-shaped filter against a row, for the handful of operators it uses. */
