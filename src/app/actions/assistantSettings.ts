@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { requireTenantOwner } from "@/lib/auth";
 import { getSetting, getWorkspaceSetting, putSetting, putWorkspaceSetting } from "@/lib/settings";
 import { ownedWriteTenantId } from "@/lib/tenantWrite";
+import { OUTCOME_LEARNING_KEY, outcomeLearningOn, runOutcomeLearning } from "@/lib/outcomeLearning";
 import { logAudit } from "@/lib/audit";
 import { withActingStaffScope, actingOwnerTenantId } from "@/lib/actingScope";
 import { basePrisma } from "@/lib/db";
@@ -336,6 +337,44 @@ export async function setMyBriefTime(value: string) {
         revalidatePath("/assistant");
       }
       return { success: at === "off" ? "Morning brief off" : `Morning brief at ${at} on weekdays` };
+    }),
+  );
+}
+
+/**
+ * Learning from outcomes (lib/outcomeLearning): the owner's switch for DAX suggesting playbook updates from won
+ * and lost deals. On by default; a suggestion only ever waits for the owner's approval.
+ */
+export async function saveOutcomeLearning(formData: FormData) {
+  return asActionResult(() =>
+    withActingStaffScope(async () => {
+      const user = await requireTenantOwner();
+      const tenantId = await actingOwnerTenantId();
+      const on = formData.get("outcomeLearning") === "on";
+      if (on !== outcomeLearningOn(await getWorkspaceSetting(tenantId, OUTCOME_LEARNING_KEY))) {
+        await putWorkspaceSetting(tenantId, OUTCOME_LEARNING_KEY, on ? "on" : "off");
+        await logAudit({
+          action: on ? "assistant.outcome_learning_enabled" : "assistant.outcome_learning_disabled",
+          summary: on ? "Let DAX suggest playbook updates from won and lost deals" : "Turned off DAX suggesting playbook updates from won and lost deals",
+          user,
+        });
+        revalidatePath("/settings/assistant");
+      }
+      return { success: on ? "On — it checks once a week" : "Off" };
+    }),
+  );
+}
+
+/** "Check now": work it out straight away instead of waiting for the weekly run. */
+export async function checkOutcomesNow() {
+  return asActionResult(() =>
+    withActingStaffScope(async () => {
+      await requireTenantOwner();
+      const tenantId = await actingOwnerTenantId();
+      const summary = await runOutcomeLearning(tenantId, { force: true });
+      if (summary === null) refuse("It's switched off — tick the box and save first.");
+      revalidatePath("/settings/assistant");
+      return { success: summary.charAt(0).toUpperCase() + summary.slice(1) };
     }),
   );
 }
