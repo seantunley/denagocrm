@@ -117,18 +117,19 @@ updates:
       # then, and let the bump come back through the normal weekly PR.
       - dependency-name: eslint
         update-types: [version-update:semver-major]
-      # @types/node is PINNED TO THE RUNTIME, not to the newest types.
+      # @types/node is held BEHIND THE RUNTIME, never ahead of it.
       #
-      # Both CI workflows pin node-version: 22, so the types are held at ^22 to
-      # match — see the "//engines" note in package.json. Types ahead of the
-      # runtime are worse than none: tsc stops flagging APIs the deployed Node
-      # does not have, so the compiler goes quiet about exactly the calls that
-      # would fail in production.
+      # The runtime is Node 24.x (CI node-version, Vercel and package.json
+      # engines), and the types stay at ^22 — see the "//engines" note in
+      # package.json. Types behind the runtime are safe (tsc only stops us using
+      # newer APIs). Types ahead of it are worse than none: tsc stops flagging APIs
+      # the deployed Node does not have, so the compiler goes quiet about exactly
+      # the calls that would fail in production.
       #
       # Dependabot cannot read that reasoning, and opened #543 (22 → 26) which
       # failed with five TS2769 errors — the types disagreeing with the runtime,
       # not bugs to fix. Ignored here so the same PR does not keep returning.
-      # RAISE THIS TOGETHER WITH node-version IN THE WORKFLOWS, never alone.
+      # Raise it by hand, at most to the runtime's major (24 today), never past it.
       - dependency-name: "@types/node"
         update-types: [version-update:semver-major]
     labels:
