@@ -219,7 +219,13 @@ export function unsupportedFigures(answer: string, sources: unknown[]): string[]
     const cites = new Set([...raw.matchAll(CITE)].map((m) => m[1]));
     const text = raw.replace(/\[\[[^\]]*\]\]/g, "");
     const named = new Set([...text.matchAll(QUOTE)].map((m) => m[1]));
-    return { cites, text, named, quotes: records.quotes.filter((r) => cites.has(r.link) || named.has(r.quote) || names(text, r.customers)) };
+    // A quote NAMED (its number or its [[/quotes/…]] link) is that quote — never the same customer's others (review of
+    // #1116: "Werner's quote Q-1040 is R 88 500" passed on Werner's Q-1042). A customer named beside it reaches only
+    // their quotes when none of theirs was named; a named quote not in the lookups binds nothing, never a stand-in.
+    const explicit = records.quotes.filter((r) => cites.has(r.link) || named.has(r.quote));
+    const pinned = new Set(explicit.flatMap((r) => [...r.customers]));
+    const byName = records.quotes.filter((r) => !explicit.includes(r) && names(text, r.customers) && ![...r.customers].some((c) => pinned.has(c)));
+    return { cites, text, named, quotes: [...explicit, ...byName] };
   };
   const on = (rs: { quote: string }[]) => rs.map((r) => `Q-${r.quote}`).join("/");
   for (const sentence of sentences) {
