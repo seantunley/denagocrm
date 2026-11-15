@@ -49,7 +49,7 @@ loader._load = function (this: unknown, request: string, parent, isMain) {
 } as Loader;
 const { runConfirmSteps } = createRequire(import.meta.url)("../src/lib/assistantConfirmSteps.ts") as typeof import("../src/lib/assistantConfirmSteps");
 
-const T = "tenant_a", U = "user_1", KEY = "qk_0123456789abcdef0123456789abcdef";
+const T = "tenant_a", U = "user_1", KEY = `qk_${"a".repeat(32)}`;
 let ran: string[] = [];
 let failNext: string | null = null;
 /** Two steps that record each run; `failNext` makes the named one throw once (a database blip). */
