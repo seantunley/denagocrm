@@ -56,8 +56,8 @@ test("'this one' comes from the page hint, whichever page it is", () => {
 
 test("a fast-path question skips the research round but is still written up by DAX", () => {
   const lib = code("src/lib/crmAssistant.ts");
-  assert.match(lib, /const fast = images\.length \? null : fastPath\(question, \{ userName: user\.name \|\| "", pageLead: pageLeadFromHint\(whereTheyAre\) \}\);/);
-  assert.match(lib, /const research = !\(isSmallTalk\(question\) && !images\.length\) && !fast;\s*if \(fast\) await runLookups\(fast, 1\);/);
+  assert.match(lib, /const fast = images\.length \|\| light \? null : fastPath\(question, \{ userName: user\.name \|\| "", pageLead: pageLeadFromHint\(whereTheyAre\) \}\);/);
+  assert.match(lib, /const research = !light && !fast;\s*if \(fast\) await runLookups\(fast, 1\);/);
 });
 
 /* ── Retry once, and the breaker ─────────────────────────────────────────── */
