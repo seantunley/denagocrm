@@ -167,6 +167,22 @@ test("review of #1116: a quote named by number is THAT quote, not the same custo
   assert.deepEqual(unsupportedFigures("Werner's Q-1040 is R 88 500 and Anna's is R 256 500.", [sameCustomer, deliveries]), ["R 88 500 (not on Q-1040)", "R 256 500 (not on Q-1041)"]);
 });
 
+test("review of #1126: a number and a link that disagree are never combined; an unknown quote link is flagged", () => {
+  const sameCustomer = [
+    { quote: "Q-1040", link: "/quotes/w1", customer: "Werner Kilian", total: "R 256 500,00", deposit: "not paid", deliveryDate: "2026-10-31", delivered: null },
+    { quote: "Q-1042", link: "/quotes/w2", customer: "Werner Kilian", total: "R 88 500,00", deposit: "paid 2026-10-20", deliveryDate: "2026-11-04", delivered: "2026-11-04" },
+  ];
+  // The review's reproductions: Q-1040 written, Q-1042's link cited — each used to pass on Q-1042's facts.
+  assert.deepEqual(unsupportedFigures("Werner's Q-1040 is R 88 500 [[/quotes/w2]].", [sameCustomer]), ["Q-1040 cited with Q-1042's link", "R 88 500 (not on Q-1040)"]);
+  assert.deepEqual(unsupportedFigures("Werner has paid his deposit on Q-1040 [[/quotes/w2]].", [sameCustomer]), ["Q-1040 cited with Q-1042's link", "deposit paid (not on Q-1040)"]);
+  assert.deepEqual(unsupportedFigures("Werner's Q-1040 was delivered on 4 Nov [[/quotes/w2]].", [sameCustomer]), ["Q-1040 cited with Q-1042's link", "delivered 4 Nov (not on Q-1040)"]);
+  // A link to no quote the lookups returned: flagged, and the customer's other quote is no stand-in.
+  assert.deepEqual(unsupportedFigures("Werner's quote is R 88 500 [[/quotes/missing]].", [sameCustomer]), ["[[/quotes/missing]] (not a quote the lookups returned)"]);
+  // Number and link that agree, one or several, still pass — combined totals too.
+  assert.deepEqual(unsupportedFigures("Werner's Q-1042 is R 88 500 [[/quotes/w2]].", [sameCustomer]), []);
+  assert.deepEqual(unsupportedFigures("Q-1040 [[/quotes/w1]] plus Q-1042 [[/quotes/w2]] come to R 345 000.", [sameCustomer]), []);
+});
+
 test("end to end, as the answer is checked: evidence shaped like the live call (question, history, lookups) → the note", () => {
   // crmAssistant: evidenceNow = [question, ...history questions, ...observations' data]; then unsupportedNote.
   const evidenceNow = ["Compare Werner's and Anna's quotes", "How are my deals?", quotes, deliveries];
