@@ -38,10 +38,17 @@ export async function saveDealFinance(leadId: string, formData: FormData): Promi
     const reference = text(formData, "reference", 80) || null;
     const note = text(formData, "note", 1000) || null;
 
+    // THE VERSION THE FORM SHOWED (its updatedAt; "" when it showed no finance). A save is only ever made over that
+    // version: a stale form — or a DAX card shown before a colleague's edit — is refused, never laid over newer work.
+    // statusAt stays the chaser's clock alone.
+    const shown = text(formData, "version", 40);
     const existing = await prisma.dealFinance.findFirst({
       where: { tenantId, leadId },
-      select: { id: true, status: true, statusAt: true, vendorId: true, reference: true, note: true, vendor: { select: { name: true } } },
+      select: { id: true, status: true, statusAt: true, updatedAt: true, vendorId: true, reference: true, note: true, vendor: { select: { name: true } } },
     });
+    if ((existing?.updatedAt.toISOString() ?? "") !== shown) {
+      refuse(existing ? "Someone else changed the finance since you opened it — refresh to see their change." : "The finance on this deal is no longer there — refresh the page.");
+    }
     let entityId: string;
     let summary: string;
     if (!existing) {
@@ -60,9 +67,9 @@ export async function saveDealFinance(leadId: string, formData: FormData): Promi
     } else {
       const moved = existing.status !== status;
       if (!moved && existing.vendorId === vendor.id && existing.reference === reference && existing.note === note) return { success: "Nothing changed" };
-      // Only from what was read: two people saving at once can't silently overwrite each other's status.
+      // Compare-and-swap on that version: two saves at once — any field — can't both land; the second is refused.
       const updated = await prisma.dealFinance.updateMany({
-        where: { id: existing.id, tenantId, status: existing.status, statusAt: existing.statusAt },
+        where: { id: existing.id, tenantId, updatedAt: existing.updatedAt },
         data: { vendorId: vendor.id, reference, note, status, ...(moved ? { statusAt: new Date() } : {}) },
       });
       if (updated.count !== 1) refuse("Someone else just updated the finance — refresh the page.");
