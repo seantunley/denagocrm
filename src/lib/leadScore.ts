@@ -54,6 +54,16 @@ export type LeadScoreInput = {
    * contacted yet"). Optional: a caller that does not know says nothing new.
    */
   hasQuote?: boolean;
+  /**
+   * Latest time anybody worked on the deal at all: any timeline entry, internal
+   * notes included, and any activity added — planned or done (customerContact.ts
+   * lastWorkedAt). Not contact; it is why "not contacted" would be a false claim.
+   * Contact is often made outside the CRM and written down as a note, with a
+   * next step booked (Sean, 2026-11-16: a lead with a pinned note of the WhatsApp
+   * chat and a call booked still said "New lead — not contacted yet").
+   * Optional: a caller that does not know says nothing new.
+   */
+  lastWorkedAt?: Date | null;
 };
 
 export type LeadScore = {
@@ -173,7 +183,19 @@ export function scoreLead(input: LeadScoreInput, now: Date = new Date()): LeadSc
       reason: "Quote ready — no contact with the customer logged in the CRM",
       action: "Log how the quote reached them, or send it from the CRM",
     });
+  } else if (input.lastContactAt === null && input.lastWorkedAt) {
+    // Somebody is working the deal — notes, a booked call — but no contact is
+    // LOGGED. Never "not contacted": only a long silence on the deal is said.
+    const days = calendarDaysAgo(input.lastWorkedAt, now);
+    if (days >= NO_CONTACT_DAYS) {
+      hits.push({
+        points: W.noContact + Math.min(NO_CONTACT_MAX_EXTRA, days - NO_CONTACT_DAYS),
+        reason: `Nothing new on the deal for ${days} days — no contact logged`,
+        action: "Check in with the customer",
+      });
+    }
   } else if (input.lastContactAt === null) {
+    // Nothing at all on the deal: no message, note, activity or quote.
     const age = calendarDaysAgo(input.createdAt, now);
     hits.push(
       age <= NEW_LEAD_DAYS
