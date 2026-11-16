@@ -39,5 +39,5 @@ test("the floating button is gone; the panel and the sidebar button share open a
 
   // Still not on a phone: the panel is desktop-only, and the foot link is taken out after the phone filter.
   assert.match(src("src/app/(app)/layout.tsx"), /<div className="max-md:hidden"><AssistantBubble unseen=\{assistantUnseen\} \/><\/div>/);
-  assert.match(src("src/lib/help/articles/assistant-and-more.ts"), /Ask the CRM button at the bottom of the sidebar/);
+  assert.match(src("src/lib/help/articles/dax.ts"), /Ask the CRM button at the bottom of the sidebar/);
 });

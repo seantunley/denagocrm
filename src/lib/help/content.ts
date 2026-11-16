@@ -12,7 +12,12 @@ import { secureLinkArticles } from "./articles/secure-links";
 import { offlineChecklistArticles } from "./articles/offline-checklists";
 import { documentStudioArticles } from "./articles/document-studio";
 import { signingAndInboxArticles } from "./articles/signing-and-inbox";
-import { assistantAndMoreArticles } from "./articles/assistant-and-more";
+import { daxArticles } from "./articles/dax";
+import { chatbotArticles } from "./articles/chatbot";
+import { todayAndLeadScoreArticles } from "./articles/today-and-lead-scores";
+import { dealWorkspaceArticles } from "./articles/deal-workspace";
+import { customerEmailArticles } from "./articles/customer-emails";
+import { administrationArticles } from "./articles/administration";
 import crm from "./data/crm.json";
 import sales from "./data/sales.json";
 import stock from "./data/stock.json";
@@ -68,7 +73,7 @@ const REPLACED_GENERATED_SLUGS = new Set([
   "admin-signing-workflows",
   "inbox-overview",
   "inbox-replying",
-  // articles/assistant-and-more.ts — the settings menu was regrouped
+  // articles/administration.ts — the settings menu was regrouped
   "admin-settings-overview",
 ]);
 const generated = (articles: unknown) => (articles as HelpArticle[]).filter((article) => !REPLACED_GENERATED_SLUGS.has(article.slug));
@@ -102,7 +107,13 @@ export const HELP_ARTICLES: HelpArticle[] = [
   // hand-authored sets reads after the generated articles of its category.
   ...documentStudioArticles.filter((article) => article.category !== "documents"),
   ...signingAndInboxArticles.filter((article) => article.category !== "sales" && article.category !== "comms"),
-  ...assistantAndMoreArticles,
+  // Once one file (assistant-and-more.ts), split by topic on 2026-11-16 — the same articles in the same order.
+  ...daxArticles,
+  ...chatbotArticles,
+  ...todayAndLeadScoreArticles,
+  ...dealWorkspaceArticles,
+  ...customerEmailArticles,
+  ...administrationArticles,
 ];
 
 const BY_SLUG = new Map(HELP_ARTICLES.map((article) => [article.slug, article]));

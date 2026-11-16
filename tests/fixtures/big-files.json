@@ -12,6 +12,5 @@
   "src/lib/assistantWhatsApp.ts": 67969,
   "src/lib/botOutbox.ts": 86865,
   "src/lib/crmAssistant.ts": 243620,
-  "src/lib/crmAssistantPlan.ts": 65985,
-  "src/lib/help/articles/assistant-and-more.ts": 109279
+  "src/lib/crmAssistantPlan.ts": 65985
 }
