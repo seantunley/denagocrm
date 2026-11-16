@@ -247,6 +247,7 @@ function LeadCard({ lead, dragging, actions, staleAfterDays = null }: { lead: Ka
           )}
           {lead.notes?.length ? <NotesPopup notes={lead.notes} name={lead.name} /> : null}
           {lead.research && <ResearchPopup summary={lead.research} name={lead.name} />}
+          {!open && <KanbanFinancePill finance={lead.finance} compact />}
           <span title={`Source: ${lead.source}`}>
             <SourceIcon source={lead.source} />
           </span>
