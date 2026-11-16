@@ -32,6 +32,9 @@ export const financeTone = (status: string): "success" | "warning" | "danger" | 
  * A finance deal can be delivered once the finance house has approved it (or paid). Declined or still waiting: no.
  * Withdrawn means the customer is no longer financing — the deal goes ahead on its own terms.
  */
+/** Finished with: paid out, or withdrawn. Anything else is live — its finance house stays on the deal. */
+export const financeIsClosed = (status: string): boolean => status === "paid_out" || status === "withdrawn";
+
 export function financeBlocksDelivery(status: string | null | undefined): boolean {
   return status === "docs_outstanding" || status === "submitted" || status === "declined";
 }
