@@ -49,6 +49,7 @@ import {
 import { toast } from "sonner";
 import LocationAutocomplete from "@/components/LocationAutocomplete";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import KanbanFinancePill, { type KanbanFinance } from "@/components/deals/KanbanFinancePill";
 import ModalPortal from "@/components/ui/modal-portal";
 import {
   assignLead,
@@ -127,6 +128,7 @@ export type KanbanLead = {
   assignedToId: string | null;
   assignee: string | null;
   testDrive?: { when: string; weather: string | null; date: string } | null;
+  finance?: KanbanFinance | null;
   signing?: { label: string } | null;
   research?: string | null;
   /** Note text from the lead and/or its linked contact, for the card's note icon. */
@@ -362,6 +364,7 @@ function LeadCard({ lead, dragging, actions, staleAfterDays = null }: { lead: Ka
               )}
             </>
           )}
+          <KanbanFinancePill finance={lead.finance} />
         </div>
         <Link
           href={`/leads/${lead.id}`}

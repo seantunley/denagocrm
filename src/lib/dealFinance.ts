@@ -7,7 +7,8 @@ import { isModuleEnabled } from "./modules/enabled";
 import { baseValueCents } from "./currencyRules";
 import { ATTENTION_CATEGORY, ATTENTION_WEIGHTS, attentionSignalKey, type AttentionSignal } from "./attention/score";
 import type { BriefInput } from "./daxBriefRules";
-import { deliveryRefusal, financeBlocksDelivery, financeChase, type FinanceChase } from "./dealFinanceRules";
+import { deliveryRefusal, financeBlocksDelivery, financeChase, financeStatusShort, financeTone, type FinanceChase } from "./dealFinanceRules";
+import type { KanbanFinance } from "@/components/deals/KanbanFinancePill";
 
 export type FinanceDeal = {
   id: string;
@@ -104,6 +105,24 @@ export async function financeToChase(user: PermissionUser, now: Date): Promise<N
   return deals
     .filter((deal) => deal.chase)
     .map((deal) => ({ leadId: deal.leadId, name: deal.name, ownerId: deal.ownerId, detail: deal.chase!.detail, since: deal.chase!.since, valueCents: baseValueCents(deal) }));
+}
+
+/**
+ * The finance pill for each financed lead on the board (KanbanFinancePill), keyed by lead. `leadIds`: the board's own,
+ * already permission-scoped. Empty with the Finance module off — and for a cash deal, which has no record.
+ */
+export async function financeOnBoard(leadIds: string[], now: Date): Promise<Map<string, KanbanFinance>> {
+  if (leadIds.length === 0 || !(await isModuleEnabled("finance"))) return new Map();
+  const rows = await prisma.dealFinance.findMany({
+    where: { leadId: { in: leadIds } },
+    select: { leadId: true, status: true, statusAt: true, reference: true, vendor: { select: { name: true } } },
+  });
+  return new Map(rows.map((row) => [row.leadId, {
+    house: row.vendor.name,
+    status: financeStatusShort(row.status),
+    tone: financeTone(row.status),
+    chase: financeChase({ status: row.status, statusAt: row.statusAt, financeHouse: row.vendor.name, reference: row.reference }, now)?.detail ?? null,
+  }]));
 }
 
 /** A deal's finance as the pages show it: the finance house by name. Null when the deal isn't financed. */
