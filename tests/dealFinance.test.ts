@@ -141,6 +141,20 @@ test("the finance house can't be taken off a deal while its finance is live (rev
   assert.match(remove, /Set the finance to Withdrawn first/);
 });
 
+test("the lead board shows a financed deal's finance status (Sean 2026-11-16); a cash deal shows nothing", () => {
+  const lib = read("src/lib/dealFinance.ts");
+  const board = lib.slice(lib.indexOf("export async function financeOnBoard("));
+  assert.match(board, /if \(leadIds\.length === 0 \|\| !\(await isModuleEnabled\("finance"\)\)\) return new Map\(\);/, "Finance module off: no pills");
+  assert.match(board, /where: \{ leadId: \{ in: leadIds \} \}/, "only the board's own, already permission-scoped leads");
+  const page = read("src/app/(app)/leads/page.tsx");
+  assert.match(page, /const financeByLead = await financeOnBoard\(leadIds, now\);/);
+  assert.match(page, /finance: financeByLead\.get\(lead\.id\) \?\? null,/);
+  assert.match(read("src/components/KanbanBoard.tsx"), /<KanbanFinancePill finance=\{lead\.finance\} \/>/);
+  const pill = read("src/components/deals/KanbanFinancePill.tsx");
+  assert.match(pill, /if \(!finance\) return null;/, "nothing on a cash deal");
+  assert.doesNotMatch(pill, /dealFinanceRules|@\/lib\/db/, "worked out on the server; the browser gets text");
+});
+
 test("the table: tenant FKs, one per lead, the statuses checked, row-level security forced", () => {
   const sql = read("prisma/migrations/20261116120000_deal_finance/migration.sql");
   assert.match(sql, /FOREIGN KEY \("tenantId", "leadId"\) REFERENCES "Lead"\("tenantId", "id"\)/);

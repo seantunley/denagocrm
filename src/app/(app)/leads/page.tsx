@@ -16,6 +16,7 @@ import { listActiveSalesPipelines, listPipelineStages } from "@/lib/pipelines";
 import PipelineSwitcher, { ALL_PIPELINES } from "@/components/PipelineSwitcher";
 import PipelineSummary, { type PipelineSummaryRow } from "@/components/PipelineSummary";
 import KanbanBoard, { type KanbanStage } from "@/components/KanbanBoard";
+import { financeOnBoard } from "@/lib/dealFinance";
 import ModalTrigger from "@/components/Modal";
 import LeadForm from "@/components/LeadForm";
 import { PageHeader } from "@/components/page-header";
@@ -169,6 +170,8 @@ export default async function LeadsPage({
   const nextActivityByLead = new Map(nextActivityRows.map((activity) => [activity.leadId, activity]));
   const nextTestDriveByLead = new Map(nextTestDriveRows.map((activity) => [activity.leadId, activity]));
   const forecast = await getDailyForecast();
+  // Finance status on a financed deal's card (Finance module; a cash deal has none).
+  const financeByLead = await financeOnBoard(leadIds, now);
 
   // PINNED notes for the card indicator. Keyed off real TimelinePin rows, not off
   // whether a note exists — nearly every lead carries some note text, so note
@@ -339,6 +342,7 @@ export default async function LeadsPage({
             text,
           })),
         ],
+        finance: financeByLead.get(lead.id) ?? null,
         isNew: !lead.viewedAt && lead.createdAt.getTime() > now.getTime() - 3 * 24 * 60 * 60 * 1000,
         noNextStep: lead._count.activities === 0,
         ageDays: Math.floor((now.getTime() - lead.stageEnteredAt.getTime()) / 86400000),
