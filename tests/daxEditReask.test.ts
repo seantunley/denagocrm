@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { chatQueue, emptyChatQueue } from "../src/components/chatQueue";
+import { daxCore } from "./daxCore";
 
 const src = (rel: string) => readFileSync(new URL(`../${rel}`, import.meta.url), "utf8").replace(/\r\n/g, "\n");
 
@@ -24,7 +25,7 @@ test("only the person's own latest chat question is taken out — and only the p
   assert.match(edit, /where: \{ id: \{ in: planIds \}, tenantId, userId, kind: PLAN_KIND, status: "open" \}/);
   assert.doesNotMatch(edit, /assistantPendingAction|createdAt: \{ gt/, "nothing matched by time");
   assert.match(edit, /prisma\.\$transaction\(async \(tx\) =>/, "the callback form — the scoped client refuses an array transaction");
-  assert.match(src("src/lib/crmAssistant.ts"), /actions\[i\]\.kind === "plan" \? \{ \.\.\.p, planId: actions\[i\]\.id\.replace\(\/\^plan-\/, ""\) \} : p/, "each answer records the plans it offered");
+  assert.match(daxCore(src), /actions\[i\]\.kind === "plan" \? \{ \.\.\.p, planId: actions\[i\]\.id\.replace\(\/\^plan-\/, ""\) \} : p/, "each answer records the plans it offered");
 
   const route = src("src/app/api/assistant/ask/route.ts");
   // After the retry check: a retried key follows the run it already started, and never withdraws twice.
@@ -54,6 +55,6 @@ test("the pencil is on the last question you asked here, and sending removes the
   assert.match(chat, /aria-label="Edit your question and ask again"/);
   assert.match(chat, /Editing your last question — send it to ask again; the old answer goes\./);
   // History loaded on open carries the id, so the last question is editable after a reload too.
-  assert.match(src("src/lib/crmAssistant.ts"), /select: \{ id: true, question: true, answer: true, source: true \},/);
+  assert.match(daxCore(src), /select: \{ id: true, question: true, answer: true, source: true \},/);
   assert.match(src("src/app/(app)/assistant/page.tsx"), /history=\{history\.map\(\(\{ id, question, answer, source \}\) => \(\{ id, question, answer, source \}\)\)\}/);
 });

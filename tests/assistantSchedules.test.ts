@@ -18,7 +18,7 @@ test("what a person is told when the AI service fails: plain, no provider name, 
   assert.equal(aiFailureForPeople({ error: "ChatGPT is unavailable or over its usage limit (429).", transient: true }), AI_BUSY);
   assert.equal(aiFailureForPeople({ error: "ChatGPT refused the request (400)." }), AI_FAILED);
   for (const text of [AI_BUSY, AI_FAILED, AI_NOT_CONNECTED]) assert.doesNotMatch(text, /ChatGPT|OpenAI|GPT|Claude|Anthropic/);
-  const core = readFileSync("src/lib/crmAssistant.ts", "utf8");
+  const core = daxCore();
   // The answer step failed with NOTHING found: a failure (so a brief or scheduled question is retried), not an
   // empty "here's what the CRM returned".
   assert.match(core, /if \(!rows\.length\) return \{ ok: false, error: aiFailureForPeople\(answerReply\) \};/);
@@ -32,6 +32,7 @@ test("what a person is told when the AI service fails: plain, no provider name, 
   }
 });
 import { splitActions } from "../src/lib/assistantActions";
+import { daxCore } from "./daxCore";
 
 const code = (rel: string) =>
   readFileSync(new URL(`../${rel}`, import.meta.url), "utf8")
@@ -152,7 +153,7 @@ test("the assistant can propose a schedule — no lead, nothing extra", () => {
   const instructions = code("src/lib/assistantActions.ts");
   assert.match(instructions, /the question must stand alone — name the customer or thing/);
   // Becoming a card: the cross-field rules and a future time are checked; no lead is looked up.
-  const lib = code("src/lib/crmAssistant.ts");
+  const lib = daxCore(code);
   const resolve = lib.slice(lib.indexOf("async function resolveActions"), lib.indexOf("function dedupeRows"));
   const schedule = resolve.slice(resolve.indexOf('if (p.type === "schedule")'), resolve.indexOf("canAccessLead"));
   assert.match(schedule, /scheduleInput\.safeParse\(fields\)/);
@@ -340,7 +341,7 @@ test("the cron is registered on the shared beat and runs per workspace", () => {
 });
 
 test("scheduled answers are labelled, dotted until seen, and seen when opened", () => {
-  const lib = code("src/lib/crmAssistant.ts");
+  const lib = daxCore(code);
   assert.match(lib.slice(lib.indexOf("export async function assistantTurnsToday")).slice(0, 600), /select: \{ id: true, question: true, answer: true, source: true \}/); // id: edit and re-ask
   assert.match(lib.slice(lib.indexOf("export async function assistantHistory")).slice(0, 600), /source: true/);
   const seen = code("src/lib/assistantScheduleRun.ts");
