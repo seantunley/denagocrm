@@ -96,7 +96,8 @@ export default function VoiceDebriefButton({
         toast.error(result.error ?? "Couldn't save it.");
         return;
       }
-      toast.success(draft.followUpDate ? "Logged, and the follow-up is booked" : "Logged on the timeline");
+      const logged = draft.followUpDate ? "Logged, and the follow-up is booked" : "Logged on the timeline";
+      toast.success(result.warning ? `${logged}. ${result.warning}` : logged);
       setDraft(null);
       router.refresh();
     });
