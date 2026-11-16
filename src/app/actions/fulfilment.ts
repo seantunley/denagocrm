@@ -397,6 +397,8 @@ export async function rescheduleDelivery(quoteId: string, formData: FormData) {
     if (!quote) refuse(QUOTE_GONE);
     const previous = quote.deliveryScheduledFor;
     if (!previous) refuse("Schedule the delivery before rescheduling it.");
+    // No finance check here, on purpose: moving the day hands nothing over — a deal whose finance was declined after
+    // booking must still be movable (pushed out while it is sorted). The handover itself refuses (quoteDelivery.ts).
     if (quote.deliveredAt) refuse("This delivery has already been completed.");
     const dateRaw = String(formData.get("date") ?? "").trim();
     if (!dateRaw) refuse("Choose the new delivery date.");

@@ -1,5 +1,6 @@
 import "server-only";
 
+import { Prisma } from "@prisma/client";
 import { prisma } from "./db";
 import { getAccessibleLeadIds, type PermissionUser } from "./permissions";
 import { isModuleEnabled } from "./modules/enabled";
@@ -108,7 +109,7 @@ export async function financeToChase(user: PermissionUser, now: Date): Promise<N
 export async function loadDealFinance(tenantId: string, leadId: string) {
   return prisma.dealFinance.findFirst({
     where: { tenantId, leadId },
-    select: { id: true, status: true, statusAt: true, reference: true, note: true, vendorId: true, vendor: { select: { name: true } } },
+    select: { id: true, status: true, statusAt: true, updatedAt: true, reference: true, note: true, vendorId: true, vendor: { select: { name: true } } },
   });
 }
 
@@ -120,4 +121,20 @@ export async function financeDeliveryRefusal(tenantId: string, leadId: string | 
   if (!leadId) return null;
   const finance = await loadDealFinance(tenantId, leadId);
   return finance && financeBlocksDelivery(finance.status) ? deliveryRefusal(finance.vendor.name, finance.status) : null;
+}
+
+/**
+ * The same question inside the handover's own transaction (quoteDelivery.ts, a basePrisma transaction: nothing is
+ * scoped for us, so the workspace is named). The finance row is held FOR SHARE: a save changing it waits for the
+ * handover to commit, or committed first and is seen here.
+ */
+export async function financeDeliveryRefusalInTx(tx: Prisma.TransactionClient, tenantId: string, leadId: string | null): Promise<string | null> {
+  if (!leadId) return null;
+  const [row] = await tx.$queryRaw<{ status: string; house: string }[]>(Prisma.sql`
+    SELECT f."status", v."name" AS house
+    FROM "DealFinance" f JOIN "Vendor" v ON v."id" = f."vendorId" AND v."tenantId" = f."tenantId"
+    WHERE f."tenantId" = ${tenantId} AND f."leadId" = ${leadId}
+    FOR SHARE OF f
+  `);
+  return row && financeBlocksDelivery(row.status) ? deliveryRefusal(row.house, row.status) : null;
 }
