@@ -4,12 +4,13 @@ import test from "node:test";
 import { catalogueColour } from "../src/lib/nearMatch";
 import { expandNumberedReply, PENDING_ACTION_TTL_MS, typedYes } from "../src/lib/assistantWhatsAppRules";
 import { parseActionList, quoteBuildText, QUOTE_BUILD_RULE } from "../src/lib/assistantActions";
+import { daxCore } from "./daxCore";
 
 // Sean, 2026-10-24, on WhatsApp: a quote for Werner Kilian, Rover XL in grey, delivery to Hermanus R6 500. DAX could
 // not see the colours, did not understand "2", and his final "Yes" got "there is nothing to confirm": the deal had no
 // customer record, and the quote was dropped without a word. "Check all the potential bottlenecks, this needs to work."
 const read = (path: string) => readFileSync(path, "utf8").replace(/\r\n/g, "\n");
-const core = read("src/lib/crmAssistant.ts");
+const core = daxCore(read);
 const build = core.slice(core.indexOf('if (p.type === "quote_build") {'), core.indexOf("if (!(await canAccessLead(user, p.leadId))) continue;"));
 const confirm = read("src/app/actions/assistant.ts");
 const run = confirm.slice(confirm.indexOf('case "quote_build": {'), confirm.indexOf('case "quote_change": {'));

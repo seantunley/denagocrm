@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
+import { daxCore } from "./daxCore";
 import {
   INTERNAL_COMMUNICATION_TYPES,
   NON_CONTACT_ACTIVITY_TYPES,
@@ -59,7 +60,7 @@ test("a NEWER internal note never replaces an OLDER real contact as last contact
 });
 
 test("'gone quiet' and 'oldest contact' only count real contact", () => {
-  const lib = code("src/lib/crmAssistant.ts");
+  const lib = daxCore(code);
   const find = lib.slice(lib.indexOf("async function findLeads("), lib.indexOf("const withTouch"));
   assert.match(find, /communications: \{ where: contactCommunicationWhere,/, "a note doesn't reset the clock");
   assert.match(find, /activities: \{\s*where: contactActivityWhere,/, "a done to-do or blocked time doesn't either");
