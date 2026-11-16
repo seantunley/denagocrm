@@ -1,3 +1,5 @@
 # Known false positives, pinned to the exact commit and line (commit:file:rule:line).
 # Synthetic test token in the first #694 commit; replaced in a3403ad.
 cfab9f0cc197dba13da152a55a0e8928d850ccb6:tests/outboundMessageLog.test.ts:generic-api-key:16
+# Synthetic confirm key (qk_ + hex digits) in the first #1133 commit; replaced in the next commit.
+15ffef9a5916548fea85865ab41c79ed5e22120e:tests/assistantConfirmSteps.test.ts:generic-api-key:52

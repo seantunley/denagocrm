@@ -404,7 +404,8 @@ export async function findLeads(user: User, raw: z.infer<typeof leadArgs>): Prom
       assignedTo: lead.assignedTo?.name ?? "unassigned",
       product: lead.product?.name ?? null,
       source: lead.source,
-      lastContact: dateKey(lastContact),
+      // "none logged", never "never": contact is often made outside the CRM and noted (Sean, 2026-11-16).
+      lastContact: lastContact ? dateKey(lastContact) : "none logged",
       daysInStage: daysAgo(lead.stageEnteredAt),
       created: dateKey(lead.createdAt),
       ...(lead.status === "won" || lead.status === "lost" ? { closed: dateKey(closedOn(lead)) } : {}),
@@ -412,7 +413,7 @@ export async function findLeads(user: User, raw: z.infer<typeof leadArgs>): Prom
     }))],
     rows: page.map(({ lead, lastContact }) => ({
       label: `${lead.name} — ${lead.title}`,
-      detail: `${lead.stage.name} · ${formatZAR(lead.valueCents, withCurrency(moneyFmt, lead.currency))} · ${lead.assignedTo?.name ?? "unassigned"} · last contact ${dateKey(lastContact)}`,
+      detail: `${lead.stage.name} · ${formatZAR(lead.valueCents, withCurrency(moneyFmt, lead.currency))} · ${lead.assignedTo?.name ?? "unassigned"} · last contact ${lastContact ? dateKey(lastContact) : "none logged"}`,
       href: `/leads/${lead.id}`,
     })),
   };
@@ -3779,6 +3780,9 @@ export async function resolveActions(
         id, kind: "nurture", leadId: p.leadId, leadLabel,
         title: wasStatus === "lost" ? `Reopen ${lead.name}'s deal and park it in Nurture` : wasStatus === "nurture" ? `Update ${lead.name}'s Nurture details` : `Park ${lead.name}'s deal in Nurture`,
         wasStatus, because: p.because, interest: p.interest, trigger: p.trigger, reviewOn: p.reviewOn, assignedToId: ownerId,
+        // Its steps (reopen, then park) are saved under this key (assistantConfirmSteps): a Confirm pressed again
+        // finishes what's left, never repeats a step.
+        confirmKey: `qk_${randomBytes(16).toString("hex")}`,
         detail: [
           `Why: ${nurtureReasonLabel(p.because)}`,
           `Interested in: ${p.interest}`,

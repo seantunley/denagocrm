@@ -155,7 +155,8 @@ test("ONE CONFIRM, ONE CHANGE: the card's key is spent in the transaction that m
   // And since 2026-11-02 (review of #933) for a new lead — reserved and spent at Confirm by lib/assistantConfirmKey.ts —
   // and (review of #934) for filing a sent file, the same way.
   // And since 2026-11-14 (review of #1117) for a logged call — spent by logVoiceDebrief in the transaction that files it.
-  assert.equal((assistant.match(/confirmKey: `qk_\$\{randomBytes\(16\)\.toString\("hex"\)\}`,/g) ?? []).length, 7);
+  // And since 2026-11-15 (risk assessment, Phase 1) for a nurture card — its steps' claim rows (assistantConfirmSteps).
+  assert.equal((assistant.match(/confirmKey: `qk_\$\{randomBytes\(16\)\.toString\("hex"\)\}`,/g) ?? []).length, 8);
 
   const quotes = code("src/app/actions/quotes.ts");
   assert.match(quotes, /confirmKey: z\.string\(\)\.regex\(CONFIRM_KEY\)\.optional\(\),/);

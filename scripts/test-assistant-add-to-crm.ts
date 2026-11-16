@@ -482,8 +482,18 @@ async function main() {
       const nextCard = next.cards.find((c): c is Extract<ActionCard, { kind: "record_payment" }> => c.kind === "record_payment");
       const done = nextCard ? await runAsSession(repSession, () => scoped(() => runAssistantAction(nextCard))) : null;
       check("after the deposit, a later payment is recorded on the statement, its proof filed on the quote", nextCard?.deposit === false && !!done?.ok && (await payments()) === 1 && (await proofs()) === 2, JSON.stringify({ next, done }));
+      // Confirm again (review of #1133): the shared step helper says it was already done, and the DATABASE proves it —
+      // the payment, the proof, the audit trail and the held file all exactly as they were before the second Confirm.
+      const confirmations = () => basePrisma.auditEvent.count({ where: { tenantId: T, eventType: "assistant.action_confirmed", actorUserId: rep.id } });
+      const before = { payments: await payments(), proofs: await proofs(), audits: await confirmations(), held: await stillHeld(proof2) };
       const replay = nextCard ? await runAsSession(repSession, () => scoped(() => runAssistantAction(nextCard))) : null;
-      check("…and Confirm again records and files nothing more (the card's key, and the proof's own)", !!replay?.ok && /proof filed$/.test(replay.success ?? "") && (await payments()) === 1 && (await proofs()) === 2 && (await stillHeld(proof2)) === 1, JSON.stringify(replay));
+      const after = { payments: await payments(), proofs: await proofs(), audits: await confirmations(), held: await stillHeld(proof2) };
+      check(
+        "…and Confirm again records, files and audits nothing more — and says it was already done",
+        !!replay?.ok && /^Already done — nothing was done twice\. Payment of .+ recorded on Q-\d+\. Proof of payment filed on the quote\.$/.test(replay.success ?? "")
+          && JSON.stringify(after) === JSON.stringify(before) && before.payments === 1 && before.proofs === 2 && before.held === 1,
+        JSON.stringify({ replay, before, after }),
+      );
 
       // A DELIVERY DAY (voice-first, 2026-11-02: "delivery next Tuesday"): booked through the deliveries board, then
       // moved — nobody contacted, never booked twice, and a day moved by someone else since is not overwritten.

@@ -135,9 +135,14 @@ const state = {
   seq: 0,
 };
 type Where = Record<string, unknown>;
-const matches = (row: Pending, where: Where) =>
+const matches = (row: Pending, where: Where): boolean =>
   Object.entries(where).every(([key, want]) => {
     const have = (row as unknown as Record<string, unknown>)[key];
+    if (key === "AND") return (want as Where[]).every((w) => matches(row, w));
+    if (key === "NOT") return !matches(row, want as Where);
+    if (want && typeof want === "object" && typeof (want as { startsWith?: unknown }).startsWith === "string") {
+      return typeof have === "string" && have.startsWith((want as { startsWith: string }).startsWith);
+    }
     if (key === "expiresAt") {
       const range = want as { gt?: Date; lt?: Date };
       return range.gt ? row.expiresAt.getTime() > range.gt.getTime() : row.expiresAt.getTime() < range.lt!.getTime();
@@ -233,7 +238,7 @@ loaderKey._load = function (this: unknown, request: string, parent, isMain) {
 let asUser: string | null = null;
 
 const require_ = createRequire(import.meta.url);
-const { PENDING_ACTION_RETENTION_MS, confirmAllFromWhatsApp, confirmFromWhatsApp, offerConfirmations, prunePendingActions, waitingForConfirm, withdrawWaiting } = require_("../src/lib/assistantWhatsAppConfirm.ts") as typeof import("../src/lib/assistantWhatsAppConfirm");
+const { BOOKKEEPING_ID_PREFIXES, PENDING_ACTION_RETENTION_MS, confirmAllFromWhatsApp, confirmFromWhatsApp, offerConfirmations, prunePendingActions, waitingForConfirm, withdrawWaiting } = require_("../src/lib/assistantWhatsAppConfirm.ts") as typeof import("../src/lib/assistantWhatsAppConfirm");
 
 const LEAD = "cmabcdefghijklmnopqrstuv";
 const PHONE = "27821234567";
@@ -455,18 +460,21 @@ test("review of #905: the customer record was made, then the quote failed — th
   assert.ok(build.indexOf("await quoteFromLeadDefaults()") > -1 && build.indexOf("await quoteFromLeadDefaults()") < build.indexOf("convertLeadToContact("));
   const afterCustomer = build.slice(build.indexOf("convertLeadToContact("), build.indexOf("await saveQuoteDraft("));
   assert.doesNotMatch(afterCustomer.replace(/^\s*\/\/.*$/gm, ""), /await (?!logError)/, "between the customer record and the protected save, nothing else is awaited");
-  // Two places. record_payment is not one (review of #934): its key records the payment once, its proof is filed once
-  // under its own key, and a proof that may not have been filed is said plainly — never offered for a blind retry.
-  // nurture IS (2026-11-02): a lost deal reopened and then not parked — the retry finds it open and only parks it.
+  // Two places by hand. record_payment is not one (review of #934): its key records the payment once, its proof is
+  // filed once under its own key, and a proof that may not have been filed is said plainly — never offered for a blind
+  // retry. nurture IS (2026-11-02) — now through its steps (assistantConfirmSteps, risk assessment 2026-11-15): a lost
+  // deal reopened and then not parked; the retry skips the reopen and only parks it.
   // create_lead IS (review of #1125): the lead opened and its key spent, then putting the customer's quotes on it threw —
   // Confirm again finds the lead by its key and only puts the quotes on.
-  assert.equal(action.match(/resumable\(/g)?.length, 3, "quote_build after the customer; nurture after the reopen; create_lead's quotes after the lead");
+  assert.equal(action.match(/resumable\(/g)?.length, 2, "quote_build after the customer; create_lead's quotes after the lead");
   const newLead = action.slice(action.indexOf('case "create_lead": {'), action.indexOf('case "attach_file": {'));
   assert.ok(newLead.indexOf('await completeConfirmKey(tenantId, card.confirmKey, "a new lead", { leadId });') < newLead.indexOf("return withQuotes(leadId, false);"));
   assert.match(newLead, /\} catch \(error\) \{[\s\S]*?return \{ \.\.\.resumable\(/, "resumable only from the quote step, after the lead exists");
   const nurture = action.slice(action.indexOf('case "nurture": {'), action.indexOf('case "quote": {'));
   assert.ok(nurture.indexOf("await reopenLead(card.leadId)") < nurture.indexOf("await saveLeadNurture(card.leadId, form)"));
-  assert.match(nurture, /return reopened \|\| reopenedAlready\s*\? resumable\(/, "resumable only once the deal WAS reopened");
+  assert.ok(nurture.indexOf('name: "reopen"') < nurture.indexOf('name: "park"'), "reopen, then park — two steps under the card's key");
+  assert.match(nurture, /if \(parked\?\.error\) return \{ refused: parked\.error \};/, "a refused park after the reopen is offered again (partly saved)");
+  assert.match(nurture, /const outcome = await runConfirmSteps\(ownedWriteTenantId\(\), user\.id, card\.confirmKey!, steps\);/);
   assert.match(nurture, /const reopenedAlready = card\.wasStatus === "lost" && now\.status === "open";/);
   const payment = action.slice(action.indexOf('case "record_payment": {'), action.indexOf('case "update_customer": {'));
   assert.ok(payment.indexOf('form.set("idempotencyKey", card.confirmKey)') < payment.indexOf("await recordQuotePayment("), "the payment is once-only by the card's key");
@@ -531,7 +539,8 @@ test("A PINNED NOTE WHOSE PIN FAILS IS NOT WRITTEN TWICE: the note was saved, so
   // can't — all before reopenLead, its one write.)
   // (2026-11-09, one more of attach_file's — a supplier that isn't an id — before fileHeldUpload, its one write.)
   // (2026-11-14, review of #1117, one of log_call's — no confirm key — before logVoiceDebrief, its one write.)
-  assert.equal((run.match(/return untouched\(/g) ?? []).length, 77);
+  // (2026-11-15, one more of nurture's — a card from before its steps had a key — before reopenLead, its first write.)
+  assert.equal((run.match(/return untouched\(/g) ?? []).length, 78);
   const logCall = run.slice(run.indexOf('case "log_call": {'), run.indexOf('case "note": {'));
   assert.ok(logCall.indexOf("return untouched(STALE_CARD)") < logCall.indexOf("await logVoiceDebrief("));
   const buildCase = run.slice(run.indexOf('case "quote_build": {'), run.indexOf('case "quote_pdf": {'));
@@ -926,6 +935,24 @@ test("what is waiting: how many, and the newest offer's tasks in the order offer
   assert.deepEqual(after.newest, []);
   assert.equal(after.total, 1);
   assert.equal(after.only?.title, "Older");
+});
+
+test("'yes to all' right after a Confirm: a spent confirm key or plan step is not 'the newest offer'", async () => {
+  // Confirming one card spends its key as a row in the same table, newer than the offer (and a plan step claims
+  // one too). They used to be read as the newest offer, so "yes to all" said nothing was waiting.
+  const offeredAt = new Date(Date.now() - 60_000);
+  const a = pendingRow({ createdAt: offeredAt, card: { ...NOTE, title: "A" } });
+  const b = pendingRow({ createdAt: offeredAt, card: { ...NOTE, title: "B" } });
+  for (const id of [`qk_${"a".repeat(32)}`, `ps_${"b".repeat(32)}`]) {
+    pendingRow({ id, createdAt: new Date(), confirmedAt: new Date(), completedAt: new Date(), card: { kind: "confirm_key", what: "a logged call" } });
+  }
+  const waiting = await waitingForConfirm("t1", "u1");
+  assert.deepEqual(waiting.newest.map((t) => t.title), ["A", "B"], "the offer is still the newest set waiting");
+  state.ran = [];
+  await confirmAllFromWhatsApp("t1", me, PHONE, null);
+  assert.deepEqual(state.ran.map((run) => run.card.title), ["A", "B"]);
+  assert.ok(a.completedAt && b.completedAt);
+  assert.deepEqual([...BOOKKEEPING_ID_PREFIXES], ["qk_", "ps_"]);
 });
 
 /* ── change a waiting task by voice (Sean, 2026-11-02, round 2) ─────────── */
