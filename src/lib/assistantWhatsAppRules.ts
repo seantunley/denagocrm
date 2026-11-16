@@ -212,6 +212,8 @@ export const WHATSAPP_CONFIRMABLE: ReadonlySet<string> = new Set([
   "reactivate",
   // reopen (round 2 item 4): a lost deal back in the pipeline, in its own stage — the lead page's own Reopen, nobody contacted.
   "reopen",
+  // finance (2026-11-16): where a deal's finance stands — the deal's own Save, the change shown first, nobody contacted.
+  "finance",
 ]);
 
 /**

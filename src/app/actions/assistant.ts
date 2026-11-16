@@ -54,6 +54,9 @@ import { ownedWriteTenantId } from "@/lib/tenantWrite";
 import { logAudit } from "@/lib/audit";
 import { cardRecords } from "@/lib/assistantOutcomeRules";
 import { logError } from "@/lib/errorLog";
+import { confirmFinanceCard } from "@/lib/assistantFinance";
+import { saveDealFinance } from "@/app/actions/dealFinance";
+import { financeStatusShort } from "@/lib/dealFinanceRules";
 import { revalidatePath } from "next/cache";
 
 /**
@@ -615,6 +618,17 @@ export async function runAssistantAction(
         if (result.error) return { ok: false, error: result.error };
         await confirmed("mark the deal lost", card.leadId);
         return { ok: true, success: "Marked lost" };
+      }
+      case "finance": {
+        // THE DEAL'S OWN FINANCE SAVE (saveDealFinance: leads.edit, dated, audited). Nobody is contacted.
+        const step = await confirmFinanceCard(user, card);
+        const done = `${card.leadLabel}: finance ${financeStatusShort(card.status).toLowerCase()}`;
+        if ("done" in step) return { ok: true, success: done, href: `/leads/${card.leadId}?tab=finance` };
+        if ("stale" in step) return untouched(step.stale);
+        const result = await saveDealFinance(card.leadId, step.form);
+        if (result?.error) return { ok: false, error: result.error };
+        await confirmed("update the finance", card.leadId);
+        return { ok: true, success: done, href: `/leads/${card.leadId}?tab=finance` };
       }
       case "reopen": {
         // THE LEAD PAGE'S OWN REOPEN (reopenLead: leads.reopen, guarded, audited). Nobody is contacted.

@@ -30,7 +30,7 @@ export const FAMILIES: readonly { key: string; label: string; kinds: readonly Ki
   { key: "notes", label: "Notes & calls logged", kinds: ["note", "customer_note", "log_call"], outcome: "reply" },
   // Parking a deal in Nurture (#938), bringing it back (#943) and reopening a lost one are stage decisions: what
   // counts after them is the deal moving on, or being won.
-  { key: "stage", label: "Stage & assignment", kinds: ["stage", "assign", "nurture", "reactivate", "reopen"], outcome: "progress" },
+  { key: "stage", label: "Stage & assignment", kinds: ["stage", "assign", "nurture", "reactivate", "reopen", "finance"], outcome: "progress" },
   { key: "quotes", label: "Quotes", kinds: ["quote", "quote_build", "quote_add", "quote_change", "quote_pdf"], outcome: "quote" },
   { key: "meetings", label: "Meetings & test drives", kinds: ["meeting", "test_drive"], outcome: "reply" },
   { key: "other", label: "Other", kinds: [], outcome: null },
@@ -70,6 +70,7 @@ const SUMMARY_KINDS: [RegExp, Kind][] = [
   [/^park the deal in Nurture$/, "nurture"],
   [/^bring the deal back from Nurture$/, "reactivate"],
   [/^reopen the deal$/, "reopen"],
+  [/^update the finance$/, "finance"],
   [/^(book|move) the delivery$/, "schedule_delivery"],
   [/^start a quote$/, "quote"],
   [/^create draft quote /, "quote_build"],

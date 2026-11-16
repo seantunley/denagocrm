@@ -218,6 +218,15 @@ export const testDrivesArgs = z
     limit: upTo(60).optional(),
   })
   .strict();
+/** FINANCED DEALS and where each stands with its finance house (assistantFinance) — the Finance page's own list. */
+export const financeArgs = z
+  .object({
+    customer: name.optional(),
+    status: z.enum(["docs_outstanding", "submitted", "approved", "declined", "paid_out", "withdrawn"]).optional(),
+    toChase: z.boolean().optional(),
+    all: z.boolean().optional(),
+  })
+  .strict();
 /** The areas DAX could not see (assistantAreaLookups): help desk, campaigns, forecast, surveys, referrals. */
 export const ticketsArgs = z.object({ mine: z.boolean().optional(), limit: limit.optional() }).strict();
 export const campaignsArgs = z.object({ from: isoDay.optional(), to: isoDay.optional(), name: name.optional(), limit: limit.optional() }).strict();
@@ -325,6 +334,7 @@ export const assistantStep = z.discriminatedUnion("tool", [
   z.object({ tool: z.literal("catch_up"), args: catchUpArgs.default({}) }),
   z.object({ tool: z.literal("lost_alive"), args: lostAliveArgs.default({}) }),
   z.object({ tool: z.literal("test_drives"), args: testDrivesArgs.default({}) }),
+  z.object({ tool: z.literal("finance"), args: financeArgs.default({}) }),
   z.object({ tool: z.literal("tickets"), args: ticketsArgs.default({}) }),
   z.object({ tool: z.literal("campaigns"), args: campaignsArgs.default({}) }),
   z.object({ tool: z.literal("forecast"), args: forecastArgs.default({}) }),
@@ -408,6 +418,7 @@ export function planInstructions(ctx: PlanContext): string {
     '- catch_up: {"since":"YYYY-MM-DD" (only when they name a day)} — what changed on THEIR OWN deals since their last question to you (at most 7 days back): new customer messages, quotes opened / opened again / signed, stage moves by someone else, new leads for them, and their overdue and due-today tasks. Run it for "catch me up", "what\'s changed", "what did I miss", "anything new (since…)"; it answers on its own ("then":"answer").',
     '- notes: {"from":"YYYY-MM-DD" (required),"to":"YYYY-MM-DD","by":"<colleague who added them>"} — every NOTE ADDED on that day (or from–to), on all the deals and customers they may open, each with when it was added, which customer and deal it is on, WHO added it, and its words. Run it for "which notes were added yesterday", "what notes did Donovan add this week", "summarise yesterday\'s notes" — search_messages is one customer at a time and find_activities is the calendar, neither lists notes across the CRM.',
     '- test_drives: {"from":"YYYY-MM-DD","to":"YYYY-MM-DD" (default the last 90 days and the next 30),"customer":"<customer name>","vehicle":"<demo vehicle, reg or model>","outcome":"follow_up|quote_created|sale_won|no_interest|undecided|completed|cancelled|no_show","boughtAfter":true|false,"limit":<1-60>} — TEST DRIVES past and upcoming: customer, vehicle, when, who ran it, status, outcome and feedback, whether a quote came of it, and whether the customer BOUGHT (a won deal after the drive, or the drive marked a sale). The TOTAL is the real count. Run it for "who test-drove last week and didn\'t buy" (boughtAfter false), "how many test drives this month", "how did Anna\'s test drive go".',
+    '- finance: {"customer":"<customer name>","status":"docs_outstanding|submitted|approved|declined|paid_out|withdrawn","toChase":true (only those waiting 3+ working days),"all":true (paid out, withdrawn and lost ones too)} — FINANCED DEALS and where each stands with its finance house: the finance house, their reference, the status and since when, and what to chase (the customer\'s documents, or the finance house\'s answer). The TOTAL is the real count. Run it for "which deals are waiting on finance", "has Jody\'s finance been approved", "what finance do I need to chase", and before proposing a finance card.',
     '- tickets: {"mine":true (only those assigned to them)} — the HELP DESK (customer cases): how many are open, waiting on our reply, overdue (a customer waiting 24 hours or more — tickets have no deadline of their own), urgent/high and unassigned, then the tickets, overdue first, each with customer, status, priority, who has it, how long the customer has waited and a link. Run it for "which tickets are overdue", "what\'s waiting in the help desk", "my open cases".',
     '- campaigns: {"from":"YYYY-MM-DD","to":"YYYY-MM-DD","name":"<words of a campaign name>"} — MARKETING CAMPAIGNS sent in that period (default the last 30 days), or the one named: channel, when sent, audience, recipients, delivered, failed, opens and clicks with their rates, and a link. Run it for "how did last week\'s campaign do", "which campaign got the most clicks".',
     '- forecast: {"period":"YYYY-MM" (default this month)} — the SALES FORECAST for deals expected to close that month: open, weighted, commit, best case and pipeline totals in rands, and the biggest deals with probability, category, close date, stage and owner. Run it for "what\'s the forecast for this month", "what are we committing for December".',
@@ -581,6 +592,7 @@ const LOOKUP_STATUS: Record<string, string> = {
   catch_up: "Catching you up",
   lost_alive: "Checking lost deals for signs of life",
   test_drives: "Checking test drives",
+  finance: "Checking finance",
   tickets: "Checking the help desk",
   campaigns: "Checking campaigns",
   forecast: "Working out the forecast",
