@@ -25,6 +25,7 @@ import { staffActor } from "@/lib/signing/events";
 import { DELIVERY_NOTE } from "@/lib/signing/subject";
 import { holdSubjectRequests, recordSubjectWithdrawn, withdrawOpenSubjectRequests } from "@/lib/signing/subjectRequests";
 import type { PermissionUser } from "@/lib/permissions";
+import { financeDeliveryRefusal, financeDeliveryRefusalInTx } from "@/lib/dealFinance";
 
 /**
  * THE ONE DELIVERY. Both "Mark delivered" on the Deliveries board and "Complete
@@ -136,6 +137,10 @@ export async function deliverQuote(input: {
   let deliveryHandoverRunIds: string[] = [];
   if (!catchUp) {
     if (!quote.deliveryScheduledFor) refuse("Schedule the delivery on the Deliveries board before marking it delivered.");
+    // FINANCE (dealFinance.ts): approval can be declined or reopened after the day was booked, so it is asked again
+    // at the handover itself — here, before any paperwork is filed, and once more under the transaction below.
+    const financeHold = await financeDeliveryRefusal(tenantId, quote.leadId);
+    if (financeHold) refuse(financeHold);
 
     /*
      * Re-verified, not trusted — a run can be removed after the note froze it.
@@ -320,6 +325,9 @@ export async function deliverQuote(input: {
           data: { deliveredAt, ...evidence, deliveryHandoverRunIds },
         });
         if (updated.count !== 1) refuse("This delivery was just completed by someone else. Refresh and check it.");
+        // Finance again, its row held: a decline saved this instant either landed first (refused here) or waits for this.
+        const financeNow = await financeDeliveryRefusalInTx(tx, tenantId, quote.leadId);
+        if (financeNow) refuse(financeNow);
         /*
          * THE NOTE IS PROVED AGAIN, UNDER THE QUOTE'S LOCK.
          *

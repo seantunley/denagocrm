@@ -6,7 +6,7 @@ import { saveDealFinance } from "@/app/actions/dealFinance";
 import { FINANCE_STATUSES, financeChase, financeStatusShort, financeTone } from "@/lib/dealFinanceRules";
 import { formatDate } from "@/lib/format";
 
-type Finance = { status: string; statusAt: Date; reference: string | null; note: string | null; vendorId: string; vendor: { name: string } };
+type Finance = { status: string; statusAt: Date; updatedAt: Date; reference: string | null; note: string | null; vendorId: string; vendor: { name: string } };
 
 /**
  * A deal's finance through an outside finance house (Sean, 2026-11-16): where it stands, since when, and what to chase.
@@ -38,6 +38,8 @@ export default function DealFinancePanel({ leadId, finance, financeHouses, canEd
 
       {canEdit && financeHouses.length > 0 && (
         <SaveForm action={saveDealFinance.bind(null, leadId)} success="Finance saved" resetOnSuccess={false} className="mt-4 grid gap-3 sm:grid-cols-2">
+          {/* The version this form shows: a save over a newer one is refused (saveDealFinance). Server-rendered, never written by script. */}
+          <input type="hidden" name="version" value={finance?.updatedAt.toISOString() ?? ""} />
           <div>
             <label className="label" htmlFor="finance-house">Finance house</label>
             <select id="finance-house" name="vendorId" required defaultValue={finance?.vendorId ?? (financeHouses.length === 1 ? financeHouses[0].id : "")} className="input">

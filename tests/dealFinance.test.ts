@@ -58,12 +58,28 @@ test("the guard sits in the one booking path (DAX's delivery card calls it too),
   assert.match(read("src/app/actions/assistant.ts"), /await scheduleDelivery\(card\.quoteId, form\)/);
 });
 
+test("THE HANDOVER ITSELF asks again (review of #1137): before any paperwork, and under its transaction with the row held", () => {
+  const delivery = read("src/lib/quoteDelivery.ts");
+  const gate = delivery.indexOf("const financeHold = await financeDeliveryRefusal(tenantId, quote.leadId);");
+  assert.ok(gate > 0 && gate < delivery.indexOf("input.collectEvidence("), "before the caller's paperwork is staged");
+  const tx = delivery.slice(delivery.indexOf("basePrisma.$transaction(async (tx) => {"));
+  assert.ok(tx.indexOf("financeDeliveryRefusalInTx(tx, tenantId, quote.leadId)") > tx.indexOf("const updated = await tx.quote.updateMany("), "again, once the quote's row is held");
+  assert.match(read("src/lib/dealFinance.ts"), /WHERE f\."tenantId" = \$\{tenantId\} AND f\."leadId" = \$\{leadId\}\s*FOR SHARE OF f/);
+  // Both doors use that one handover.
+  assert.match(read("src/app/actions/fulfilment.ts"), /return deliverQuote\(\{/);
+  assert.match(read("src/app/actions/stock.ts"), /return deliverQuote\(\{/);
+  // Real database: scripts/test-delivery-note-signing.ts section 8 (declined / reopened after booking, revoked after signing).
+  assert.match(read("scripts/test-delivery-note-signing.ts"), /approved, signed for, then declined: not handed over/);
+});
+
 test("saving: leads.edit on THIS lead, a finance house of this workspace only, a dated status, and no lost update", () => {
   const action = read("src/app/actions/dealFinance.ts");
   assert.match(action, /requireLeadAccess\(leadId, "leads\.edit"\)/);
   assert.match(action, /tenantId, deletedAt: null, kind: "finance" \}/, "only a finance house, whatever is posted");
   assert.match(action, /isFinanceStatus\(status\)/);
-  assert.match(action, /where: \{ id: existing\.id, tenantId, status: existing\.status, statusAt: existing\.statusAt \}/);
+  assert.match(action, /where: \{ id: existing\.id, tenantId, updatedAt: existing\.updatedAt \}/, "compare-and-swap on the version (dealFinanceSave.test.ts drives it)");
+  assert.match(action, /\(existing\?\.updatedAt\.toISOString\(\) \?\? ""\) !== shown/, "against the version the form SHOWED");
+  assert.match(read("src/components/deals/DealFinancePanel.tsx"), /<input type="hidden" name="version" value=\{finance\?\.updatedAt\.toISOString\(\) \?\? ""\} \/>/);
   assert.match(action, /\.\.\.\(moved \? \{ statusAt: new Date\(\) \} : \{\}\)/, "the date moves only with the status");
   assert.match(action, /linkVendorToDeal\(/, "the finance house joins the deal's suppliers, so its papers are asked for");
   assert.match(action, /logAudit\(\{ action: "finance\.updated"/);
