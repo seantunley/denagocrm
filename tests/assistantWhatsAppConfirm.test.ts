@@ -540,7 +540,11 @@ test("A PINNED NOTE WHOSE PIN FAILS IS NOT WRITTEN TWICE: the note was saved, so
   // (2026-11-09, one more of attach_file's — a supplier that isn't an id — before fileHeldUpload, its one write.)
   // (2026-11-14, review of #1117, one of log_call's — no confirm key — before logVoiceDebrief, its one write.)
   // (2026-11-15, one more of nurture's — a card from before its steps had a key — before reopenLead, its first write.)
-  assert.equal((run.match(/return untouched\(/g) ?? []).length, 78);
+  // (2026-11-16, one of finance's — not theirs any more, a role that can't, or changed since (confirmFinanceCard) —
+  // before saveDealFinance, its one write.)
+  assert.equal((run.match(/return untouched\(/g) ?? []).length, 79);
+  const financeCase = run.slice(run.indexOf('case "finance": {'), run.indexOf('case "reopen": {'));
+  assert.ok(financeCase.indexOf("return untouched(step.stale)") < financeCase.indexOf("await saveDealFinance("));
   const logCall = run.slice(run.indexOf('case "log_call": {'), run.indexOf('case "note": {'));
   assert.ok(logCall.indexOf("return untouched(STALE_CARD)") < logCall.indexOf("await logVoiceDebrief("));
   const buildCase = run.slice(run.indexOf('case "quote_build": {'), run.indexOf('case "quote_pdf": {'));

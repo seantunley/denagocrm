@@ -2,6 +2,7 @@ import { z } from "zod";
 import { scheduleFields, type Cadence } from "./assistantSchedule";
 import { watchFields, type WatchInput } from "./assistantWatchRules";
 import type { PlanView } from "./assistantPlanRules";
+import { FINANCE_RULE, type FinanceCard } from "./assistantFinanceRules";
 
 /**
  * Tasks the assistant can PROPOSE — never perform. It drafts; the person sees a
@@ -219,6 +220,16 @@ export const proposedAction = z.discriminatedUnion("type", [
   z.object({ type: z.literal("lost"), leadId, reason: text.max(300) }).strict(),
   // REOPEN a lost deal (round 2 item 4, "lost deals that aren't really lost"): the lead page's own Reopen.
   z.object({ type: z.literal("reopen"), leadId, reason }).strict(),
+  // Where a deal's finance stands with its finance house (FINANCE_RULE, assistantFinance.ts).
+  z.object({
+    type: z.literal("finance"),
+    leadId,
+    status: z.enum(["docs_outstanding", "submitted", "approved", "declined", "paid_out", "withdrawn"]),
+    financeHouse: text.max(120).optional(),
+    reference: text.max(80).optional(),
+    note: text.max(1000).optional(),
+    reason,
+  }).strict(),
   // PARK a deal for later — it is NOT lost (Sean, 2026-11-02: "it's not lost, should be in Nurture"). Through the
   // lead page's own Reopen (when it is lost) and Move to Nurture: why it is parked, what they want, when to follow up,
   // the day to review it, and (only when named) the salesperson.
@@ -533,6 +544,7 @@ export const ACTION_INSTRUCTIONS = [
   TEST_DRIVE_RULE,
   "- lost: only when the person says the deal is lost or asks you to close it; the reason in their words. quote: starts a draft quote on the lead for them to fill in — nothing is sent.",
   NURTURE_RULE,
+  FINANCE_RULE,
   QUOTE_BUILD_RULE,
   QUOTE_ADD_RULE,
   QUOTE_CHANGE_RULE,
@@ -946,6 +958,8 @@ export type ActionCard =
   | (LeadCard & { kind: "lost"; reason: string })
   // A lost deal reopened. `lostAt` is when the card SHOWED it lost: lost again since (or reopened) and Confirm refuses.
   | (LeadCard & { kind: "reopen"; lostAt: string; detail: string })
+  // A deal's finance moved (assistantFinanceRules.FinanceCard): what it SHOWED must still be so at Confirm.
+  | FinanceCard
   // A deal PARKED for later. `wasStatus` is the status the card SHOWED: a lost deal is reopened first; Confirm refuses
   // if it has changed since (a deal made lost after the card was shown is not reopened by it).
   | (LeadCard & { kind: "nurture"; wasStatus: "open" | "nurture" | "lost"; because: "product" | "timing" | "budget" | "customer" | "other"; interest: string; trigger: string; reviewOn: string; assignedToId: string; detail: string; confirmKey?: string })

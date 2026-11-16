@@ -35,6 +35,7 @@ import { lostAliveLookup } from "./assistantLostAliveLookup";
 import { campaignsLookup, forecastLookup, referralsLookup, surveysLookup, ticketsLookup } from "./assistantAreaLookups";
 import { invoicesLookup } from "./assistantInvoicesLookup";
 import { testDrivesLookup } from "./assistantTestDrivesLookup";
+import { financeCard, financeLookup } from "./assistantFinance";
 import { signingLookup } from "./assistantSigningLookup";
 import { competitorsLookup, targetsLookup } from "./assistantTargetsLookup";
 import { CUSTOM_FIELD_TOOLS, customFieldsLookup, withCustomFields } from "./assistantCustomFieldsLookup";
@@ -288,6 +289,7 @@ async function runTool(user: User, step: ToolStep): Promise<ToolOutput> {
     case "referrals": return referralsLookup(user, step.args);
     case "invoices": return invoicesLookup(user, step.args);
     case "test_drives": return testDrivesLookup(user, step.args);
+    case "finance": return financeLookup(user, step.args);
     case "signing": return signingLookup(user, step.args);
     case "custom_fields": return customFieldsLookup(user, step.args);
     case "customers": return customersLookup(user, step.args);
@@ -1945,6 +1947,10 @@ export async function resolveActions(
       });
     } else if (p.type === "lost") {
       cards.push({ id, kind: "lost", leadId: p.leadId, leadLabel, title: `Mark ${lead.name}'s deal as lost`, reason: p.reason });
+    } else if (p.type === "finance") {
+      const card = await financeCard(user, p, lead, id, leadLabel);
+      if ("problem" in card) { problems.push(card.problem); continue; }
+      cards.push(card);
     } else if (p.type === "reopen") {
       // The lead page's own Reopen at Confirm (reopenLead: leads.reopen). Checked here too, so the card is only offered when it can run.
       if (lead.status !== "lost" || !lead.lostAt) {
