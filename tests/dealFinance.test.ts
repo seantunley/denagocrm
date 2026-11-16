@@ -10,6 +10,41 @@ import {
   workingDaysBetween,
 } from "../src/lib/dealFinanceRules";
 import { buildBrief, type BriefInput } from "../src/lib/daxBriefRules";
+import { effectiveModuleIds, installWideModuleIds } from "../src/lib/modules/entitlement";
+import { MODULE_REGISTRY, OPTIONAL_MODULE_IDS, moduleForPath } from "../src/lib/modules/registry";
+
+test("Finance is its own module, built on Suppliers (Sean 2026-11-16: 'its own module that can be turned off')", () => {
+  assert.ok(OPTIONAL_MODULE_IDS.includes("finance"));
+  assert.equal(MODULE_REGISTRY.find((mod) => mod.id === "finance")?.requires, "suppliers");
+  assert.equal(moduleForPath("/finance"), "finance", "the Finance list (and its nav link) belongs to it");
+  assert.equal(moduleForPath("/settings/vendors"), "suppliers");
+  // Granted and on; switched off; Suppliers off takes Finance with it — granted or install-wide.
+  assert.ok(effectiveModuleIds("suppliers,finance", []).has("finance"));
+  assert.ok(!effectiveModuleIds("suppliers,finance", ["finance"]).has("finance"));
+  assert.ok(effectiveModuleIds("suppliers,finance", ["finance"]).has("suppliers"), "Finance off leaves Suppliers alone");
+  assert.ok(!effectiveModuleIds("suppliers,finance", ["suppliers"]).has("finance"));
+  assert.ok(!effectiveModuleIds("finance", []).has("finance"), "granted without Suppliers: off");
+  assert.ok(!installWideModuleIds(["suppliers"]).has("finance"));
+  assert.ok(installWideModuleIds([]).has("finance"));
+  // Existing workspaces with Suppliers are granted it once.
+  const sql = read("prisma/migrations/20261116130000_grant_finance_module/migration.sql");
+  assert.match(sql, /WHERE 'suppliers' = ANY[\s\S]*AND NOT \('finance' = ANY/);
+});
+
+test("module off: every way into finance checks it — pages, the save, the hold, the chaser, the brief", () => {
+  assert.match(read("src/app/(app)/finance/page.tsx"), /await requireModuleEnabled\("finance"\);/);
+  assert.match(read("src/app/(app)/leads/[id]/page.tsx"), /lead\.tenantId && \(await isModuleEnabled\("finance"\)\)/);
+  assert.match(read("src/app/(app)/deals/[id]/page.tsx"), /lead && \(await isModuleEnabled\("finance"\)\)/);
+  assert.match(read("src/app/actions/dealFinance.ts"), /if \(!\(await isModuleEnabled\("finance"\)\)\) refuse\(/);
+  const lib = read("src/lib/dealFinance.ts");
+  for (const name of ["financeAttentionSignals", "financeToChase", "financeDeliveryRefusal", "financeDeliveryRefusalInTx"]) {
+    const body = lib.slice(lib.indexOf(`export async function ${name}(`));
+    assert.match(body.slice(0, body.indexOf("\n}\n")), /isModuleEnabled\("finance"\)/, name);
+  }
+  for (const file of ["src/lib/dealFinance.ts", "src/app/actions/dealFinance.ts", "src/app/(app)/finance/page.tsx"]) {
+    assert.doesNotMatch(read(file), /Enabled\("suppliers"\)/, `${file}: the Finance switch, not Suppliers'`);
+  }
+});
 
 /*
  * Finance through an outside finance house (Sean, 2026-11-16): a dated status per deal, chased when it stalls on the
