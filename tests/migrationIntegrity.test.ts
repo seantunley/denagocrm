@@ -368,7 +368,10 @@ test("session GUCs really do span separate statements, in every migration that u
   //
   // 22 → 23: 20261112005000_custom_field_legacy_workspace stamps custom-field definitions and values saved
   // with no workspace (review of #1064). Both tables FORCE RLS — the same reason.
-  assert.equal(spans.length, 23, "twenty-three migrations set a session GUC");
+  //
+  // 23 → 24: 20261116190000_deal_finance_per_quote moves each existing finance record onto its deal's quote (finance
+  // per quote). DealFinance and Quote FORCE RLS — the same reason.
+  assert.equal(spans.length, 24, "twenty-four migrations set a session GUC");
   for (const { name, between } of spans) {
     assert.ok(between > 0, `${name}: a SET with no following statement would not need session pinning`);
   }
