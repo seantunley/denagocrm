@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { beforeEach, test } from "node:test";
 import Module, { createRequire } from "node:module";
+import { daxCore } from "./daxCore";
 
 /*
  * Finding catalogue products for the assistant, across the WHOLE catalogue.
@@ -129,7 +130,7 @@ test("the knowledge lookup shows a product from anywhere in a large catalogue", 
 });
 
 test("both readers use it — neither keeps a first-N page of the catalogue", () => {
-  const lib = readFileSync("src/lib/crmAssistant.ts", "utf8");
+  const lib = daxCore();
   assert.match(lib, /seesProducts \? knowledgeProducts\(words\) : Promise\.resolve\(\[\]\),/);
   // quote_build's lines: the job sheet's (Phase 1), or the proposal's own — resolved the same way.
   assert.match(lib, /const matched = await Promise\.all\(askedLines\.map\(\(line\) => resolveCatalogueProduct\(line\)\)\);/);

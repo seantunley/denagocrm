@@ -7,6 +7,7 @@ import {
   deliveryRefusal,
   financeBlocksDelivery,
   financeChase,
+  financeIsClosed,
   workingDaysBetween,
 } from "../src/lib/dealFinanceRules";
 import { buildBrief, type BriefInput } from "../src/lib/daxBriefRules";
@@ -128,6 +129,16 @@ test("a cash deal shows no Finance (Sean 2026-11-16): only a deal with a finance
     assert.match(src, /finance \|\| financeHouses\.length > 0/, page);
     assert.doesNotMatch(src, /kind: "finance"/, `${page}: not every finance house in the workspace`);
   }
+});
+
+test("the finance house can't be taken off a deal while its finance is live (review of #1137)", () => {
+  for (const s of ["docs_outstanding", "submitted", "approved", "declined"]) assert.equal(financeIsClosed(s), false, s);
+  for (const s of ["paid_out", "withdrawn"]) assert.equal(financeIsClosed(s), true, s);
+  const vendors = read("src/app/actions/vendors.ts");
+  const remove = vendors.slice(vendors.indexOf("export async function removeDealVendor("));
+  assert.match(remove, /prisma\.dealFinance\.findFirst\(\{ where: \{ tenantId, leadId: quote\.leadId, vendorId \}/);
+  assert.ok(remove.indexOf("financeIsClosed(finance.status)") < remove.indexOf("prisma.dealVendor.deleteMany("), "checked before the link goes");
+  assert.match(remove, /Set the finance to Withdrawn first/);
 });
 
 test("the table: tenant FKs, one per lead, the statuses checked, row-level security forced", () => {

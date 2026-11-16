@@ -5,6 +5,7 @@ import { jobFacts, vehicleWorkshop, workshopSummary, type FleetVehicle } from ".
 import { parseStep, vehicleArgs } from "../src/lib/crmAssistantPlan";
 import { selfKnowledge } from "../src/lib/assistantSoul";
 import { briefQuestion } from "../src/lib/proactiveRules";
+import { daxCore } from "./daxCore";
 
 /*
  * DAX knows the workshop (Sean: "What's the service history and battery status of the Nomad XL for the Constantia
@@ -162,7 +163,7 @@ test("workshop lookups go through the pages' own visibility rules", () => {
 });
 
 test("Automotive off: no workshop lookup, no workshop in the brief", () => {
-  const lib = code("src/lib/crmAssistant.ts");
+  const lib = daxCore(code);
   const vehicles = lib.slice(lib.indexOf("async function vehicles("), lib.indexOf("\nasync function", lib.indexOf("async function vehicles(") + 10));
   assert.ok(
     vehicles.indexOf('isModuleEnabled("automotive")') < vehicles.indexOf('args.kind === "workshop"'),

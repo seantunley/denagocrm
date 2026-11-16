@@ -1,0 +1,84 @@
+import type { HelpArticle } from "../types";
+
+export const customerEmailArticles: HelpArticle[] = [
+  // ── Customer emails in the editor ─────────────────────────────────────
+  {
+    slug: "customer-emails-overview",
+    title: "Customer emails: one frame, one message each",
+    summary: "How the emails the CRM sends your customers are designed, where to find each one, and what Published means.",
+    category: "documents",
+    audience: "admins",
+    keywords: ["customer emails", "email design", "email frame", "email template", "email header", "email footer", "quote email", "service reminder email", "customer messages"],
+    body: [
+      { type: "p", text: "Every email the CRM sends a customer — a quote, a signing invitation, a service reminder, a review request — is designed in the same editor you use for documents. Each email has two parts." },
+      { type: "list", items: [
+        "**The email frame** is shared by every customer email: the header with your logo, the sender's signature, and the footer with your company details. Design it once.",
+        "**The message** is that email's own content — its subject line, wording, button and any figures. It sits inside the frame.",
+      ] },
+      { type: "p", text: "Only the workspace owner can design customer emails." },
+      { type: "h", text: "Where each email lives" },
+      { type: "table", headers: ["Open", "Emails you find there"], rows: [
+        ["**Document Studio**, under **Emails that send your documents**", "The quote email, and the signing invitation, reminder, signed copy and verification code."],
+        ["**Journeys → Customer messages**", "Service reminders, recall notices, Google review requests, and survey invitations and reminders."],
+        ["**Settings → Email**", "Login and verification codes, which are rarely changed."],
+      ] },
+      { type: "p", text: "The **Customer messages** page also ends with a list headed **All customer messages**: every message a customer can receive, with a link to where its wording is edited. Text messages and WhatsApp messages stay as plain text and are edited on the same pages." },
+      { type: "h", text: "Who signs a quote email" },
+      { type: "p", text: "A quote email is sent by a person pressing **Email quote**, so it is signed by that person: their name, job title, mobile and email, in your workspace's signature style, straight under the message. The details come from **Settings → My account**. The standard wording therefore ends at \"Kind regards,\" with no name typed after it. If you saved your own wording that still types a name, remove it there, or the name will appear twice." },
+      { type: "p", text: "Inside the email the header already shows your logo and the footer your company details, so the signature leaves those out. Once you publish the email frame, its own signature block takes over and you choose which lines it shows." },
+      { type: "h", text: "Draft until published" },
+      { type: "p", text: "Each email shows a label: **Published** or **Not published yet**. Your edits are saved as a draft as you work, and customers keep getting the last published version until you press **Publish**." },
+      { type: "table", headers: ["Situation", "What customers receive"], rows: [
+        ["The frame has never been published", "Your emails exactly as they were before. Nothing changes for customers until you publish the frame."],
+        ["The frame is published, a message is not", "That message's existing wording, shown inside your new frame."],
+        ["The frame and the message are both published", "Exactly what you designed."],
+      ] },
+      { type: "callout", tone: "warning", text: "Publish the **email frame** first. Until you do, publishing an individual message has no effect on what customers receive." },
+      { type: "callout", tone: "info", text: "Designing an email does not switch it on. Whether an automatic email is sent at all is decided on **Journeys** and under **Settings → Automatic jobs & messages**." },
+      { type: "callout", tone: "tip", text: "The sender's name, job title, mobile and email in the signature come from each person's own details under **Settings → Profile & sign-in**. Automatic messages are signed by your company. Your logo and company details come from **Company profile**." },
+    ],
+  },
+  {
+    slug: "customer-emails-editing",
+    title: "Designing and publishing a customer email",
+    summary: "Step by step: style the shared frame, edit a message, preview it and publish it.",
+    category: "documents",
+    audience: "admins",
+    keywords: ["edit email", "publish email", "email subject", "email button", "email preview", "email signature", "reset wording", "email history", "email colours"],
+    body: [
+      { type: "p", text: "Open an email with **Edit email** on its card (see \"Customer emails: one frame, one message each\" for where the cards are). The editor shows the email as your customer will see it, filled in with made-up sample details such as \"Jane Doe\", so a preview can never be mistaken for a real send." },
+      { type: "h", text: "Style the frame first" },
+      { type: "steps", items: [
+        "Open **Email frame — header, signature and footer**.",
+        "Click the **header** and choose its style: the logo panel from your email signature, a full-width colour bar with your logo, or the logo only. Set its position to left or centre.",
+        "Click the **signature** and tick the lines to show: job title, company name, phone, email address and website.",
+        "Click the **footer** to add your own line, choose whether to show your company name and address and your contact details, and set its alignment and colours.",
+        "With nothing selected, set the four colours that apply to every email: **Page behind the email**, **Email background**, **Buttons** and **Accent**.",
+        "Press **Publish**.",
+      ] },
+      { type: "callout", tone: "info", text: "The frame has a **Message slot** — the place where each email's own content goes. Keep exactly one." },
+      { type: "h", text: "Edit a message" },
+      { type: "steps", items: [
+        "Open the email. Type the **Subject** in the box above it.",
+        "Click a block on the email to change it, or drag a new one in from the left: **Headline**, **Text**, **Button (or code)**, **Key figures**, **Image**, **Divider** or **Spacer**.",
+        "Drop a block beside another one to make two columns. They stack on a phone.",
+        "For a button, choose what it **Opens**, type its **Label** and pick its style.",
+        "Press **Preview** to see exactly what the customer receives, inside your frame.",
+        "Press **Publish** when you are happy.",
+      ] },
+      { type: "list", items: [
+        "Each message only offers the details it can actually fill in — a service reminder cannot show a quote total, for example.",
+        "**Key figures** shows up to three highlighted values, such as a quote number and total.",
+        "The header, signature and footer around a message belong to the shared frame. Clicking them opens the frame in a new tab.",
+      ] },
+      { type: "callout", tone: "warning", text: "An email is never sent without its link or code. If you delete the button that carries it, one is added back at the end of the email." },
+      { type: "h", text: "Draft, live and going back" },
+      { type: "list", items: [
+        "The label next to **Publish** reads **Live** when customers get exactly what you see, **Draft, not live yet** when you have unpublished changes, and **Not published yet** when the email has never been published.",
+        "**History** lists every published version. **Restore** brings an older one back as your draft.",
+        "In History, **Reset draft to the standard wording** (or **standard frame**) replaces your draft with the built-in version. Customers keep the published version until you press **Publish** again, and your old draft stays in the history.",
+      ] },
+      { type: "callout", tone: "tip", text: "After publishing, send yourself a real example — for instance a quote to your own address — to check how it looks in your own mail app." },
+    ],
+  },
+];

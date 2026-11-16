@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import Module from "node:module";
 import { activityArgs, planInstructions } from "../src/lib/crmAssistantPlan";
+import { daxCore } from "./daxCore";
 
 // crmAssistant.ts reaches server-only; its pure helpers load with it stubbed.
 type Loader = (request: string, parent: unknown, isMain: boolean) => unknown;
@@ -22,7 +23,7 @@ const code = (rel: string) =>
     .replace(/\r\n/g, "\n")
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/^\s*\/\/.*$/gm, "");
-const lib = code("src/lib/crmAssistant.ts");
+const lib = daxCore(code);
 const fn = (name: string) => lib.slice(lib.indexOf(`async function ${name}(`), lib.indexOf("\n}\n", lib.indexOf(`async function ${name}(`)));
 
 test("a past day or period can be asked about", () => {

@@ -7,6 +7,7 @@ import { visibleAnswer } from "../src/lib/assistantStream";
 import { parseActionList } from "../src/lib/assistantActions";
 import { resultsBlock } from "../src/lib/crmAssistantPlan";
 import { scanEntry } from "../src/lib/assistantMemory";
+import { daxCore } from "./daxCore";
 
 // crmAssistant / crmAssistantStats reach server-only + Prisma; their pure helpers load with it stubbed.
 type Loader = (request: string, parent: unknown, isMain: boolean) => unknown;
@@ -98,7 +99,7 @@ test("only links the lookups returned become chips; made-up ones disappear", () 
 });
 
 test("every record a lookup lists carries a link to cite", () => {
-  const lib = code("src/lib/crmAssistant.ts");
+  const lib = daxCore(code);
   for (const link of ["link: `/leads/${lead.id}`", "link: `/quotes/${quote.id}`", "link: href(a)", "link: `/quotes/${q.id}`", "link: `/stock/${u.id}`", "link: `/contacts/${contact.id}`"]) {
     assert.ok(lib.includes(link), link);
   }
@@ -139,7 +140,7 @@ test("the new task types validate; anything else is dropped", () => {
 });
 
 test("the server resolves every new card itself and re-checks access", () => {
-  const lib = code("src/lib/crmAssistant.ts");
+  const lib = daxCore(code);
   const resolve = lib.slice(lib.indexOf("async function resolveActions"));
   // Activities: only one the calendar would show this person, still planned.
   assert.match(resolve, /const visible = await getAccessibleActivityIds\(user\);\s*if \(visible !== null && !visible\.includes\(p\.activityId\)\) \{ problems\.push\(ITEM_GONE\); continue; \}/);
@@ -186,7 +187,7 @@ test("the page tells DAX what 'this' is — beyond leads and customers", () => {
 });
 
 test("every record on the page is access-checked before DAX hears about it", () => {
-  const lib = code("src/lib/crmAssistant.ts");
+  const lib = daxCore(code);
   const ctx = lib.slice(lib.indexOf("export async function pageContext"), lib.indexOf("export async function assistantHistory"));
   assert.match(ctx, /case "quote": \{\s*if \(!\(await canAccessQuote\(user, target\.id\)\)\) return "";/);
   assert.match(ctx, /if \(r\.quoteId && \(await canAccessQuote\(user, r\.quoteId\)\)\)/);

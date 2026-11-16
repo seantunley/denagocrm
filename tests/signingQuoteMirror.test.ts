@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
+import { daxCore } from "./daxCore";
 
 const code = (rel: string) =>
   readFileSync(new URL(`../${rel}`, import.meta.url), "utf8")
@@ -62,7 +63,7 @@ test("wired where the hub sends (first send, actually delivered — not a remind
 });
 
 test("DAX reads the customer's own messages and activities, not the customer's OTHER leads", () => {
-  const lib = code("src/lib/crmAssistant.ts");
+  const lib = daxCore(code);
   assert.match(lib, /const theirs = \{ OR: \[\{ leadId: lead\.id \}, \.\.\.\(lead\.contactId \? \[\{ contactId: lead\.contactId, leadId: null \}\] : \[\]\)\] \};/);
   assert.match(lib, /prisma\.communication\.findMany\(\{\s*where: theirs,/);
   assert.match(lib, /prisma\.activity\.findMany\(\{\s*where: theirs,/);

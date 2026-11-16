@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { ACTION_INSTRUCTIONS, QUOTE_BUILD_MAX_LINES, QUOTE_BUILD_RULE, matchCatalogueProduct, parseActionList, quoteBuildText } from "../src/lib/assistantActions";
+import { daxCore } from "./daxCore";
 
 /*
  * DAX builds a quote (Sean, 2026-10-12: "DAX must be able to generate a quote
@@ -68,7 +69,7 @@ test("DAX is told to ask first, to use the catalogue only, and never to offer se
 
 /** The card builder's quote branch: from its `if` to the lead checks that follow it. */
 const quoteBranch = () => {
-  const lib = code("src/lib/crmAssistant.ts");
+  const lib = daxCore(code);
   const at = lib.indexOf('if (p.type === "quote_build") {');
   assert.ok(at > 0);
   return lib.slice(at, lib.indexOf("if (!(await canAccessLead(user, p.leadId))) continue;\n    const lead = await prisma.lead.findUnique({", at));
@@ -88,7 +89,7 @@ test("A QUOTE IS FOR A CUSTOMER — a lead is not required", () => {
   assert.match(QUOTE_BUILD_RULE, /Never say a lead is needed, and never tell them to create one first\./);
   assert.doesNotMatch(QUOTE_BUILD_RULE, /say a lead is needed first/);
   // …and so is the lookup that used to tell it only a NOTE could go on a customer with no deal.
-  assert.match(code("src/lib/crmAssistant.ts"), /There is no deal to report on — which stops nothing: a quote can be made for the customer directly \(quote_build with the contactId; no lead is needed\)/);
+  assert.match(daxCore(code), /There is no deal to report on — which stops nothing: a quote can be made for the customer directly \(quote_build with the contactId; no lead is needed\)/);
 
   const build = quoteBranch();
   // Handled before the lead checks, for a deal OR a customer; a task naming neither proposes nothing — and since
@@ -178,7 +179,7 @@ test("DAX CAN NAME A CATALOGUE PRODUCT: the knowledge tool gives it each product
   // Review of #872 (blocker): knowledge() fetched the ids and left them out of what the
   // assistant is shown. It knew "Rover XL" and its price, had no id to put in the task,
   // and an invented one fails the catalogue check — the quote was silently dropped.
-  const lib = code("src/lib/crmAssistant.ts");
+  const lib = daxCore(code);
   const at = lib.indexOf("async function knowledge(");
   const tool = lib.slice(at, lib.indexOf("\n}\n", at));
   assert.ok(at > 0);

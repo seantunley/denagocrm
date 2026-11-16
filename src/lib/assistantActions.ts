@@ -962,7 +962,7 @@ export type ActionCard =
   | FinanceCard
   // A deal PARKED for later. `wasStatus` is the status the card SHOWED: a lost deal is reopened first; Confirm refuses
   // if it has changed since (a deal made lost after the card was shown is not reopened by it).
-  | (LeadCard & { kind: "nurture"; wasStatus: "open" | "nurture" | "lost"; because: "product" | "timing" | "budget" | "customer" | "other"; interest: string; trigger: string; reviewOn: string; assignedToId: string; detail: string })
+  | (LeadCard & { kind: "nurture"; wasStatus: "open" | "nurture" | "lost"; because: "product" | "timing" | "budget" | "customer" | "other"; interest: string; trigger: string; reviewOn: string; assignedToId: string; detail: string; confirmKey?: string })
   // A PARKED deal brought back (reactivateNurturedLead). What the card SHOWED — still parked, in fromStageId, with this
   // review day and this salesperson — must still be so at Confirm; stageId / next / on are what Confirm does.
   | (LeadCard & { kind: "reactivate"; stageId: string; next: string; on: string; fromStageId: string; reviewAt: string | null; assignedToId: string; detail: string })

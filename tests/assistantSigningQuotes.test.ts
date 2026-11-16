@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import Module from "node:module";
+import { daxCore } from "./daxCore";
 
 // crmAssistant.ts reaches server-only; its pure helpers load with it stubbed.
 type Loader = (request: string, parent: unknown, isMain: boolean) => unknown;
@@ -46,7 +47,7 @@ test("signed in the hub counts as signed; the quote's own dates still win when i
 });
 
 test("'opened' means opened by the CUSTOMER in both places DAX reads it — never any recipient", () => {
-  const lib = code("src/lib/crmAssistant.ts");
+  const lib = daxCore(code);
   const signing = lib.slice(lib.indexOf("async function signingFor("), lib.indexOf("export const viewedByCustomer"));
   assert.match(signing, /viewedAt: await firstCustomerView\(r\.recipients, isCustomer\),/);
   assert.doesNotMatch(signing, /Math\.min\(\.\.\.viewed\)/, "not the earliest open by anyone");
@@ -57,7 +58,7 @@ test("'opened' means opened by the CUSTOMER in both places DAX reads it — neve
 });
 
 test("both quote lookups read the signing hub; its filters never replace the access filter", () => {
-  const lib = code("src/lib/crmAssistant.ts");
+  const lib = daxCore(code);
   assert.match(lib, /where: \{ quoteId: \{ in: quoteIds \}, deletedAt: null, status: \{ notIn: \["draft", "voided"\] \} \}/);
   assert.equal((lib.match(/const signing = await signingFor\(/g) ?? []).length, 2, "find_quotes and lead_brief");
   const find = lib.slice(lib.indexOf("async function findQuotes("), lib.indexOf("async function findActivities("));

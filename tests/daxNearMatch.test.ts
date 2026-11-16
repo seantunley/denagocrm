@@ -4,6 +4,7 @@ import test from "node:test";
 import { closestColour, closestNames, editDistance, nameCloseness, nameIsClose, nameStems, NEAR_NAME } from "../src/lib/nearMatch";
 import { unsupportedFigures, wordAmounts } from "../src/lib/assistantVerify";
 import { QUOTE_BUILD_RULE } from "../src/lib/assistantActions";
+import { daxCore } from "./daxCore";
 
 // Sean, 2026-10-23, by voice note on WhatsApp: "Give me a quote for Werner Killian, the Rover XL in dove gray and
 // delivery to Hermanus, which is six thousand five hundred rand." The CRM has "Werner Kilian"; the Rover XL comes in
@@ -59,7 +60,7 @@ test("the closest names, closest first: 'clive jammim' → Clive Jammine, then C
 });
 
 test("no exact name: lead_brief offers the closest names as the choice — never 'no such customer', never 'spell it'", () => {
-  const core = read("src/lib/crmAssistant.ts");
+  const core = daxCore(read);
   const brief = core.slice(core.indexOf("export async function leadBrief("), core.indexOf("// Several match (\"Lisa\")"));
   assert.match(brief, /const close = looksLikeId \? \[\] : await nearlyNamed\(user, needle, ids\);/);
   assert.match(brief, /const offer = close\.slice\(0, 3\)\.map\(\(match\) => match\.name\)\.join\(", or "\);/);
@@ -84,5 +85,5 @@ test("DAX is told: a colour not offered → ask with the nearest; a name not fou
   assert.match(QUOTE_BUILD_RULE, /A COLOUR the product does not come in is not a dead end: ask with the nearest one it does/);
   assert.match(QUOTE_BUILD_RULE, /when lead_brief gives closeMatches, offer them as the choice, closest first \("Did you mean Clive Jammine, or Clive James\?"\) — never say there is no such customer, and never ask them to spell the name/);
   // A colour change on a quote the product doesn't come in names the nearest as a question.
-  assert.match(read("src/lib/crmAssistant.ts"), /const near = closestColour\(wanted\.colour, colours\);[\s\S]{0,200}\$\{near \? ` Did you mean \$\{near\}\?` : ""\}/);
+  assert.match(daxCore(read), /const near = closestColour\(wanted\.colour, colours\);[\s\S]{0,200}\$\{near \? ` Did you mean \$\{near\}\?` : ""\}/);
 });

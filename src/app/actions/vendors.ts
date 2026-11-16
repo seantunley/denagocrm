@@ -14,6 +14,7 @@ import { Prisma } from "@prisma/client";
 import { getSetting } from "@/lib/settings";
 import { DOCUMENT_TYPES_KEY, parseDocumentTypes } from "@/lib/documentLabels";
 import { tickedTypes } from "@/lib/dealFile";
+import { financeIsClosed, financeStatusShort } from "@/lib/dealFinanceRules";
 
 /** Settings → Suppliers: the businesses deals and purchase orders name. Owner only; every change audited. */
 
@@ -147,6 +148,16 @@ export async function removeDealVendor(quoteId: string, vendorId: string): Promi
     const { user, tenantId, quote } = await dealQuote(quoteId);
     const link = await prisma.dealVendor.findFirst({ where: { tenantId, vendorId, ...dealKey(quote) }, select: { id: true, vendor: { select: { name: true } } } });
     if (!link) refuse("That supplier is no longer on this deal — refresh the page.");
+    // The deal's finance house stays on while its finance is live (review of #1137): taking it off would leave a
+    // finance record that still holds delivery but can no longer be edited. Paid out or withdrawn, it may go.
+    // ponytail: check-then-delete, not locked against a finance start at the same instant; the panel then says
+    // "add it back" — lock the lead row in both actions if that ever happens.
+    const finance = quote.leadId
+      ? await prisma.dealFinance.findFirst({ where: { tenantId, leadId: quote.leadId, vendorId }, select: { status: true } })
+      : null;
+    if (finance && !financeIsClosed(finance.status)) {
+      refuse(`${link.vendor.name} is this deal's finance house (${financeStatusShort(finance.status).toLowerCase()}). Set the finance to Withdrawn first, or to Paid out once it is.`);
+    }
     await prisma.dealVendor.deleteMany({ where: { id: link.id, tenantId } });
     await logAudit({
       action: "deal.supplier_removed",

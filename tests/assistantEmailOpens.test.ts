@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { OPENED_LEGEND, openedFact } from "../src/lib/emailOpenTracking";
+import { daxCore } from "./daxCore";
 
 // Asked "has he opened his email?", the assistant answered that the CRM doesn't
 // show it. The CRM does (Communication.seenAt) — the assistant's lookup never read it.
@@ -65,7 +66,7 @@ test("THE WORDING the assistant is told to use, state by state", () => {
 });
 
 test("the assistant's lead lookup reads what both facts need, and passes them on with the legend", () => {
-  const lookup = readFileSync("src/lib/crmAssistant.ts", "utf8");
+  const lookup = daxCore();
   assert.match(lookup, /openToken: true, messageId: true, seenAt: true, openCount: true,/);
   assert.match(lookup, /\.\.\.openedFact\(c\),/);
   assert.match(lookup, /opens: OPENED_LEGEND,/);
