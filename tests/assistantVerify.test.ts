@@ -103,7 +103,10 @@ test("every answer goes through the check, and the note is part of what's saved 
   assert.match(src, /if \(again === timedOut\) await logError\("crm-assistant", "figure re-check ran out of time"\)\.catch\(\(\) => \{\}\);\s*else if \(again\.length\) flagged = unsupportedFigures\(reply\.answer, \[\.\.\.evidenceNow, \.\.\.again\]\);/);
   // The function alone, to its closing brace (withListed, which followed it, moved to assistant/context.ts).
   const rerunAt = src.indexOf("async function earlierLookupsAgain(");
-  const rerun = src.slice(rerunAt, src.indexOf("\n}\n", rerunAt) + 2);
+  // \r?\n: a Windows checkout has CRLF line ends (daxCore() reads the file raw).
+  const rerunEnd = src.slice(rerunAt).search(/\r?\n\}\r?\n/);
+  assert.ok(rerunEnd > 0, "earlierLookupsAgain's closing brace");
+  const rerun = src.slice(rerunAt, rerunAt + rerunEnd + 3);
   assert.match(rerun, /conversationId: string, timeUp: \(\) => boolean\)/);
   // One at a time, and none started once the time is up: a timed-out re-check leaves at most one lookup running.
   assert.match(rerun, /for \(const step of stepsToRecheck\(turns\.map\(\(t\) => t\.tools\)\)\) \{\s*if \(timeUp\(\)\) break;\s*const output = await runTool\(user, step\)/);

@@ -111,7 +111,8 @@ test("THE HANDOVER ITSELF asks again (review of #1137): before any paperwork, an
 test("saving: leads.edit on THIS lead, a finance house of this workspace only, a dated status, and no lost update", () => {
   const action = read("src/app/actions/dealFinance.ts");
   assert.match(action, /requireLeadAccess\(leadId, "leads\.edit"\)/);
-  assert.match(action, /prisma\.dealVendor\.findFirst\(\{\s*where: \{ tenantId, leadId, vendorId: text\(formData, "vendorId", 64\), vendor: \{ deletedAt: null, kind: "finance" \} \}/, "only a finance house ON THIS DEAL, whatever is posted");
+  assert.match(action, /const vendorId = text\(formData, "vendorId", 64\);/);
+  assert.match(action, /tx\.dealVendor\.findFirst\(\{\s*where: \{ tenantId, leadId, vendorId, vendor: \{ deletedAt: null, kind: "finance" \} \}/, "only a finance house ON THIS DEAL, whatever is posted");
   assert.match(action, /isFinanceStatus\(status\)/);
   assert.match(action, /where: \{ id: existing\.id, tenantId, updatedAt: existing\.updatedAt \}/, "compare-and-swap on the version (dealFinanceSave.test.ts drives it)");
   assert.match(action, /\(existing\?\.updatedAt\.toISOString\(\) \?\? ""\) !== shown/, "against the version the form SHOWED");
@@ -136,9 +137,22 @@ test("the finance house can't be taken off a deal while its finance is live (rev
   for (const s of ["paid_out", "withdrawn"]) assert.equal(financeIsClosed(s), true, s);
   const vendors = read("src/app/actions/vendors.ts");
   const remove = vendors.slice(vendors.indexOf("export async function removeDealVendor("));
-  assert.match(remove, /prisma\.dealFinance\.findFirst\(\{ where: \{ tenantId, leadId: quote\.leadId, vendorId \}/);
-  assert.ok(remove.indexOf("financeIsClosed(finance.status)") < remove.indexOf("prisma.dealVendor.deleteMany("), "checked before the link goes");
+  assert.match(remove, /tx\.dealFinance\.findFirst\(\{ where: \{ tenantId, leadId: quote\.leadId, vendorId \}/);
+  assert.ok(remove.indexOf("financeIsClosed(finance.status)") < remove.indexOf("tx.dealVendor.deleteMany("), "checked before the link goes");
   assert.match(remove, /Set the finance to Withdrawn first/);
+});
+
+test("starting finance and taking its finance house off the deal take turns: both hold the lead row (follow-up to #1137)", () => {
+  const LOCK = /await tx\.\$queryRaw`SELECT 1 FROM "Lead" WHERE "id" = \$\{(quote\.)?leadId\} AND "tenantId" = \$\{tenantId\} FOR UPDATE`;/;
+  const save = read("src/app/actions/dealFinance.ts");
+  const saveTx = save.slice(save.indexOf("await prisma.$transaction(async (tx) => {"));
+  assert.match(saveTx, LOCK);
+  assert.ok(saveTx.search(LOCK) < saveTx.indexOf("tx.dealVendor.findFirst("), "the lock comes before the supplier is checked");
+  assert.ok(saveTx.indexOf("tx.dealFinance.create(") > 0 && saveTx.indexOf("tx.dealFinance.updateMany(") > 0, "and the write is in the same transaction");
+  const vendors = read("src/app/actions/vendors.ts");
+  const remove = vendors.slice(vendors.indexOf("export async function removeDealVendor("));
+  assert.match(remove, /const link = await prisma\.\$transaction\(async \(tx\) => \{\s*if \(quote\.leadId\) await tx\.\$queryRaw`SELECT 1 FROM "Lead"/);
+  assert.ok(remove.search(LOCK) < remove.indexOf("tx.dealFinance.findFirst("), "the lock comes before the finance is checked");
 });
 
 test("the table: tenant FKs, one per lead, the statuses checked, row-level security forced", () => {
