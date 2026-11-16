@@ -6,7 +6,7 @@ import { matchFinanceEmail } from "../src/lib/dealFinanceRules";
 import { KEPT_BODY_CHARS, storedFinanceEmailBody, storedFinanceEmailSubject } from "../src/lib/financeEmailRules";
 
 // fileFinanceHouseEmail against a world the test controls: one finance house, one deal (APP-77), its salesperson.
-const world = { owner: null as string | null, mayOpen: true, dedupe: 0 };
+const world = { owner: null as string | null, mayOpen: true, dedupe: 0, financeOn: true };
 const pushes: { payload: unknown; kind: unknown; options: unknown }[] = [];
 const stored: Record<string, unknown>[] = [];
 const fakeDb = {
@@ -27,6 +27,7 @@ moduleLoader._load = function (this: unknown, request: string, parent, isMain) {
     if (request === "./tenantActor") return { resolveTenantActor: async () => ({ id: "actor" }) };
     if (request === "./push") return { sendPushToAll: async (payload: unknown, kind: unknown, options: unknown) => { pushes.push({ payload, kind, options }); return 1; } };
     if (request === "./permissions") return { canAccessLead: async () => world.mayOpen };
+    if (request === "./modules/enabled") return { isModuleEnabled: async (id: string) => id === "finance" && world.financeOn };
   }
   return realLoad.call(this, request, parent, isMain);
 } as Loader;
@@ -82,6 +83,18 @@ test("the notification goes to the deal's own salesperson only, and only if they
   assert.equal((await filed(null, true)).pushes.length, 0, "no salesperson: nobody — it is on the deal");
   assert.equal(stored.at(-1)?.type, "note");
   assert.match(String(stored.at(-1)?.body), /The full email is in the mailbox/);
+});
+
+test("Finance module off: not a finance email — nothing filed as one, it goes the ordinary way", async () => {
+  world.financeOn = false;
+  world.dedupe += 1;
+  const before = stored.length;
+  try {
+    assert.equal(await fileFinanceHouseEmail("deals@wesbank.example", { subject: "APP-77 approved", body: "Approved.", when: new Date(), messageId: null, dedupeKey: `k${world.dedupe}` }), null);
+    assert.equal(stored.length, before);
+  } finally {
+    world.financeOn = true;
+  }
 });
 
 test("the SUBJECT as stored is masked too (re-review of #1138) — matched on the raw text first, kept masked", async () => {

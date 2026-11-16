@@ -6,6 +6,7 @@ import { sendPushToAll } from "./push";
 import { matchFinanceEmail } from "./dealFinanceRules";
 import { storedFinanceEmailBody, storedFinanceEmailSubject } from "./financeEmailRules";
 import { canAccessLead } from "./permissions";
+import { isModuleEnabled } from "./modules/enabled";
 
 export type InboundEmail = { subject: string; body: string; when: Date; messageId: string | null; dedupeKey: string };
 
@@ -23,6 +24,8 @@ export type InboundEmail = { subject: string; body: string; when: Date; messageI
  * sent: the status is moved by staff.
  */
 export async function fileFinanceHouseEmail(fromEmail: string, email: InboundEmail): Promise<boolean | null> {
+  // Finance switched off: not a finance email — it is filed like any other.
+  if (!(await isModuleEnabled("finance"))) return null;
   // The supplier whose address this IS (exact, case-folded), and only a live finance house.
   const ids = await ciExactIds("vendorEmail", fromEmail);
   if (ids.length === 0) return null;
