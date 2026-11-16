@@ -22,6 +22,7 @@ import { deliverQuote, QUOTE_GONE, type DeliveryEvidence } from "@/lib/quoteDeli
 import { getRegionalSettings } from "@/lib/settings";
 import { withCurrency } from "@/lib/currencyRules";
 import { emitDeliveryScheduledJourneyEvent } from "@/lib/leadJourneyEvents";
+import { financeDeliveryRefusal } from "@/lib/dealFinance";
 import { paymentsComeFromXero } from "@/lib/xero";
 import { xeroOwnsPayments } from "@/lib/xeroInvoice";
 
@@ -329,6 +330,9 @@ export async function scheduleDelivery(quoteId: string, formData: FormData) {
     if (!quote) refuse(QUOTE_GONE);
     if (!quote.depositPaidAt) refuse("Record the deposit before scheduling delivery.");
     if (quote.deliveryScheduledFor) refuse("Delivery is already scheduled.");
+    // A financed deal is delivered once the finance house has approved it (dealFinanceRules.financeBlocksDelivery).
+    const financeHold = await financeDeliveryRefusal(tenantId, quote.leadId);
+    if (financeHold) refuse(financeHold);
     const dateRaw = String(formData.get("date") ?? "").trim();
     if (!dateRaw) refuse("Choose a delivery date.");
     const when = new Date(dateRaw);

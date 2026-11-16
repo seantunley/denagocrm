@@ -23,7 +23,10 @@ import {
   X,
 } from "lucide-react";
 import { prisma } from "@/lib/db";
-import { canAccessContact, canAccessLead, hasAnyPermission, requireQuoteReadAccess, requireRoute } from "@/lib/permissions";
+import { canAccessContact, canAccessLead, hasAnyPermission, hasPermission, requireQuoteReadAccess, requireRoute } from "@/lib/permissions";
+import { loadDealFinance } from "@/lib/dealFinance";
+import { financeBlocksDelivery, financeStatusShort } from "@/lib/dealFinanceRules";
+import DealFinancePanel from "@/components/deals/DealFinancePanel";
 import { formatDate, formatDateTime, formatZAR } from "@/lib/format";
 import { loadBillToFleet, quoteBillTo } from "@/lib/quoteBillTo";
 import { payableTotalCents } from "@/lib/pricing";
@@ -236,6 +239,14 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
     quote.lead && (await hasAnyPermission(user, "leads.view_all", "leads.view_owned")) && (await canAccessLead(user, quote.lead.id))
       ? quote.lead
       : null;
+  // Finance through an outside finance house — on the deal's lead, for someone who may open that lead.
+  const [finance, financeHouses, canEditFinance] = lead && suppliersOn
+    ? await Promise.all([
+        loadDealFinance(tenantId, lead.id),
+        prisma.vendor.findMany({ where: { tenantId, deletedAt: null, kind: "finance" }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
+        hasPermission(user, "leads.edit"),
+      ])
+    : [null, [], false];
   const stock = [
     ...quote.soldStock.map((unit) => ({ ...unit, allocation: "Sold" })),
     ...quote.stockReservations
@@ -417,6 +428,10 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
               </div>
             </Surface>
 
+            {lead && (finance || financeHouses.length > 0) && (
+              <DealFinancePanel leadId={lead.id} finance={finance} financeHouses={financeHouses} canEdit={canEditFinance} now={requestNow} />
+            )}
+
             {invoice && (
               <DealPayments quote={quote} payments={payments} canRecord={canRecordPayments} fromXero={paymentsFromXeroHere} statementHref={statementHref} today={today} moneyFmt={moneyFmt} />
             )}
@@ -565,6 +580,13 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
               <div className="mt-3 divide-y divide-border/60">
                 <ReadinessRow done={accepted} label="Agreement accepted" detail={quote.signedAt ? `Signed ${formatDateTime(quote.signedAt)}` : accepted ? "Marked accepted — not signed online" : "Customer acceptance outstanding"} />
                 <ReadinessRow done={Boolean(quote.depositPaidAt)} label="Deposit received" detail={quote.depositPaidAt ? formatDateTime(quote.depositPaidAt) : depositAmount ? `Waiting for ${formatZAR(depositAmount, moneyFmt)}` : "No deposit receipt recorded"} />
+                {finance && finance.status !== "withdrawn" && (
+                  <ReadinessRow
+                    done={!financeBlocksDelivery(finance.status)}
+                    label="Finance approved"
+                    detail={`${finance.vendor.name}: ${financeStatusShort(finance.status)} since ${formatDate(finance.statusAt)}${financeBlocksDelivery(finance.status) ? " — delivery can be booked once it's approved" : ""}`}
+                  />
+                )}
                 <ReadinessRow done={stockReady} label="Stock allocated" detail={stockReady ? stock.map((item) => item.stockNumber ?? item.product.name).join(", ") : "No physical unit assigned"} />
                 <ReadinessRow done={pdiReady} label="PDI complete" detail={stockReady ? (pdiReady ? "Allocated stock ready for delivery" : "Workshop preparation still outstanding") : "Requires stock allocation first"} />
                 <ReadinessRow done={deliveryBooked} label="Delivery booked" detail={deliveryBooked ? formatDateTime(quote.deliveryScheduledFor) : "No delivery date scheduled"} />

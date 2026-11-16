@@ -29,6 +29,7 @@ model Vendor {
   deals            DealVendor[]
   documentRequests DocumentRequest[]
   deliveries       VendorDelivery[]
+  financeDeals     DealFinance[]
 
   @@unique([tenantId, id])
   @@index([tenantId, name])

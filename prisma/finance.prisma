@@ -1,0 +1,27 @@
+/// A deal financed through an outside finance house (Sean, 2026-11-16). One per lead. Staff move the status along as
+/// the finance house reports back; `statusAt` is when it last moved — what the Attention Centre's chaser reads. The
+/// finance house is a supplier (Settings → Suppliers, type Finance), so the deal file asks for its papers.
+/// NO applicant documents are kept: ID copies, payslips and bank statements stay with the finance house (Sean: "not
+/// storing that information"). The lead key is a composite tenant FK in the migration SQL.
+model DealFinance {
+  id          String   @id @default(cuid())
+  tenantId    String
+  leadId      String
+  vendorId    String
+  vendor      Vendor   @relation(fields: [tenantId, vendorId], references: [tenantId, id], onDelete: Restrict)
+  /// The finance house's application number.
+  reference   String?
+  /// docs_outstanding | submitted | approved | declined | paid_out | withdrawn (lib/dealFinanceRules.ts).
+  status      String   @default("docs_outstanding")
+  statusAt    DateTime @default(now())
+  /// What they said: "approved subject to a 10% deposit", "declined — affordability".
+  note        String?
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, leadId])
+  @@index([tenantId, vendorId])
+  @@index([tenantId, status, statusAt])
+}

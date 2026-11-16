@@ -29,7 +29,8 @@ export type AttentionSignalKind =
   | "quote_expiring"
   | "no_next_step"
   | "stage_age"
-  | "followup_unanswered";
+  | "followup_unanswered"
+  | "finance_waiting";
 
 export type AttentionCategory = "customer" | "commitment" | "workflow";
 
@@ -38,6 +39,7 @@ export const ATTENTION_CATEGORY: Record<AttentionSignalKind, AttentionCategory> 
   followup_unanswered: "customer",
   overdue_task: "commitment",
   quote_expiring: "commitment",
+  finance_waiting: "commitment",
   no_next_step: "workflow",
   stage_age: "workflow",
 };
@@ -63,6 +65,7 @@ export const ATTENTION_WEIGHTS: Record<AttentionSignalKind, number> = {
   no_next_step: 20, // nothing will happen unless someone acts
   stage_age: 20,
   followup_unanswered: 20, // we wrote and heard nothing back: time to try another way
+  finance_waiting: 25, // the deal can't be delivered until the finance house answers
 };
 
 /**

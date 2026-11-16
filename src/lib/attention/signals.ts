@@ -2,6 +2,7 @@ import "server-only";
 
 import { prisma } from "../db";
 import { contactActivityWhere, contactCommunicationWhere } from "../customerContact";
+import { financeChase } from "../dealFinanceRules";
 import {
   ATTENTION_CATEGORY, ATTENTION_WEIGHTS, FOLLOWUP_LOOKBACK_DAYS, LIVE_CONTACT_TYPES, attentionSignalKey, unansweredFollowUp,
   type AttentionSignal,
@@ -307,6 +308,32 @@ export async function collectAttentionSignals(input: {
         context: "Our messages to the customer have had no answer, and no call or meeting is logged since. Try another way to reach them.",
         actionHref: `/leads/${leadId}`,
         actionLabel: "Try another way",
+      });
+    }
+  }
+
+  // ── finance_waiting ───────────────────────────────────────────────────────
+  // A financed deal whose status has sat for FINANCE_CHASE_WORKING_DAYS waiting on somebody else: the customer's
+  // documents, or the finance house's answer (dealFinanceRules.financeChase). Keyed by the status's date, so moving it
+  // along ends the warning and a later wait is a new one, not a snoozed one.
+  for (const batch of batches) {
+    const waiting = await prisma.dealFinance.findMany({
+      where: { leadId: { in: batch }, status: { in: ["docs_outstanding", "submitted"] } },
+      select: { id: true, leadId: true, status: true, statusAt: true, reference: true, vendor: { select: { name: true } } },
+    });
+    for (const row of waiting) {
+      const chase = financeChase({ status: row.status, statusAt: row.statusAt, financeHouse: row.vendor.name, reference: row.reference }, now);
+      if (!chase) continue;
+      add(signals, row.leadId, {
+        kind: "finance_waiting",
+        key: attentionSignalKey("finance_waiting", `${row.id}:${row.status}:${row.statusAt.getTime()}`),
+        category: ATTENTION_CATEGORY.finance_waiting,
+        weight: ATTENTION_WEIGHTS.finance_waiting,
+        detail: chase.detail,
+        since: chase.since.toISOString(),
+        context: "Nothing has moved on the finance since then. Chase, then update the status on the deal.",
+        actionHref: `/leads/${row.leadId}?tab=finance`,
+        actionLabel: chase.actionLabel,
       });
     }
   }

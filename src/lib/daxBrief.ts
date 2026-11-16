@@ -17,7 +17,8 @@ import { contactName } from "./format";
 import { listActingTenantStaff } from "./tenantActor";
 import { nurtureReasonLabel } from "./leadNurture";
 import { baseValueCents } from "./currencyRules";
-import { buildBrief, buildTeamRows, openingLine, type BriefLead, type DaxBrief, type NurtureReview, type OpeningLine, type TeamRow } from "./daxBriefRules";
+import { buildBrief, buildTeamRows, openingLine, type BriefInput, type BriefLead, type DaxBrief, type NurtureReview, type OpeningLine, type TeamRow } from "./daxBriefRules";
+import { loadFinanceDeals } from "./dealFinance";
 import { getWorkspaceSetting } from "./settings";
 import { ownedWriteTenantId } from "./tenantWrite";
 import { openingLineKey, openingLineOn } from "./proactiveRules";
@@ -238,11 +239,12 @@ export const loadDaxBrief = cache(async (user: PermissionUser, now: Date = new D
   // The brief adds and ranks values, so it reads them in the base currency only: a deal in
   // another currency (multicurrency module) still appears, it just carries no amount here.
   const briefLeads = attention.leads.map((lead) => ({ ...lead, valueCents: baseValueCents(lead) }));
-  const [viewed, deliveries, team, nurtureReviews] = await Promise.all([
+  const [viewed, deliveries, team, nurtureReviews, finance] = await Promise.all([
     viewedQuotes(user, quoteIds),
     openDeliveries(user, quoteIds),
     teamView(user, briefLeads),
     dueNurtureReviews(user, dayEnd),
+    financeToChase(user, now),
   ]);
 
   return buildBrief({
@@ -258,8 +260,18 @@ export const loadDaxBrief = cache(async (user: PermissionUser, now: Date = new D
     team,
     nurtureReviews: nurtureReviews.reviews,
     nurtureReviewsTotal: nurtureReviews.total,
+    finance,
   });
 });
+
+/** Financed deals to chase (dealFinance.ts), in the base currency like every amount the brief adds. Suppliers module only. */
+async function financeToChase(user: PermissionUser, now: Date): Promise<NonNullable<BriefInput["finance"]>> {
+  if (!(await isModuleEnabled("suppliers"))) return [];
+  const deals = await loadFinanceDeals(user, now, { active: true });
+  return deals
+    .filter((deal) => deal.chase)
+    .map((deal) => ({ leadId: deal.leadId, name: deal.name, ownerId: deal.ownerId, detail: deal.chase!.detail, since: deal.chase!.since, valueCents: baseValueCents(deal) }));
+}
 
 /**
  * DAX SPEAKS FIRST: the opening line for a new, empty conversation (Ask page and panel only — never WhatsApp), from

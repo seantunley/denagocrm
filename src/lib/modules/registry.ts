@@ -95,9 +95,9 @@ export const MODULE_REGISTRY: AppModule[] = [
   {
     id: "suppliers",
     label: "Suppliers",
-    description: "Suppliers on deals and purchase orders: each deal's file asks every supplier for its quote, invoice and proof of payment.",
-    // Settings → Suppliers. The rest of it lives inside the deal file, documents and purchase orders.
-    routePrefixes: ["/settings/vendors"],
+    description: "Suppliers on deals and purchase orders: each deal's file asks every supplier for its quote, invoice and proof of payment. Finance houses too: each financed deal's status, chased when it stalls.",
+    // Settings → Suppliers and the Finance list. The rest of it lives inside the deal file, documents and purchase orders.
+    routePrefixes: ["/settings/vendors", "/finance"],
   },
 ];
 
