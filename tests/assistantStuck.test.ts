@@ -264,7 +264,7 @@ test("SELF-KNOWLEDGE and HELP: DAX can say it does both", () => {
   const about = selfKnowledge("DAX", new Set(["core"]));
   assert.match(about, /say why ONE deal is stuck — its blockers ranked, each with its date and a link to its record/);
   assert.match(about, /catch the person up on what changed on their own deals since they last asked you/);
-  const help = readFileSync("src/lib/help/articles/assistant-and-more.ts", "utf8");
+  const help = readFileSync("src/lib/help/articles/dax.ts", "utf8");
   assert.match(help, /Why is Anna's deal stuck\?/);
   assert.match(help, /Catch me up/);
 });

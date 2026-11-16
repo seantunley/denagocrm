@@ -1,0 +1,91 @@
+import type { HelpArticle } from "../types";
+
+export const todayAndLeadScoreArticles: HelpArticle[] = [
+  // ── Today and lead scores ─────────────────────────────────────────────
+  {
+    slug: "today-who-to-contact-next",
+    title: "The Today page: who to contact next",
+    summary: "A ranked list of the open deals most worth contacting now, each with the reasons and a suggested next step.",
+    category: "crm",
+    audience: "everyone",
+    keywords: ["today", "who to call", "contact next", "priority", "ranked leads", "hot leads", "call list", "next step"],
+    body: [
+      { type: "p", text: "**Today** answers one question: who should I contact next? It ranks your open deals with the customers who have just engaged at the top, followed by deals that are starting to slip. Open it from **Today** in the sidebar. Anyone who can see leads can use it." },
+      { type: "h", text: "Reading a row" },
+      { type: "list", items: [
+        "**The number** is the lead score, out of 100. The higher it is, the more the deal deserves your next call.",
+        "**The name** opens the lead. The stage and the deal value are shown beside it.",
+        "**The reasons** are listed underneath, strongest first — for example \"Wrote yesterday — waiting on our reply\" or \"Opened the quote today\".",
+        "**The owner** of the deal is shown at the bottom of the row, or **Unassigned**.",
+        "**The button on the right** names the suggested next step, such as **Reply to their message** or **Call while the quote is fresh**. It opens the lead so you can do it.",
+      ] },
+      { type: "h", text: "Whose deals you see" },
+      { type: "list", items: [
+        "**Mine** shows deals assigned to you. This is where the page opens.",
+        "**Everyone I can see** shows every open deal you are allowed to see, including colleagues' and unassigned ones.",
+      ] },
+      { type: "h", text: "How to work it" },
+      { type: "steps", items: [
+        "Start at the top row and read its first reason.",
+        "Press the button on the right to open the lead and take the step.",
+        "Record what you did — a call, a message or a new follow-up. The deal's score drops as its reasons are dealt with, so it moves down or leaves the list.",
+        "Move on to the next row.",
+      ] },
+      { type: "callout", tone: "info", text: "Only deals with a reason to contact appear. A deal that is open but has nothing pressing is left off. If nothing qualifies you see **Nothing to chase right now.**" },
+      { type: "list", items: [
+        "The page shows the top 50 deals — a day's worth of calls, not the whole pipeline.",
+        "Won, lost and closed deals never appear.",
+        "If you can see a very large number of open deals, the ranking is made from the 500 most recently updated ones, and the page tells you so.",
+        "When two deals score the same, the one worth more is listed first.",
+      ] },
+      { type: "callout", tone: "tip", text: "Today and the **Attention Centre** are different tools. The Attention Centre lists what is wrong with a deal. Today ranks who is most worth your next call. For how the number is worked out, see \"How lead scores work\"." },
+    ],
+  },
+  {
+    slug: "lead-scores-explained",
+    title: "How lead scores work",
+    summary: "What the lead score number means, the rules that add points to it, and where you see it.",
+    category: "crm",
+    audience: "everyone",
+    keywords: ["lead score", "score", "points", "scoring rules", "why is this lead first", "hot lead", "score badge", "ranking"],
+    body: [
+      { type: "p", text: "A lead score is a number from 0 to 100 that says how much an open deal deserves your attention right now. Every point comes with a plain reason, so you can always see why a deal scored what it did. The number only puts deals in order — the reasons are what matter." },
+      { type: "h", text: "Where you see it" },
+      { type: "list", items: [
+        "On the **Today** page, as the number at the start of each row.",
+        "At the top of an open lead, as a small number with its strongest reason. Hover over it to see all the reasons; click it to open Today.",
+        "The number is shown in a stronger colour from 60 upwards, a softer one from 30 to 59, and grey below 30.",
+      ] },
+      { type: "h", text: "What adds points" },
+      { type: "table", headers: ["What is true of the deal", "Points", "Reason you will see"], rows: [
+        ["The customer wrote and nobody has responded since", "40", "Wrote … — waiting on our reply"],
+        ["A new lead, added in the last 3 days, not contacted yet", "30", "New lead — not contacted yet"],
+        ["The customer opened the quote in the last 2 days", "25", "Opened the quote …"],
+        ["An older lead that has never been contacted", "20", "Never contacted — added …"],
+        ["A quote exists for the deal, but no contact with the customer is logged (for example, the quote was emailed from Outlook)", "20", "Quote ready — no contact with the customer logged in the CRM"],
+        ["The customer wrote in the last 3 days and you answered", "15", "Replied …"],
+        ["A planned follow-up is overdue", "15", "Overdue follow-up"],
+        ["The customer opened the quote 3 to 7 days ago", "12", "Opened the quote …"],
+        ["No contact for 7 days or more", "10 to 20", "No contact for … days"],
+        ["The deal has sat in its stage past that stage's limit", "10", "In … days — past its …-day limit"],
+        ["The deal is worth R250 000 or more", "10", "High-value deal"],
+        ["A quote has been sent and is not signed", "8", "Quote sent — not signed yet"],
+        ["No next activity is planned", "5", "No next step planned"],
+      ] },
+      { type: "list", items: [
+        "Points are added together and the total stops at 100.",
+        "\"No contact\" starts at 10 points after 7 days and gains one point for each further day, up to 20.",
+        "The stage limit is the number of days set for that stage in your pipeline settings. A stage with no limit never adds these points.",
+        "Days are counted as calendar days in South African time, so \"yesterday\" means what you would expect.",
+      ] },
+      { type: "h", text: "What counts as contact" },
+      { type: "p", text: "Contact means a real touch with the customer: a message, call or email in either direction, or a completed activity. A note your team wrote for itself does not count, and neither does simply editing the lead. This stops a neglected deal from looking freshly worked." },
+      { type: "list", items: [
+        "**Moving the lead on counts.** Once a lead is past the first stage of its pipeline (for example in Contacted or later), it counts as contacted from the day it entered its current stage.",
+        "**A note can record contact.** The note box asks **What was this?** Leave it on **Internal note** for something only your team needs to know. If you are writing up a phone call, a WhatsApp or a visit, choose that instead and it counts as contact.",
+      ] },
+      { type: "callout", tone: "info", text: "Scores are worked out fresh every time you look, from the records as they are at that moment. They are not stored, so there is nothing to refresh, and nobody can edit a score by hand." },
+      { type: "callout", tone: "tip", text: "Won, lost and closed deals have no score. To bring a score down, deal with its reasons: reply to the customer, complete the overdue follow-up, or plan the next step." },
+    ],
+  },
+];
