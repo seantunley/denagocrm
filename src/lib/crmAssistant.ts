@@ -1,13 +1,12 @@
 import "server-only";
 import { randomBytes, randomUUID } from "node:crypto";
 import { z } from "zod";
-import type { Prisma } from "@prisma/client";
 import { prisma } from "./db";
 import { logError } from "./errorLog";
 import { logAudit } from "./audit";
 import { codexRespond, isCodexConnected, type CodexResult } from "./codex";
-import { formatZAR, contactName, type MoneyFormat } from "./format";
-import { formatTotals, totalsByCurrency, withCurrency } from "./currencyRules";
+import { formatZAR, contactName } from "./format";
+import { withCurrency } from "./currencyRules";
 import { payableTotalCents } from "./pricing";
 import { johannesburgDateKey } from "./activityDay";
 import { nurtureReasonLabel, reviewDate } from "./leadNurture";
@@ -24,11 +23,7 @@ import { getEnabledModuleIds, isModuleEnabled } from "./modules/enabled";
 import { ownedWriteTenantId } from "./tenantWrite";
 import { afterAnswer, conversationTurns, liveTurnsWhere, pickConversation } from "./assistantConversation";
 import { runAfterResponse } from "./afterResponse";
-import { isCustomerSigner } from "./signing/quoteMirror";
-import { firstCustomerView, memoCustomer } from "./signing/customerView";
 import { accessibleTestDriveWhere } from "./testDriveAccess";
-import { contactActivityWhere, contactCommunicationWhere, latestContactAt } from "./customerContact";
-import { firstStageOrders, stageContactAt } from "./stageContact";
 import {
   canAccessContact,
   canAccessJobCard,
@@ -51,7 +46,7 @@ import { DEPTH_BUDGETS, HARD_DEADLINE_MS, MIN_CALL_MS, deepen, parseLedger, rech
 import { matchDecisions, parseDecision } from "./assistantDecisions";
 import { CITE_RULE, REPLY_FORMAT, SPOKEN_RULE, STATE_INSTRUCTIONS, citableLinks, resolveCitations, splitReply, type Evidence } from "./assistantReply";
 import { unsupportedFigures, unsupportedNote } from "./assistantVerify";
-import { catalogueColour, closestColour, closestNames, nameWords } from "./nearMatch";
+import { catalogueColour, closestColour } from "./nearMatch";
 import { salesStats } from "./crmAssistantStats";
 import { whyLookup } from "./assistantWhyLookup";
 import { matchPayment } from "./assistantPaymentMatch";
@@ -69,7 +64,6 @@ import { dealFileLookup, suppliersLookup } from "./assistantDealFileLookup";
 import { fleetsLookup, partsLookup } from "./assistantPartsFleetsLookup";
 import { notesLookup } from "./assistantNotesLookup";
 import { stuckDealsLookup } from "./assistantStuckDeals";
-import { countQuoted, modelsNamed, quoteLineWhere } from "./quotedProducts";
 import { briefForAssistant, loadDaxBrief } from "./daxBrief";
 import { customerVehicles, workshopOverview } from "./workshopContext";
 import { breakerOpen, withRetry } from "./assistantBreaker";
@@ -108,10 +102,8 @@ import { describeSchedule, nextRun, scheduleInput } from "./assistantSchedule";
 import { describeWatch, watchInput } from "./assistantWatchRules";
 import {
   ANSWER_RULES,
-  activityArgs,
   conversationBlock,
   knowledgeArgs,
-  leadArgs,
   leadBriefArgs,
   parseSteps,
   RECHECK_TURNS,
@@ -123,7 +115,6 @@ import {
   waitingBlock,
   planInstructions,
   playbookArgs,
-  quoteArgs,
   recallArgs,
   scheduleArgs,
   vehicleArgs,
@@ -134,6 +125,17 @@ import {
   type ToolStep,
 } from "./crmAssistantPlan";
 import { FOLLOW_UP_CODE, WORDING_EDIT_RULE, followUpRoute } from "./assistantFollowUp";
+import { DAY, CANDIDATES, AssistantRow, ToolOutput, User, fuzzy, dateKey, daysAgo, clip, signingFor, viewedByCustomer, quoteFacts, refused, saLocal } from "./assistant/lookupKit";
+import { findLeads, pipelineSummary } from "./assistant/lookups/leads";
+import { findQuotes, foreignCurrencyQuote, quoteContents } from "./assistant/lookups/quotes";
+import { findActivities } from "./assistant/lookups/activities";
+import { customersNamed, nearlyNamed } from "./assistant/lookups/customers";
+export type { AssistantRow, Signing } from "./assistant/lookupKit";
+export { quoteFacts, saLocal, viewedByCustomer } from "./assistant/lookupKit";
+export { findLeads } from "./assistant/lookups/leads";
+export { findQuotes } from "./assistant/lookups/quotes";
+export { findActivities } from "./assistant/lookups/activities";
+export { customersNamed } from "./assistant/lookups/customers";
 
 /**
  * "Ask the CRM" — a sales colleague that answers from the workspace's own
@@ -152,13 +154,9 @@ import { FOLLOW_UP_CODE, WORDING_EDIT_RULE, followUpRoute } from "./assistantFol
  * here logs a question, a row or an answer: failures log a reason only.
  */
 
-const DAY = 86_400_000;
 /** Turns this recent are "the conversation"; older ones are only reachable via recall. */
 const CONVERSATION_WINDOW_MS = 3 * 60 * 60 * 1000;
 const HISTORY_DAYS = 30;
-/** Candidate cap before in-memory filters (last-contact needs the full set). */
-// ponytail: in-memory filter over ≤500 leads; move last-contact into SQL if a workspace outgrows it.
-const CANDIDATES = 500;
 /** What one tool's results may cost in a prompt. */
 const OBSERVATION_CHARS = 7000;
 /**
@@ -169,7 +167,6 @@ const OBSERVATION_CHARS = 7000;
 // find_leads: room for a report's full list (LEAD_LIST_MAX rows) — at 7 000 a list was cut near 20 (2026-11-14).
 const OBSERVATION_BUDGET: Partial<Record<string, number>> = { search_messages: 12_000, search_everything: 12_000, open_message: 11_000, read_document: 11_000, find_leads: 24_000 };
 
-export type AssistantRow = { label: string; detail: string; href: string };
 export type AssistantResult =
   /** learned: how many memories/playbooks this answer added or changed (owner reviews them). */
   /** choices: quick replies, shown as buttons under the answer. */
@@ -189,641 +186,13 @@ export type AssistantResult =
   /** kept: an edit's old question could NOT be replaced, so it is still there and nothing was asked (assistantEdit). */
   | { ok: false; error: string; kept?: true };
 
-type ToolOutput = { rows: AssistantRow[]; data: unknown[]; truncated: boolean };
-type User = PermissionUser;
 
-const fuzzy = (needle: string) => ({ contains: needle, mode: "insensitive" as const });
-const dateKey = (d: Date | null | undefined) => (d ? johannesburgDateKey(d) : "never");
-const daysAgo = (d: Date) => Math.floor((Date.now() - d.getTime()) / DAY);
-const clip = (s: string | null | undefined, n: number) => (s ? (s.length > n ? `${s.slice(0, n)}…` : s) : null);
-/** Cancelled activities, in both spellings the data holds. */
-const CANCELLED = ["canceled", "cancelled"];
-/**
- * A quote sent from the signing hub keeps its own status "draft" and no
- * viewedAt — sending, opening and signing are recorded on its SignatureRequest
- * and recipients. So "was it sent / has she opened it" reads both.
- */
-export type Signing = { status: string; sentAt: Date | null; viewedAt: Date | null; signedAt: Date | null };
-const LIVE_SIGNING = ["sent", "viewed", "in_progress"];
-
-/** Each quote's latest signing request that went out (not a draft, not voided). */
-async function signingFor(quoteIds: string[]): Promise<Map<string, Signing>> {
-  if (!quoteIds.length) return new Map();
-  const requests = await prisma.signatureRequest.findMany({
-    where: { quoteId: { in: quoteIds }, deletedAt: null, status: { notIn: ["draft", "voided"] } },
-    orderBy: { createdAt: "desc" },
-    select: {
-      quoteId: true, status: true, sentAt: true,
-      recipients: { select: { role: true, email: true, viewedAt: true, signedAt: true } },
-    },
-  });
-  const isCustomer = memoCustomer((r) => isCustomerSigner(r, ownedWriteTenantId()));
-  const byQuote = new Map<string, Signing>();
-  for (const r of requests) {
-    if (!r.quoteId || byQuote.has(r.quoteId)) continue;
-    const signed = r.recipients.map((x) => x.signedAt).filter((d): d is Date => d !== null).map((d) => d.getTime());
-    byQuote.set(r.quoteId, {
-      status: r.status,
-      sentAt: r.sentAt,
-      // The CUSTOMER's first open — a staff countersigner opening it isn't her.
-      viewedAt: await firstCustomerView(r.recipients, isCustomer),
-      signedAt: r.status === "completed" && signed.length ? new Date(Math.max(...signed)) : null,
-    });
-  }
-  return byQuote;
-}
-
-/** "Has she opened it?" — a draft never sent is the real answer, not "not yet". */
-export const viewedByCustomer = (q: { status: string; viewedAt: Date | null }, s?: Signing) => {
-  const opened = q.viewedAt ?? s?.viewedAt ?? null;
-  if (opened) return dateKey(opened);
-  return q.status === "draft" && !s ? "not sent yet (still a draft)" : "not yet";
-};
-
-/** What the quote's status means to a person: a "draft" sent for signature has been sent. */
-export const quoteFacts = (q: { status: string; signedAt: Date | null }, s?: Signing) => ({
-  status: s && q.status === "draft" ? `sent for signature (${s.status})` : q.status,
-  ...(s ? { sentForSignature: dateKey(s.sentAt) } : {}),
-  signed: q.signedAt ? dateKey(q.signedAt) : s?.signedAt ? dateKey(s.signedAt) : "no",
-});
 
 /* ── Tools ───────────────────────────────────────────────────────────────── */
 
-/** The day a deal was won or lost (its lifecycle date, set once), or null while it is open. */
-const closedOn = (lead: { status: string; wonAt: Date | null; lostAt: Date | null }) =>
-  lead.status === "lost" ? lead.lostAt : lead.status === "won" ? lead.wonAt : null;
 
-export async function findLeads(user: User, raw: z.infer<typeof leadArgs>): Promise<ToolOutput> {
-  if (!(await hasAnyPermission(user, "leads.view_all", "leads.view_owned"))) return refused("leads");
-  const args = leadArgs.parse(raw);
-  const ids = await getAccessibleLeadIds(user);
-  // Calendar days in South Africa: createdTo includes the whole of that day.
-  const createdAt = {
-    ...(args.createdWithinDays ? { gte: new Date(Date.now() - args.createdWithinDays * DAY) } : {}),
-    ...(args.createdFrom ? { gte: new Date(`${args.createdFrom}T00:00:00+02:00`) } : {}),
-    ...(args.createdTo ? { lt: new Date(new Date(`${args.createdTo}T00:00:00+02:00`).getTime() + DAY) } : {}),
-  };
-  // The day it was WON OR LOST (lifecycle dates, set once): lost → lostAt, won → wonAt, otherwise either.
-  const closedAt = {
-    ...(args.closedFrom ? { gte: new Date(`${args.closedFrom}T00:00:00+02:00`) } : {}),
-    ...(args.closedTo ? { lt: new Date(new Date(`${args.closedTo}T00:00:00+02:00`).getTime() + DAY) } : {}),
-  };
-  const closedFilter = Object.keys(closedAt).length > 0;
-  // "Closed in October" names no status: it means won OR lost — never the default "open", which has no closed date.
-  const status = args.status ?? (closedFilter ? "any" : "open");
-  // BY THE DAY IT CLOSED (asked, or the default for a closed-date period): only won and lost deals have that day.
-  // Open or nurture deals have none — they are listed newest first instead, and the result says so (re-review of #1101).
-  const closedSortAsked = (args.sort ?? (closedFilter && !args.noContactDays ? "closed" : null)) === "closed";
-  const byClosed = closedSortAsked && (status === "lost" || status === "won" || status === "any");
-  const closed = !closedFilter
-    ? {}
-    : status === "lost" ? { lostAt: closedAt }
-      : status === "won" ? { wonAt: closedAt }
-        : { AND: [{ OR: [{ lostAt: closedAt }, { wonAt: closedAt }] }] };
-  const where = {
-    ...closed,
-    deletedAt: null,
-    ...(ids === null ? {} : { id: { in: ids } }),
-    // "Any" in closed order is the CLOSED deals — counted as well as listed, so the total and the list agree.
-    ...(status === "any" ? (byClosed ? { status: { in: ["won", "lost"] } } : {}) : { status }),
-    ...(args.stage ? { stage: { name: fuzzy(args.stage) } } : {}),
-    ...(args.assignedTo ? { assignedTo: { name: fuzzy(args.assignedTo) } } : {}),
-    ...(args.product ? { product: { name: fuzzy(args.product) } } : {}),
-    ...(args.source ? { source: fuzzy(args.source) } : {}),
-    ...(args.minValue ? { valueCents: { gte: Math.round(args.minValue * 100) } } : {}),
-    ...(Object.keys(createdAt).length ? { createdAt } : {}),
-    ...(args.search
-      ? { OR: [{ name: fuzzy(args.search) }, { title: fuzzy(args.search) }, { email: fuzzy(args.search) }] }
-      : {}),
-  };
-  // Read from the database in closed order (review of #1101): read newest-CREATED first, 500 newer deals lost early in
-  // the month pushed out an older one lost on its last day. "Any" reads the lost and the won each by their own date,
-  // then takes the latest of both.
-  const closedOrder = (field: "lostAt" | "wonAt"): Prisma.LeadOrderByWithRelationInput[] => [{ [field]: { sort: "desc", nulls: "last" } }, { id: "asc" }];
-  const read = (extra: Prisma.LeadWhereInput, orderBy: Prisma.LeadOrderByWithRelationInput[]) => prisma.lead.findMany({
-      where: { AND: [where, extra] },
-      orderBy,
-      take: CANDIDATES,
-      select: {
-        id: true, title: true, name: true, status: true, valueCents: true, currency: true, source: true,
-        createdAt: true, stageEnteredAt: true, contactId: true, wonAt: true, lostAt: true, lostReason: true,
-        stage: { select: { name: true, order: true, pipelineId: true } },
-        product: { select: { name: true } },
-        assignedTo: { select: { name: true } },
-        // Real contact only (customerContact.ts): not internal notes, to-dos or blocked time.
-        communications: { where: contactCommunicationWhere, orderBy: { occurredAt: "desc" }, take: 1, select: { type: true, occurredAt: true } },
-        activities: {
-          where: contactActivityWhere,
-          orderBy: { doneAt: "desc" },
-          take: 1,
-          select: { type: true, doneAt: true, availabilityBlock: true },
-        },
-      },
-    });
-  const readLeads = async () => {
-    if (!byClosed) return read({}, [{ createdAt: "desc" }]);
-    if (status === "lost") return read({}, closedOrder("lostAt"));
-    if (status === "won") return read({}, closedOrder("wonAt"));
-    const [lost, won] = await Promise.all([read({ status: "lost" }, closedOrder("lostAt")), read({ status: "won" }, closedOrder("wonAt"))]);
-    return [...lost, ...won].sort((a, b) => (closedOn(b)?.getTime() ?? 0) - (closedOn(a)?.getTime() ?? 0)).slice(0, CANDIDATES);
-  };
-  const [leads, matching, reasons] = await Promise.all([
-    readLeads(),
-    // The real count — not capped at the CANDIDATES read above.
-    prisma.lead.count({ where }),
-    // "Why did we lose them": every lost reason across ALL the matches, not just the ones listed.
-    status === "lost" ? prisma.lead.groupBy({ by: ["lostReason"], where, _count: { _all: true } }) : Promise.resolve([]),
-  ]);
 
-  // Last contact = the latest message either way, call or meeting. Not an
-  // internal note or a completed to-do, and not the lead's own updatedAt
-  // (editing a field touches it). The customer's own rows that sit on no lead
-  // count too (a Messenger message matches the customer first — leadIdle.ts).
-  const contactIds = [...new Set(leads.map((l) => l.contactId).filter((id): id is string => !!id))];
-  const [contactComms, contactDone] = contactIds.length
-    ? await Promise.all([
-        prisma.communication.groupBy({ by: ["contactId"], where: { contactId: { in: contactIds }, leadId: null, ...contactCommunicationWhere }, _max: { occurredAt: true } }),
-        prisma.activity.groupBy({ by: ["contactId"], where: { contactId: { in: contactIds }, leadId: null, ...contactActivityWhere }, _max: { doneAt: true } }),
-      ])
-    : [[], []];
-  const customerTouch = new Map<string, number>();
-  for (const at of [...contactComms.map((r) => [r.contactId, r._max.occurredAt] as const), ...contactDone.map((r) => [r.contactId, r._max.doneAt] as const)]) {
-    if (at[0] && at[1]) customerTouch.set(at[0], Math.max(customerTouch.get(at[0]) ?? 0, at[1].getTime()));
-  }
-  // Moved past the first stage = contacted, as of that move (stageContact.ts).
-  const firstOrders = await firstStageOrders(leads);
-  const withTouch = leads.map((lead) => {
-    const own = latestContactAt(lead.communications, lead.activities);
-    const viaCustomer = lead.contactId ? customerTouch.get(lead.contactId) : undefined;
-    const touched = Math.max(own?.getTime() ?? 0, viaCustomer ?? 0, stageContactAt(lead, firstOrders)?.getTime() ?? 0);
-    return { lead, lastContact: touched ? new Date(touched) : null };
-  });
-  const cutoff = args.noContactDays ? Date.now() - args.noContactDays * DAY : null;
-  const filtered = cutoff === null
-    ? withTouch
-    : withTouch.filter(({ lastContact }) => !lastContact || lastContact.getTime() < cutoff);
-  const sorters: Record<string, (a: (typeof withTouch)[number], b: (typeof withTouch)[number]) => number> = {
-    value: (a, b) => b.lead.valueCents - a.lead.valueCents,
-    oldest_contact: (a, b) => (a.lastContact?.getTime() ?? 0) - (b.lastContact?.getTime() ?? 0),
-    stage_age: (a, b) => a.lead.stageEnteredAt.getTime() - b.lead.stageEnteredAt.getTime(),
-    newest: (a, b) => b.lead.createdAt.getTime() - a.lead.createdAt.getTime(),
-    closed: (a, b) => (closedOn(b.lead)?.getTime() ?? 0) - (closedOn(a.lead)?.getTime() ?? 0),
-  };
-  const sortBy = byClosed ? "closed" : args.sort && args.sort !== "closed" ? args.sort : cutoff ? "oldest_contact" : "newest";
-  const sorted = [...filtered].sort(sorters[sortBy]);
-  const take = args.limit ?? 10;
-  const page = sorted.slice(0, take);
 
-  // "Gone quiet" is worked out on the newest CANDIDATES only, so past that it is a floor.
-  const total = cutoff === null ? matching : leads.length === CANDIDATES ? `at least ${filtered.length}` : filtered.length;
-  // The reasons describe EXACTLY the deals the total counts (review of #1101): every match from the database, or —
-  // with "no contact for N days", which is worked out here — the ones left after it, counted the same way as the total.
-  const reasonCounts = cutoff === null
-    ? reasons.map((r) => [r.lostReason, r._count._all] as const)
-    : [...Map.groupBy(filtered, ({ lead }) => lead.lostReason?.trim() || null)].map(([reason, rows]) => [reason, rows.length] as const);
-  const lostReasons = [...Map.groupBy(reasonCounts, ([reason]) => reason?.trim() || "no reason recorded")]
-    .map(([reason, rows]) => ({ reason, count: rows.reduce((n, [, c]) => n + c, 0) }))
-    .sort((a, b) => b.count - a.count);
-  const moneyFmt = await getRegionalSettings();
-  return {
-    truncated: sorted.length > take || leads.length === CANDIDATES,
-    data: [{
-      total,
-      listed: page.length,
-      ...(status === "lost" ? { lostReasons } : {}),
-      ...(closedSortAsked && !byClosed ? { note: `${status} deals have no closed date — listed ${sortBy === "oldest_contact" ? "longest without contact" : "newest"} first.` } : {}),
-      ...(byClosed && status === "any" ? { note: "Won and lost deals only, most recently closed first." } : {}),
-    }, ...page.map(({ lead, lastContact }) => ({
-      id: lead.id,
-      link: `/leads/${lead.id}`,
-      lead: lead.title,
-      customer: lead.name,
-      stage: lead.stage.name,
-      status: lead.status,
-      value: formatZAR(lead.valueCents, withCurrency(moneyFmt, lead.currency)),
-      assignedTo: lead.assignedTo?.name ?? "unassigned",
-      product: lead.product?.name ?? null,
-      source: lead.source,
-      // "none logged", never "never": contact is often made outside the CRM and noted (Sean, 2026-11-16).
-      lastContact: lastContact ? dateKey(lastContact) : "none logged",
-      daysInStage: daysAgo(lead.stageEnteredAt),
-      created: dateKey(lead.createdAt),
-      ...(lead.status === "won" || lead.status === "lost" ? { closed: dateKey(closedOn(lead)) } : {}),
-      ...(lead.status === "lost" ? { lostReason: lead.lostReason?.trim() || "no reason recorded" } : {}),
-    }))],
-    rows: page.map(({ lead, lastContact }) => ({
-      label: `${lead.name} — ${lead.title}`,
-      detail: `${lead.stage.name} · ${formatZAR(lead.valueCents, withCurrency(moneyFmt, lead.currency))} · ${lead.assignedTo?.name ?? "unassigned"} · last contact ${lastContact ? dateKey(lastContact) : "none logged"}`,
-      href: `/leads/${lead.id}`,
-    })),
-  };
-}
-
-async function pipelineSummary(user: User): Promise<ToolOutput> {
-  if (!(await hasAnyPermission(user, "leads.view_all", "leads.view_owned"))) return refused("leads");
-  const ids = await getAccessibleLeadIds(user);
-  // By stage AND currency: a stage's value is said per currency, never added across them.
-  const rawGroups = await prisma.lead.groupBy({
-    by: ["stageId", "currency"],
-    where: { deletedAt: null, status: "open", ...(ids === null ? {} : { id: { in: ids } }) },
-    _count: { _all: true },
-    _sum: { valueCents: true },
-  });
-  const moneyFmt = await getRegionalSettings();
-  const groups = [...Map.groupBy(rawGroups, (g) => g.stageId)].map(([stageId, rows]) => ({
-    stageId,
-    count: rows.reduce((sum, row) => sum + row._count._all, 0),
-    value: formatTotals(totalsByCurrency(rows, (row) => ({ cents: row._sum.valueCents ?? 0, currency: row.currency }), moneyFmt.currency), moneyFmt),
-  }));
-  const stages = await prisma.pipelineStage.findMany({
-    where: { id: { in: groups.map((g) => g.stageId) } },
-    select: { id: true, name: true, order: true },
-    orderBy: { order: "asc" },
-  });
-  const byStage = new Map(groups.map((g) => [g.stageId, g]));
-  const data = stages.map((stage) => {
-    const g = byStage.get(stage.id)!;
-    return { stage: stage.name, openLeads: g.count, value: g.value };
-  });
-  return {
-    truncated: false,
-    data,
-    rows: data.map((d) => ({ label: d.stage, detail: `${d.openLeads} open · ${d.value}`, href: "/leads" })),
-  };
-}
-
-export async function findQuotes(user: User, raw: z.infer<typeof quoteArgs>): Promise<ToolOutput> {
-  if (!(await hasAnyPermission(user, "quotes.view_all", "quotes.view_owned"))) return refused("quotes");
-  const args = quoteArgs.parse(raw);
-  const ids = await getAccessibleQuoteIds(user);
-  // Quotes out for signature in the signing hub (their own status stays "draft").
-  const hub = args.awaitingSignature || args.viewed !== undefined
-    ? await prisma.signatureRequest.findMany({
-        where: { deletedAt: null, quoteId: { not: null }, status: { in: LIVE_SIGNING } },
-        select: { quoteId: true, recipients: { select: { role: true, email: true, viewedAt: true } } },
-      })
-    : [];
-  const outForSigning = hub.map((r) => r.quoteId!);
-  // "Opened" = opened by the CUSTOMER, not a colleague reviewing or countersigning.
-  const isCustomer = memoCustomer((r) => isCustomerSigner(r, ownedWriteTenantId()));
-  const openedInHub: string[] = [];
-  for (const r of hub) if (await firstCustomerView(r.recipients, isCustomer)) openedInHub.push(r.quoteId!);
-  // A quote named by its number: that one quote, whatever its age or status —
-  // including one a revision has replaced, which is still the quote they named.
-  // The access filter below applies to it like any other.
-  const wantedNumber = args.number === undefined ? null : Number(String(args.number).replace(/^Q-?/i, ""));
-  // The catalogue models the words name (quotedProducts.modelsNamed) — "Rover XL" is not "Rover XL 6".
-  const models = args.product
-    ? modelsNamed(await prisma.product.findMany({ where: { deletedAt: null }, select: { id: true, name: true } }), args.product)
-    : null;
-  const quotes = await prisma.quote.findMany({
-    where: {
-      deletedAt: null,
-      ...(wantedNumber === null ? { supersededAt: null } : { number: wantedNumber }),
-      ...(ids === null ? {} : { id: { in: ids } }),
-      ...(args.awaitingSignature
-        ? {
-            signedAt: null,
-            declinedAt: null,
-            // In an OR, so the id here narrows rather than replaces the access filter.
-            OR: [{ status: "sent" }, { id: { in: outForSigning }, status: { in: ["draft", "sent"] } }],
-          }
-        : args.status ? { status: args.status } : {}),
-      // Inside AND: a top-level `id` here would replace the access filter above.
-      ...(args.viewed === true
-        ? { AND: [{ OR: [{ viewedAt: { not: null } }, { id: { in: openedInHub } }] }] }
-        : args.viewed === false ? { AND: [{ viewedAt: null }, { id: { notIn: openedInHub } }] } : {}),
-      ...(args.olderThanDays ? { createdAt: { lt: new Date(Date.now() - args.olderThanDays * DAY) } } : {}),
-      // "Expiring": still open — draft or sent, nobody has signed or declined —
-      // with its validity running out in the window (or already run out today).
-      ...(args.expiringWithinDays !== undefined
-        ? {
-            status: { in: ["draft", "sent"] },
-            signedAt: null,
-            declinedAt: null,
-            validUntil: { gte: new Date(Date.now() - DAY), lte: new Date(Date.now() + args.expiringWithinDays * DAY) },
-          }
-        : {}),
-      ...(args.product || args.colour ? { items: { some: quoteLineWhere(models?.map((m) => m.id) ?? null, args.colour) } } : {}),
-    },
-    orderBy: args.expiringWithinDays !== undefined ? { validUntil: "asc" } : { createdAt: "desc" },
-    take: CANDIDATES,
-    select: {
-      id: true, number: true, status: true, createdAt: true, viewedAt: true, signedAt: true, validUntil: true,
-      taxInclusive: true, currency: true, depositType: true, depositValue: true, items: true, fees: true, contactId: true, leadId: true,
-      lead: { select: { id: true, name: true, title: true } },
-      contact: { select: { firstName: true, lastName: true } },
-    },
-  });
-  // Totals through payableTotalCents — the figure on the document, fees included.
-  const priced = quotes
-    .map((quote) => ({ quote, total: payableTotalCents(quote) }))
-    .filter(({ total }) => !args.minValue || total >= args.minValue * 100);
-  const take = args.limit ?? 10;
-  const page = priced.slice(0, take);
-  const signing = await signingFor(page.map(({ quote }) => quote.id));
-  // "Sent" is only what our side did: whether the email that carried it bounced (quoteEmailStatus.ts).
-  const sends = await quoteSends(page.map(({ quote }) => quote));
-  const customer = (q: (typeof quotes)[number]) =>
-    q.contact ? contactName(q.contact) : q.lead?.name ?? "no customer";
-  // "How many white Rover XLs?" — counted over every matching quote, not the page (quotedProducts.ts).
-  const matching = args.product || args.colour
-    ? {
-        models: models ? models.map((m) => m.name) : "any vehicle",
-        ...countQuoted(priced.map(({ quote }) => quote), models, args.colour),
-        exact: quotes.length < CANDIDATES,
-        note: models?.length === 0
-          ? `No product in the catalogue is called "${args.product}".`
-          : `${quotes.length < CANDIDATES ? "Exact: every matching quote this person may open, superseded revisions left out — not only those listed." : `At least: more than ${CANDIDATES} quotes matched.`} Vehicles only: lines linked to a catalogue product. Free-text lines (often accessories, e.g. "Rain Cover Rover XL") are not counted.`,
-      }
-    : null;
-  const moneyFmt = await getRegionalSettings();
-  return {
-    // With an exact count, a shorter list is not a cut-off answer: "matching" says how many there are.
-    truncated: matching ? !matching.exact : priced.length > take || quotes.length === CANDIDATES,
-    data: [...(matching ? [{ matching }] : []), ...page.map(({ quote, total }) => ({
-      quote: `Q-${quote.number}`,
-      link: `/quotes/${quote.id}`,
-      leadId: quote.lead?.id ?? null,
-      customer: customer(quote),
-      total: formatZAR(total, withCurrency(moneyFmt, quote.currency)),
-      ...quoteContents(quote, withCurrency(moneyFmt, quote.currency)),
-      created: dateKey(quote.createdAt),
-      ...quoteFacts(quote, signing.get(quote.id)),
-      ...(sends.has(quote.id) ? { sendStatus: sends.get(quote.id)!.status } : {}),
-      viewedByCustomer: viewedByCustomer(quote, signing.get(quote.id)),
-      validUntil: quote.validUntil ? dateKey(quote.validUntil) : null,
-    }))],
-    rows: page.map(({ quote, total }) => ({
-      label: `Q-${quote.number} — ${customer(quote)}`,
-      detail: `${quoteFacts(quote, signing.get(quote.id)).status}${sends.get(quote.id)?.bounced ? " · email bounced" : ""} · ${formatZAR(total, withCurrency(moneyFmt, quote.currency))} · viewed ${viewedByCustomer(quote, signing.get(quote.id))}`,
-      href: `/quotes/${quote.id}`,
-    })),
-  };
-}
-
-/**
- * Why DAX won't price a quote in another currency (multicurrency module): its prices come
- * from the catalogue, which is in the base currency. The person types them in the CRM.
- */
-function foreignCurrencyQuote(subject: string, currency: string): string {
-  return `${subject} in ${currency}, and catalogue prices are in the workspace's own currency — add the products in the CRM, where you can type the ${currency} price.`;
-}
-
-/**
- * WHAT IS ON A QUOTE: its lines and its fees, as they are named there.
- *
- * A quote used to reach the assistant as a number, a customer and a total. Asked
- * to "make the colour white" on a quote with one vehicle on it, it could not see
- * that there was one vehicle, or what colour it was — so it asked which line, and
- * once proposed a change to a colour the line already had (Sean, 2026-10-13: "If
- * there is only one cart on the quote, why ask the question?"). These are the
- * names quote_change matches against, so they are given exactly as stored.
- */
-function quoteContents(quote: {
-  items: { description: string; qty: number; discountPct: number; colorPreference: string | null }[];
-  fees: { label: string; amountCents: number }[];
-}, moneyFmt: MoneyFormat): { lines: string[]; fees: string[] } {
-  return {
-    lines: quote.items.slice(0, 12).map((item) =>
-      `${item.qty} × ${item.description}${item.colorPreference ? ` — colour ${item.colorPreference}` : ""}${item.discountPct > 0 ? ` — ${item.discountPct}% off` : ""}`),
-    fees: quote.fees.slice(0, 12).map((fee) => `${fee.label} — ${formatZAR(fee.amountCents, moneyFmt)}`),
-  };
-}
-
-export async function findActivities(user: User, raw: z.infer<typeof activityArgs>): Promise<ToolOutput> {
-  if (!(await hasAnyPermission(user, "activities.view", "activities.manage"))) return refused("activities");
-  const args = activityArgs.parse(raw);
-  const ids = await getAccessibleActivityIds(user);
-  // Day edges in Johannesburg (UTC+2, no DST) — the timezone every date here shows in.
-  const today = johannesburgDateKey(new Date());
-  const startOfToday = new Date(`${today}T00:00:00+02:00`);
-  const range = {
-    overdue: { lt: startOfToday },
-    today: { gte: startOfToday, lt: new Date(startOfToday.getTime() + DAY) },
-    // Everything still open up to the end of today: what's late has to be done too.
-    today_and_overdue: { lt: new Date(startOfToday.getTime() + DAY) },
-    this_week: { gte: startOfToday, lt: new Date(startOfToday.getTime() + 7 * DAY) },
-    upcoming: { gte: new Date() },
-    past: { lt: new Date() },
-  }[args.when];
-  // A specific day or period ("22 September", "last month") replaces the window.
-  const dated = args.from || args.to
-    ? {
-        ...(args.from ? { gte: new Date(`${args.from}T00:00:00+02:00`) } : {}),
-        ...(args.to ? { lt: new Date(new Date(`${args.to}T00:00:00+02:00`).getTime() + DAY) } : {}),
-      }
-    : null;
-  // What's still to do is "planned". What HAPPENED is done too — a golf day on
-  // 22 September is marked done afterwards and must still be found. Cancelled is
-  // never shown (both spellings are in the data).
-  const history = args.when === "past" || dated !== null;
-  const take = args.limit ?? 15;
-  // BLOCKED TIME IS ON THE CALENDAR. This search is what the assistant is told
-  // IS the calendar, and it used to leave blocked time out of every answer — so
-  // "what is in my calendar this week?" came back "nothing" for someone whose
-  // Tuesday was blocked (Sean, 2026-10-11). It is left out only of the two
-  // WORK lists, where it does not belong: time off is never "overdue" and is
-  // not something to get done today — whether or not dates were given with it.
-  const workList = args.when === "overdue" || args.when === "today_and_overdue";
-  const window: { gte?: Date; lt?: Date } = dated ?? range;
-  const activities = await prisma.activity.findMany({
-    where: {
-      ...(ids === null ? {} : { id: { in: ids } }),
-      status: history ? { notIn: CANCELLED } : "planned",
-      ...(workList ? { availabilityBlock: false } : {}),
-      ...(args.type ? { type: fuzzy(args.type) } : {}),
-      AND: [
-        // Everything is placed by when it STARTS — except blocked time, which
-        // lasts: leave from Sunday to Wednesday is in Monday's week although it
-        // began before it. The same overlap rule the calendar page draws by.
-        {
-          OR: [
-            { dueDate: window },
-            ...(!workList && window.gte ? [{ availabilityBlock: true, dueDate: { lt: window.gte }, endDate: { gt: window.gte } }] : []),
-          ],
-        },
-        // Theirs, or a meeting they're an attendee of.
-        ...(args.assignedTo
-          ? [{ OR: [{ assignedTo: { name: fuzzy(args.assignedTo) } }, { attendees: { some: { user: { name: fuzzy(args.assignedTo) } } } }] }]
-          : []),
-        ...(args.search ? [{ OR: [{ summary: fuzzy(args.search) }, { note: fuzzy(args.search) }] }] : []),
-      ],
-    },
-    // Most recent first when looking back with no dates ("what golf days did we have").
-    orderBy: { dueDate: args.when === "overdue" || (args.when === "past" && !dated) ? "desc" : "asc" },
-    take: take + 1,
-    select: {
-      id: true, type: true, summary: true, dueDate: true, endDate: true, allDay: true, availabilityBlock: true, status: true, leadId: true, contactId: true,
-      assignedTo: { select: { name: true } },
-      lead: { select: { name: true } },
-    },
-  });
-  const page = activities.slice(0, take);
-  const href = (a: (typeof activities)[number]) =>
-    a.leadId ? `/leads/${a.leadId}` : a.contactId ? `/contacts/${a.contactId}` : "/activities";
-  if (page.length === 0) {
-    // "Nothing" with no dates reads as "nothing ever". Say what was looked at:
-    // whose, which days, and that it means the calendar including blocked time.
-    const day = (d: Date) => d.toLocaleDateString("en-ZA", { timeZone: "Africa/Johannesburg", weekday: "short", day: "numeric", month: "short" });
-    const from = window.gte ? day(window.gte) : null;
-    // `lt` is the first moment AFTER the window: its last day is the day before.
-    const to = window.lt ? day(new Date(window.lt.getTime() - 1)) : null;
-    const span = from && to ? (from === to ? `on ${from}` : `from ${from} to ${to}`) : from ? `from ${from} onwards` : to ? `up to ${to}` : "";
-    return {
-      truncated: false,
-      rows: [],
-      data: [{
-        note: `Nothing ${history ? "recorded" : "planned"} ${span}${args.assignedTo ? ` for ${args.assignedTo}` : ""}${args.search ? ` matching "${args.search}"` : ""}${args.type ? ` of type ${args.type}` : ""} — no calls, meetings, to-dos or events${workList ? "" : ", and no blocked time"}. Give those dates in your answer.${history ? "" : " Completed items are not included: ask with \"past\" for what was done."}`,
-      }],
-    };
-  }
-  return {
-    truncated: activities.length > take,
-    data: page.map((a) => ({
-      // The id is what a reschedule or cancel proposal names.
-      id: a.id,
-      link: href(a),
-      type: a.availabilityBlock ? "blocked time" : a.type,
-      summary: a.summary,
-      due: dateKey(a.dueDate),
-      // A calendar item has a time of day, and blocked time an end: "Tuesday, blocked 09:00–11:00".
-      ...(a.allDay ? { allDay: true } : { time: saLocal(a.dueDate).slice(11) }),
-      ...(a.availabilityBlock && a.endDate ? { until: a.allDay ? dateKey(new Date(a.endDate.getTime() - 1)) : saLocal(a.endDate).slice(11) } : {}),
-      ...(a.availabilityBlock ? { blockedTime: true } : {}),
-      ...(history ? { status: a.status } : {}),
-      // Leave that began yesterday is not late.
-      ...(a.status === "planned" && !a.availabilityBlock && a.dueDate < startOfToday ? { overdue: true } : {}),
-      assignedTo: a.assignedTo.name,
-      customer: a.lead?.name ?? null,
-      leadId: a.leadId,
-    })),
-    rows: page.map((a) => ({
-      label: a.summary,
-      detail: `${a.type} · due ${dateKey(a.dueDate)} · ${a.assignedTo.name}`,
-      href: href(a),
-    })),
-  };
-}
-
-/**
- * Customer records for a name — whether or not a lead matches it too. A customer
- * and a deal are different things to put a note on, and "the customer John
- * Smith" has to be findable when John also has a lead.
- *
- * Every word of the name must be in the first name, last name or company ("Sean
- * Tunley" is two columns). `ownId` adds one customer by id: the matched lead's
- * own customer (whose name may differ from the lead's), or the customer page the
- * person is looking at. Only customers this person can open — which is their
- * CUSTOMER access, asked on its own, not their lead access. No phone numbers or
- * emails: enough to tell them apart and to address a note, nothing more.
- */
-export async function customersNamed(user: User, needle: string, ownId?: string | null) {
-  const ids = await getAccessibleContactIds(user);
-  if (ids !== null && ids.length === 0) return [];
-  const words = needle.split(/\s+/).filter(Boolean).slice(0, 4);
-  const byName = words.length ? [{ AND: words.map((word) => ({ OR: [{ firstName: fuzzy(word) }, { lastName: fuzzy(word) }, { company: fuzzy(word) }] })) }] : [];
-  const byId = ownId ? [{ id: ownId }] : [];
-  if (byName.length + byId.length === 0) return [];
-  const found = await prisma.contact.findMany({
-    where: {
-      deletedAt: null,
-      ...(ids === null ? {} : { id: { in: ids } }),
-      OR: [...byId, ...byName],
-    },
-    orderBy: { updatedAt: "desc" },
-    take: 5,
-    select: { id: true, firstName: true, lastName: true, company: true, city: true, createdAt: true },
-  });
-  // The named one first: it is the one "this customer" most likely means.
-  found.sort((a, b) => Number(b.id === ownId) - Number(a.id === ownId));
-  /*
-   * THEIR QUOTES TOO. A quote made for a customer directly sits on no lead, so a
-   * customer with no deal used to come back as a name and a city — and a quote
-   * the person had just been talking about could not be seen at all (Sean,
-   * 2026-10-13: asked to rename a fee on Q-1031, the assistant found the
-   * customer, saw no quote, and asked HIM for a screenshot of it). Only quotes
-   * this person may open, current ones, the newest few — with what is on them.
-   */
-  const quoteIds = (await hasAnyPermission(user, "quotes.view_all", "quotes.view_owned")) ? await getAccessibleQuoteIds(user) : [];
-  const quotes = found.length === 0 || (quoteIds !== null && quoteIds.length === 0) ? [] : await prisma.quote.findMany({
-    where: { contactId: { in: found.map((c) => c.id) }, deletedAt: null, supersededAt: null, ...(quoteIds === null ? {} : { id: { in: quoteIds } }) },
-    orderBy: { createdAt: "desc" },
-    take: 40,
-    select: { id: true, number: true, status: true, contactId: true, leadId: true, createdAt: true, taxInclusive: true, currency: true, depositType: true, depositValue: true, items: true, fees: true },
-  });
-  const sends = await quoteSends(quotes);
-  const moneyFmt = await getRegionalSettings();
-  return found.map((c) => ({
-    contactId: c.id,
-    name: [c.firstName, c.lastName].filter(Boolean).join(" "),
-    company: c.company,
-    city: c.city,
-    customerSince: dateKey(c.createdAt),
-    quotes: quotes.filter((q) => q.contactId === c.id).slice(0, 5).map((q) => ({
-      quote: `Q-${q.number}`,
-      link: `/quotes/${q.id}`,
-      status: q.status,
-      ...(sends.has(q.id) ? { sendStatus: sends.get(q.id)!.status } : {}),
-      onADeal: q.leadId != null,
-      total: formatZAR(payableTotalCents(q), withCurrency(moneyFmt, q.currency)),
-      ...quoteContents(q, withCurrency(moneyFmt, q.currency)),
-    })),
-  }));
-}
-
-/** How many of the closest spellings the database hands nearMatch to rank. */
-const NEAR_CANDIDATES = 40;
-
-/**
- * Deals and customers this person may see whose name is a close spelling of `needle`, closest first (at most five),
- * with ids so DAX can use one once the person picks it.
- *
- * The database ranks EVERY deal and customer this person may open by close spelling (pg_trgm, installed by
- * 20261007092000) and nearMatch.closestNames keeps the ones close enough to offer. It used to look only at names
- * sharing the first three letters of a word asked for, and only the fifty most recently changed, keeping a match
- * only one letter out: "Clive Jammim" never reached an older "Clive Jammine" (Sean, 2026-10-29).
- *
- * Raw SQL passes no guard, so both boundaries are in the query: this person's deals and customers (the same id
- * lists as everywhere else), in this workspace — DAX's own rule (ownedWriteTenantId, as its other searches), plus
- * rows with no workspace only while it is the only workspace (docs/TENANT-ENFORCEMENT-PREREQUISITES.md).
- */
-async function nearlyNamed(user: User, needle: string, leadIds: string[] | null) {
-  if (!nameWords(needle).length) return [];
-  const contactIds = await getAccessibleContactIds(user);
-  const tenantId = ownedWriteTenantId();
-  // The workspace predicate is written out in each query (not shared as a fragment) so the tenant-access sweep sees it.
-  const [leads, contacts] = await Promise.all([
-    leadIds !== null && leadIds.length === 0
-      ? Promise.resolve([])
-      : prisma.$queryRaw<{ id: string; name: string; title: string; status: string }[]>`
-          SELECT "id", "name", "title", "status"
-            FROM "Lead"
-           WHERE "deletedAt" IS NULL AND ("tenantId" = ${tenantId} OR ("tenantId" IS NULL AND (SELECT count(*) FROM "Tenant") = 1))
-             AND (${leadIds === null} OR "id" = ANY(${leadIds ?? []}::text[]))
-           ORDER BY GREATEST(word_similarity(${needle}, "name"), similarity("name", ${needle}), word_similarity(${needle}, "title")) DESC, "updatedAt" DESC
-           LIMIT ${NEAR_CANDIDATES}`,
-    contactIds !== null && contactIds.length === 0
-      ? Promise.resolve([])
-      : prisma.$queryRaw<{ id: string; firstName: string; lastName: string | null; company: string | null }[]>`
-          SELECT "id", "firstName", "lastName", "company"
-            FROM "Contact"
-           WHERE "deletedAt" IS NULL AND ("tenantId" = ${tenantId} OR ("tenantId" IS NULL AND (SELECT count(*) FROM "Tenant") = 1))
-             AND (${contactIds === null} OR "id" = ANY(${contactIds ?? []}::text[]))
-           ORDER BY GREATEST(
-                      word_similarity(${needle}, concat_ws(' ', "firstName", "lastName")),
-                      similarity(concat_ws(' ', "firstName", "lastName"), ${needle}),
-                      word_similarity(${needle}, coalesce("company", ''))
-                    ) DESC, "updatedAt" DESC
-           LIMIT ${NEAR_CANDIDATES}`,
-  ]);
-  const deals = leads.map((l) => ({ match: { kind: "deal" as const, leadId: l.id, name: l.name, status: l.status }, names: [l.name, l.title] }));
-  const people = contacts.map((c) => {
-    const person = [c.firstName, c.lastName].filter(Boolean).join(" ");
-    return { match: { kind: "customer" as const, contactId: c.id, name: person || c.company || "" }, names: [person, c.company] };
-  });
-  return closestNames(needle, [...deals, ...people], (candidate) => candidate.names).map((candidate) => candidate.match);
-}
 
 /**
  * One lead in depth — what a colleague would read before saying "here's what
@@ -1688,9 +1057,6 @@ async function dailyBrief(user: User): Promise<ToolOutput> {
   };
 }
 
-function refused(what: string): ToolOutput {
-  return { truncated: false, rows: [], data: [{ note: `You don't have access to ${what}.` }] };
-}
 
 async function recallDecision(user: User, raw: z.infer<typeof decisionArgs>): Promise<ToolOutput> {
   const args = decisionArgs.parse(raw);
@@ -3805,10 +3171,6 @@ function deliveryDay(day: string): string {
   return new Date(`${day}T12:00:00+02:00`).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric", timeZone: "Africa/Johannesburg" }).replace(/,/g, "");
 }
 
-/** "2026-10-07T14:30" — a moment as South African wall-clock time, the form the actions take. */
-export function saLocal(d: Date): string {
-  return new Date(d.getTime() + 2 * 60 * 60 * 1000).toISOString().slice(0, 16);
-}
 
 function dedupeRows(rows: AssistantRow[]): AssistantRow[] {
   const seen = new Set<string>();

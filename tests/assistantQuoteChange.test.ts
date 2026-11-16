@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { ACTION_INSTRUCTIONS, matchQuoteRow, quoteChangeText, splitActions, type QuoteChange } from "../src/lib/assistantActions";
 import { WHATSAPP_CONFIRMABLE } from "../src/lib/assistantWhatsAppRules";
+import { daxCore } from "./daxCore";
 
 /*
  * Sean, 2026-10-12, three refusals in a row on a draft DAX had built:
@@ -76,7 +77,7 @@ test("DAX is told it can, and it is confirmable on WhatsApp", () => {
 });
 
 test("a card only for a draft they may edit and open, for rows that are on it, with a colour the product comes in", () => {
-  const assistant = code("src/lib/crmAssistant.ts");
+  const assistant = daxCore(code);
   const branch = assistant.slice(assistant.indexOf('if (p.type === "quote_change")'), assistant.indexOf('if (p.type === "quote_add")'));
   assert.match(branch, /if \(!\(await hasPermission\(user, "quotes\.edit"\)\)\) \{ problems\.push\("Your role can't edit quotes\."\); continue; \}/);
   // Not there and not theirs are told the same way: no card, and no hint that the quote exists.
@@ -110,7 +111,7 @@ test("with ONE line on the quote, the line need not be named — and the same fo
 
   // DAX is SHOWN what is on a quote: its lines (with colour) and fees, as they are named there — in the quote
   // search, a lead's quotes, and a customer's quotes.
-  const assistant = code("src/lib/crmAssistant.ts");
+  const assistant = daxCore(code);
   assert.equal((assistant.match(/\.\.\.quoteContents\((quote|q), withCurrency\(moneyFmt, (quote|q)\.currency\)\),/g) ?? []).length, 3);
   const contents = assistant.slice(assistant.indexOf("function quoteContents("), assistant.indexOf("export async function findActivities("));
   assert.match(contents, /`\$\{item\.qty\} × \$\{item\.description\}\$\{item\.colorPreference \? ` — colour \$\{item\.colorPreference\}` : ""\}/);
@@ -188,7 +189,7 @@ test("THE ANSWER IS REPLACED when it speaks of a task that was not set up — ne
 
   // Wired: decided from the cards that came out and the reasons the tasks gave; it REPLACES the answer that is
   // shown AND saved — only where tasks can be proposed at all — and a replaced answer carries no citations.
-  const assistant = code("src/lib/crmAssistant.ts");
+  const assistant = daxCore(code);
   assert.match(assistant, /const actions = !proposes \? \[\] : await resolveActions\(user, proposals, problems, taskWrite\?\.ok \? taskWrite\.sheet : null, cardUpload\)\.catch\(/);
   // A check-back DAX set itself (proactive DAX part 3) is a task that WAS set up, so it isn't counted as one that came to nothing.
   assert.match(assistant, /const settled = proposes \? settledAnswer\(resolved\.plain, actions, problems, Math\.max\(0, reply\.attempted - checkBacks\.length - drops\.length - actions\.length - problems\.length\)\) : null;/);
@@ -257,7 +258,7 @@ test("A QUOTE CAN BE LOOKED UP BY ITS NUMBER — or its lines are only seen when
   assert.equal(typeof planInstructions, "function");
 
   // That one quote — and still only if this person may open it: the number narrows, the access filter stays.
-  const assistant = code("src/lib/crmAssistant.ts");
+  const assistant = daxCore(code);
   const find = assistant.slice(assistant.indexOf("async function findQuotes("), assistant.indexOf("function quoteContents("));
   assert.match(find, /const wantedNumber = args\.number === undefined \? null : Number\(String\(args\.number\)\.replace\(\/\^Q-\?\/i, ""\)\);/);
   assert.match(find, /\.\.\.\(wantedNumber === null \? \{ supersededAt: null \} : \{ number: wantedNumber \}\),\s*\.\.\.\(ids === null \? \{\} : \{ id: \{ in: ids \} \}\),/);
@@ -266,7 +267,7 @@ test("A QUOTE CAN BE LOOKED UP BY ITS NUMBER — or its lines are only seen when
 });
 
 test("A CUSTOMER'S RECORD LISTS THEIR QUOTES — a quote on no deal was invisible (2026-10-13: DAX asked for a screenshot)", () => {
-  const assistant = code("src/lib/crmAssistant.ts");
+  const assistant = daxCore(code);
   const named = assistant.slice(assistant.indexOf("export async function customersNamed("), assistant.indexOf("export async function leadBrief("));
   // Only quotes this person may open: their quote permission, then their access to each quote.
   assert.match(named, /const quoteIds = \(await hasAnyPermission\(user, "quotes\.view_all", "quotes\.view_owned"\)\) \? await getAccessibleQuoteIds\(user\) : \[\];/);
@@ -283,6 +284,6 @@ test("DAX proposes the change even when it cannot see the quote — and never as
   assert.match(ACTION_INSTRUCTIONS, /IF YOU CANNOT SEE WHAT IS ON THE QUOTE, PROPOSE THE CHANGE ANYWAY/);
   assert.match(ACTION_INSTRUCTIONS, /NEVER ask the person for a screenshot, or to tell you what is on a quote, or what its status is\./);
   // …which is safe because a task that finds no such row says so, with what IS on the quote (settledAnswer).
-  const assistant = code("src/lib/crmAssistant.ts");
+  const assistant = daxCore(code);
   assert.match(assistant, /`\$\{ref\} has no single fee called "\$\{wanted\.fee\}"` : `Which fee on \$\{ref\}\?`\} Its fees: \$\{named\(quote\.fees\.map\(\(row\) => row\.label\)\)\}\./);
 });

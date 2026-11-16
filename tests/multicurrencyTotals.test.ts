@@ -110,6 +110,7 @@ test("pipeline snapshot: every deal counts toward its stage; only base values ar
   assert.match(src("src/lib/dashboard/cards.tsx"), /segments: stageSegments\(all, moneyFmt\.currency\)/);
 });
 import { homeNumbers } from "../src/lib/home/focusRules";
+import { daxCore } from "./daxCore";
 
 const src = (rel: string) => readFileSync(rel, "utf8");
 const ZAR = { currency: "ZAR", locale: "en-ZA" };
@@ -168,7 +169,7 @@ test("lists and boards total per currency", () => {
   assert.match(src("src/components/PipelineSummary.tsx"), /formatTotals\(pipeline\.openValues, moneyFmt\)/);
   assert.match(src("src/app/(app)/quotes/page.tsx"), /totalsByCurrency\(openQuotes,/);
   assert.match(src("src/lib/crmAssistantStats.ts"), /by: \["assignedToId", "currency"\]/);
-  assert.match(src("src/lib/crmAssistant.ts"), /by: \["stageId", "currency"\]/);
+  assert.match(daxCore(src), /by: \["stageId", "currency"\]/);
 });
 
 /* ── catalogue prices are base-currency prices ─────────────────────────────── */
@@ -177,7 +178,7 @@ test("a catalogue price is never put on a quote in another currency", () => {
   const editor = src("src/components/quotes/QuoteEditorDialog.tsx");
   assert.match(editor, /unitPrice: current\.currency \? "" : priceInput\(product\.basePriceCents\)/);
   assert.match(editor, /if \(\(\(draft\.currency && line\.kind === "catalogue"\) \|\| repricing\) && !line\.unitPrice\.trim\(\)\)/, "and a blank one isn't saved as 0");
-  const dax = src("src/lib/crmAssistant.ts");
+  const dax = daxCore(src);
   assert.match(dax, /if \(quote\.currency\) \{ problems\.push\(foreignCurrencyQuote\(/);
   assert.match(dax, /if \(deal\.currency\) \{ problems\.push\(foreignCurrencyQuote\(/);
 });

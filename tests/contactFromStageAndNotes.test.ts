@@ -17,9 +17,10 @@ test("past the pipeline's first stage = contacted, dated to the move; the first 
 });
 
 test("EVERY reader of a lead's last contact takes the stage move — one rule, so lists can't disagree", () => {
-  for (const file of ["src/lib/leadScoreLoader.ts", "src/lib/crmAssistant.ts", "src/lib/crmAssistantStats.ts", "src/lib/assistantWatch.ts"]) {
+  // DAX's find_leads moved out of crmAssistant.ts into assistant/lookups/leads.ts (file-split plan step 2).
+  for (const file of ["src/lib/leadScoreLoader.ts", "src/lib/assistant/lookups/leads.ts", "src/lib/crmAssistantStats.ts", "src/lib/assistantWatch.ts"]) {
     const src = read(file);
-    assert.match(src, /import \{ firstStageOrders, stageContactAt \} from "\.\/stageContact";/, file);
+    assert.match(src, /import \{ firstStageOrders, stageContactAt \} from "(\.|\.\.(\/\.\.)*)\/stageContact";/, file);
     assert.match(src, /const firstOrders = await firstStageOrders\(/, file);
     assert.match(src, /stageContactAt\([a-z]+, firstOrders\)/, file);
   }

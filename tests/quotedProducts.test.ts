@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { countQuoted, lineMatches, modelsNamed } from "../src/lib/quotedProducts";
 import { quoteArgs } from "../src/lib/crmAssistantPlan";
+import { daxCore } from "./daxCore";
 
 // The real catalogue's names (2026-11-02).
 const CATALOGUE = ["Denago EV Rover XL", "Denago EV Rover XL 6", "Denago EV Rover XXL", "Denago EV Nomad", "Denago EV Nomad XL", "Denago EV Scout 2", "Denago EV Scout 4"]
@@ -51,7 +52,7 @@ test("Sean, 2026-11-02 — 'how many white Rover XLs are on quotes': quotes and 
 
 test("find_quotes takes product and colour, resolves the model from the catalogue, and counts every match", () => {
   assert.ok(quoteArgs.safeParse({ product: "Rover XL", colour: "white" }).success);
-  const code = readFileSync("src/lib/crmAssistant.ts", "utf8");
+  const code = daxCore();
   const fn = code.slice(code.indexOf("export async function findQuotes"), code.indexOf("function quoteContents"));
   assert.match(fn, /modelsNamed\(await prisma\.product\.findMany\(\{ where: \{ deletedAt: null \}/);
   assert.match(fn, /items: \{ some: quoteLineWhere\(models\?\.map\(\(m\) => m\.id\) \?\? null, args\.colour\) \}/);

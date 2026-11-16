@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { ACTION_INSTRUCTIONS, MAX_ACTIONS, MAX_CHOICES, splitActions, splitChoices } from "../src/lib/assistantActions";
 import { WHATSAPP_CONFIRMABLE } from "../src/lib/assistantWhatsAppRules";
 import { splitLearn } from "../src/lib/assistantMemory";
+import { daxCore } from "./daxCore";
 
 const code = (rel: string) =>
   readFileSync(new URL(`../${rel}`, import.meta.url), "utf8")
@@ -42,7 +43,7 @@ test("choices become buttons: parsed, stripped, capped — and all three trailer
   assert.equal(splitChoices(`Pick.\nCHOICES: ${JSON.stringify(["a", "b", "c", "d", "e", "f"])}`).choices.length, MAX_CHOICES);
   assert.deepEqual(splitChoices("No choice here."), { answer: "No choice here.", choices: [] });
   // Wired: the answer step is told about them, the chat sends a tap as the next question.
-  assert.match(code("src/lib/crmAssistant.ts"), /proposes \? ACTION_INSTRUCTIONS : "",\s*checksBack \? CHECK_BACK_RULE : "",\s*source === "schedule" \? "" : CHOICE_INSTRUCTIONS,/);
+  assert.match(daxCore(code), /proposes \? ACTION_INSTRUCTIONS : "",\s*checksBack \? CHECK_BACK_RULE : "",\s*source === "schedule" \? "" : CHOICE_INSTRUCTIONS,/);
   const chat = code("src/components/AssistantChat.tsx");
   assert.match(chat, /turn === turns\[0\] && !pending && turn\.choices/, "only the newest answer's choices");
   assert.match(chat, /onClick=\{\(\) => ask\(choice\)\}/);
@@ -68,7 +69,7 @@ test("LEARN and ACTIONS lines can both trail an answer, in either order", () => 
 });
 
 test("proposals are checked against what this person may touch, names resolved, nothing run", () => {
-  const lib = code("src/lib/crmAssistant.ts");
+  const lib = daxCore(code);
   const resolve = lib.slice(lib.indexOf("async function resolveActions"), lib.indexOf("function dedupeRows"));
   assert.match(resolve, /if \(!\(await canAccessLead\(user, p\.leadId\)\)\) \{ problems\.push\(DEAL_GONE\); continue; \}/);
   assert.match(resolve, /staff\.find\(/, "a person must be in this workspace");
@@ -89,7 +90,7 @@ test("a note can go on a CUSTOMER with no lead, and be pinned — proposed, chec
   ]);
 
   // Resolved: only a customer this person can open, not one in the bin; nothing is run.
-  const lib = code("src/lib/crmAssistant.ts");
+  const lib = daxCore(code);
   const resolve = lib.slice(lib.indexOf("async function resolveActions"), lib.indexOf("function dedupeRows"));
   // (Up to the next customer-level branch — a quote for a customer — which comes before the lead checks.)
   const branch = resolve.slice(resolve.indexOf('if (p.type === "customer_note")'), resolve.indexOf('if (p.type === "quote_build")'));
@@ -147,7 +148,7 @@ test("a PERSONAL calendar item can be proposed: time blocked on the asker's own 
   ], "a note is required; 15 minutes at least; a real date; and nobody else's calendar can be named");
 
   // Resolved to a card for the asker's own calendar — no lead, no assignee, and never one in the past.
-  const lib = code("src/lib/crmAssistant.ts");
+  const lib = daxCore(code);
   const resolve = lib.slice(lib.indexOf("async function resolveActions"), lib.indexOf("function dedupeRows"));
   const branch = resolve.slice(resolve.indexOf('if (p.type === "block_time")'), resolve.indexOf('if (p.type === "watch")'));
   assert.match(branch, /kind: "block_time" as const, leadId: null, leadLabel: "Your calendar"/);
