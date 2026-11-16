@@ -9,10 +9,19 @@ import { redactForLog } from "./redactLog";
  */
 export const KEPT_BODY_CHARS = 1500;
 
+/** ID numbers, email addresses, phone numbers and every run of 8+ digits (account, card, policy numbers) masked. */
+function masked(text: string): string {
+  // Eight or more digits, spaces or dashes allowed between them: an account, card or policy number.
+  return redactForLog(text).replace(/\d(?:[\s-]?\d){7,}/g, "[number]");
+}
+
+/** The subject as kept: masked the same way as the body (review of #1138 — applicant numbers land in subjects too). */
+export function storedFinanceEmailSubject(financeHouse: string, subject: string): string {
+  return `Email from ${financeHouse}: ${masked(subject)}`.slice(0, 300);
+}
+
 export function storedFinanceEmailBody(body: string): string {
-  const masked = redactForLog(body)
-    // Eight or more digits, spaces or dashes allowed between them: an account, card or policy number.
-    .replace(/\d(?:[\s-]?\d){7,}/g, "[number]");
-  const clipped = masked.length > KEPT_BODY_CHARS ? `${masked.slice(0, KEPT_BODY_CHARS).trimEnd()}…` : masked;
+  const clean = masked(body);
+  const clipped = clean.length > KEPT_BODY_CHARS ? `${clean.slice(0, KEPT_BODY_CHARS).trimEnd()}…` : clean;
   return `${clipped}\n\n(Shortened, with ID, account and contact numbers masked. The full email is in the mailbox.)`;
 }

@@ -4,7 +4,7 @@ import { ciExactIds } from "./ciExact";
 import { resolveTenantActor } from "./tenantActor";
 import { sendPushToAll } from "./push";
 import { matchFinanceEmail } from "./dealFinanceRules";
-import { storedFinanceEmailBody } from "./financeEmailRules";
+import { storedFinanceEmailBody, storedFinanceEmailSubject } from "./financeEmailRules";
 import { canAccessLead } from "./permissions";
 
 export type InboundEmail = { subject: string; body: string; when: Date; messageId: string | null; dedupeKey: string };
@@ -54,7 +54,7 @@ export async function fileFinanceHouseEmail(fromEmail: string, email: InboundEma
       data: {
         type: "note",
         direction: null,
-        subject: `Email from ${house.name}: ${email.subject}`.slice(0, 300),
+        subject: storedFinanceEmailSubject(house.name, email.subject),
         // The answer, not the applicant: shortened and masked (financeEmailRules.ts). The full email stays in the mailbox.
         body: storedFinanceEmailBody(email.body),
         occurredAt: email.when,

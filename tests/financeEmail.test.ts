@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import Module, { createRequire } from "node:module";
 import { matchFinanceEmail } from "../src/lib/dealFinanceRules";
-import { KEPT_BODY_CHARS, storedFinanceEmailBody } from "../src/lib/financeEmailRules";
+import { KEPT_BODY_CHARS, storedFinanceEmailBody, storedFinanceEmailSubject } from "../src/lib/financeEmailRules";
 
 // fileFinanceHouseEmail against a world the test controls: one finance house, one deal (APP-77), its salesperson.
 const world = { owner: null as string | null, mayOpen: true, dedupe: 0 };
@@ -82,6 +82,18 @@ test("the notification goes to the deal's own salesperson only, and only if they
   assert.equal((await filed(null, true)).pushes.length, 0, "no salesperson: nobody — it is on the deal");
   assert.equal(stored.at(-1)?.type, "note");
   assert.match(String(stored.at(-1)?.body), /The full email is in the mailbox/);
+});
+
+test("the SUBJECT as stored is masked too (re-review of #1138) — matched on the raw text first, kept masked", async () => {
+  world.owner = null;
+  world.dedupe += 1;
+  const subject = "APP-77 approved — ID 8001015009087, acc 62 1234 5678, call 082 555 0101";
+  const out = await fileFinanceHouseEmail("deals@wesbank.example", { subject, body: "Approved.", when: new Date(), messageId: null, dedupeKey: `k${world.dedupe}` });
+  assert.equal(out, true, "still matched to the deal by its reference");
+  const kept = String(stored.at(-1)?.subject);
+  assert.match(kept, /^Email from WesBank: APP-77 approved/);
+  assert.doesNotMatch(kept, /8001015009087|62 1234 5678|082 555 0101/);
+  assert.equal(storedFinanceEmailSubject("WesBank", "x".repeat(500)).length, 300);
 });
 
 test("never a guess: no deal, two deals, or a first name alone files nothing", () => {
