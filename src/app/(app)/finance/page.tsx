@@ -33,7 +33,7 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
         icon={Landmark}
         eyebrow="Sales"
         title="Finance"
-        description="Every financed deal and where it stands with the finance house. A status waiting on the customer or the finance house for 3 working days is flagged to chase."
+        description="Every financed quote and where it stands with the finance house — finance is per quote, and a cancelled quote's drops off. A status waiting on the customer or the finance house for 3 working days is flagged to chase."
         stats={[{ label: "To chase", value: toChase }, { label: all ? "Deals" : "In progress", value: deals.length }]}
         actions={
           <div className="flex gap-2">
@@ -52,6 +52,7 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
             <thead>
               <tr>
                 <th>Customer</th>
+                <th>Quote</th>
                 <th>Finance house</th>
                 <th>Status</th>
                 <th>Since</th>
@@ -67,6 +68,7 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
                     {deal.leadStatus !== "open" && <span className="ml-2 text-xs text-muted-foreground">{deal.leadStatus}</span>}
                     {deal.chase && <p className="mt-0.5 text-xs text-amber-300">{deal.chase.actionLabel}</p>}
                   </td>
+                  <td className="whitespace-nowrap">{deal.quoteId && deal.quoteNumber ? <Link href={`/deals/${deal.quoteId}`} className="hover:text-primary">Q-{deal.quoteNumber}</Link> : "—"}</td>
                   <td>{deal.financeHouse}{deal.reference && <span className="block text-xs text-muted-foreground">{deal.reference}</span>}</td>
                   <td><StatusPill tone={financeTone(deal.status)}>{financeStatusShort(deal.status)}</StatusPill></td>
                   <td className="whitespace-nowrap">{formatDate(deal.statusAt)}</td>

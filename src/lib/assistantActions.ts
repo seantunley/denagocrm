@@ -224,6 +224,8 @@ export const proposedAction = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("finance"),
     leadId,
+    // Which of the deal's quotes ("Q-1045") — finance is per quote. Left out when the deal has only one in play.
+    quote: text.max(40).optional(),
     status: z.enum(["docs_outstanding", "submitted", "approved", "declined", "paid_out", "withdrawn"]),
     financeHouse: text.max(120).optional(),
     reference: text.max(80).optional(),

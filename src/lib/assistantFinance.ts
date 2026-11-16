@@ -2,7 +2,7 @@ import "server-only";
 import { canAccessLead, hasPermission, type PermissionUser } from "./permissions";
 import { isModuleEnabled } from "./modules/enabled";
 import { ownedWriteTenantId } from "./tenantWrite";
-import { dealFinanceHouses, loadDealFinance, loadFinanceDeals } from "./dealFinance";
+import { dealFinanceHouses, loadDealFinance, loadFinanceDeals, loadLeadFinances, type LeadQuoteFinance } from "./dealFinance";
 import { financeStatusLabel, financeStatusShort, isFinanceStatus } from "./dealFinanceRules";
 import type { FinanceCard } from "./assistantFinanceRules";
 import { johannesburgDateKey } from "./activityDay";
@@ -31,14 +31,14 @@ export async function financeLookup(user: PermissionUser, args: FinanceArgs): Pr
   const rows = deals.slice(0, 60);
   return {
     rows: rows.map((deal) => ({
-      label: `${deal.name} — ${deal.financeHouse}`,
+      label: `${deal.name}${deal.quoteNumber ? ` · Q-${deal.quoteNumber}` : ""} — ${deal.financeHouse}`,
       detail: `${financeStatusShort(deal.status)} since ${johannesburgDateKey(deal.statusAt)}${deal.chase ? ` · ${deal.chase.actionLabel.toLowerCase()}` : ""}`,
       href: `/leads/${deal.leadId}?tab=finance`,
     })),
     data: [
       { total: deals.length, toChase: deals.filter((deal) => deal.chase).length, note: args.all ? "Every financed deal." : "In progress only: not paid out, withdrawn or on a lost deal." },
       ...rows.map((deal) => ({
-        leadId: deal.leadId, link: `/leads/${deal.leadId}?tab=finance`, customer: deal.name, deal: deal.leadStatus, owner: deal.ownerName ?? "unassigned",
+        leadId: deal.leadId, quote: deal.quoteNumber ? `Q-${deal.quoteNumber}` : null, link: `/leads/${deal.leadId}?tab=finance`, customer: deal.name, deal: deal.leadStatus, owner: deal.ownerName ?? "unassigned",
         financeHouse: deal.financeHouse, reference: deal.reference, status: financeStatusLabel(deal.status), since: johannesburgDateKey(deal.statusAt),
         chase: deal.chase?.detail ?? null,
       })),
@@ -47,7 +47,25 @@ export async function financeLookup(user: PermissionUser, args: FinanceArgs): Pr
   };
 }
 
-export type FinanceProposal = { leadId: string; status: string; financeHouse?: string; reference?: string; note?: string; reason?: string };
+export type FinanceProposal = { leadId: string; quote?: string; status: string; financeHouse?: string; reference?: string; note?: string; reason?: string };
+
+/**
+ * Which of the deal's quotes the finance is for — finance is per quote. Named ("Q-1045"): that one, if it is on this
+ * deal. Not named: the one already financed, else the only quote in play — never a guess between two.
+ */
+function pickQuote(quotes: LeadQuoteFinance[], said: string | undefined): LeadQuoteFinance | { problem: string } {
+  if (quotes.length === 0) return { problem: "There's no quote on this deal yet — finance is kept per quote, so make the quote first." };
+  const number = said ? Number(said.replace(/^\s*Q-?\s*/i, "")) : NaN;
+  if (said) {
+    const named = quotes.find((q) => q.quote.number === number);
+    return named ?? { problem: `${said.trim()} isn't a quote on this deal — on it: ${quotes.map((q) => `Q-${q.quote.number}`).join(", ")}.` };
+  }
+  const live = quotes.filter((q) => q.quote.inPlay);
+  const financed = live.filter((q) => q.finance);
+  if (financed.length === 1) return financed[0];
+  if (financed.length === 0 && live.length === 1) return live[0];
+  return { problem: `Which quote's finance — ${(financed.length ? financed : live).map((q) => `Q-${q.quote.number}`).join(" or ")}?` };
+}
 
 /** The card for a proposal, or why there is none. The lead is one the person may open (checked by the caller). */
 export async function financeCard(user: PermissionUser, p: FinanceProposal, lead: { name: string }, id: string, leadLabel: string): Promise<FinanceCard | { problem: string }> {
@@ -55,12 +73,16 @@ export async function financeCard(user: PermissionUser, p: FinanceProposal, lead
   if (!(await hasPermission(user, "leads.edit"))) return { problem: "Your role can't change a deal's finance." };
   if (!isFinanceStatus(p.status)) return { problem: "Where does the finance stand — submitted, approved, declined, paid out?" };
   const tenantId = ownedWriteTenantId();
-  const [current, houses] = await Promise.all([
-    loadDealFinance(tenantId, p.leadId),
+  const [quotes, houses] = await Promise.all([
+    loadLeadFinances(tenantId, p.leadId),
     // Only the finance houses ON THIS DEAL: a deal is financed because one was added to its suppliers. A cash deal isn't.
     dealFinanceHouses(tenantId, p.leadId),
   ]);
   if (houses.length === 0) return { problem: `${lead.name}'s deal isn't on finance — add the finance house to the deal's suppliers (on the deal page) first.` };
+  const picked = pickQuote(quotes, p.quote);
+  if ("problem" in picked) return picked;
+  const { quote, finance: current } = picked;
+  if (!current && !quote.inPlay) return { problem: `Q-${quote.number} isn't going ahead — start the finance on the quote that is.` };
   // Named: that one, exactly or by its start. Not named: the deal's own, else the only one on the deal — never a guess.
   const said = p.financeHouse?.trim().toLowerCase();
   const house = said
@@ -70,11 +92,12 @@ export async function financeCard(user: PermissionUser, p: FinanceProposal, lead
   const reference = p.reference?.trim() || current?.reference || null;
   const note = p.note?.trim() || current?.note || null;
   if (current && current.status === p.status && current.vendorId === house.id && current.reference === reference && current.note === note) {
-    return { problem: `${lead.name}'s finance with ${house.name} is already ${financeStatusShort(p.status).toLowerCase()}.` };
+    return { problem: `${lead.name}'s finance on Q-${quote.number} with ${house.name} is already ${financeStatusShort(p.status).toLowerCase()}.` };
   }
   return {
     id, kind: "finance", leadId: p.leadId, leadLabel,
-    title: `${lead.name}'s finance: ${financeStatusShort(p.status)}`,
+    title: `${lead.name}'s finance on Q-${quote.number}: ${financeStatusShort(p.status)}`,
+    quoteId: quote.id, quoteNumber: quote.number,
     vendorId: house.id, status: p.status, reference, note,
     wasVersion: current?.updatedAt.toISOString() ?? null,
     detail: [
@@ -95,7 +118,7 @@ export async function financeCard(user: PermissionUser, p: FinanceProposal, lead
 export async function confirmFinanceCard(user: PermissionUser, card: FinanceCard): Promise<{ done: true } | { stale: string } | { form: FormData }> {
   if (!(await canAccessLead(user, card.leadId))) return { stale: "You can't open that deal any more." };
   if (!(await hasPermission(user, "leads.edit"))) return { stale: "Your role can't change a deal's finance." };
-  const now = await loadDealFinance(ownedWriteTenantId(), card.leadId);
+  const now = await loadDealFinance(ownedWriteTenantId(), card.quoteId);
   // Done only when EVERYTHING the card sets already stands — a reference- or note-only card is not done by its status.
   if (now && now.status === card.status && now.vendorId === card.vendorId && now.reference === card.reference && now.note === card.note) return { done: true };
   if ((now?.updatedAt.toISOString() ?? null) !== card.wasVersion) {

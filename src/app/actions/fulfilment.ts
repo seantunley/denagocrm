@@ -330,8 +330,8 @@ export async function scheduleDelivery(quoteId: string, formData: FormData) {
     if (!quote) refuse(QUOTE_GONE);
     if (!quote.depositPaidAt) refuse("Record the deposit before scheduling delivery.");
     if (quote.deliveryScheduledFor) refuse("Delivery is already scheduled.");
-    // A financed deal is delivered once the finance house has approved it (dealFinanceRules.financeBlocksDelivery).
-    const financeHold = await financeDeliveryRefusal(tenantId, quote.leadId);
+    // A financed quote is delivered once the finance house has approved it (dealFinanceRules.financeBlocksDelivery).
+    const financeHold = await financeDeliveryRefusal(tenantId, quote.id);
     if (financeHold) refuse(financeHold);
     const dateRaw = String(formData.get("date") ?? "").trim();
     if (!dateRaw) refuse("Choose a delivery date.");

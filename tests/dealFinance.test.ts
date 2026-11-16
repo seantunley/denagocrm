@@ -8,6 +8,8 @@ import {
   financeBlocksDelivery,
   financeChase,
   financeIsClosed,
+  matchFinanceEmail,
+  quoteInPlay,
   workingDaysBetween,
 } from "../src/lib/dealFinanceRules";
 import { buildBrief, type BriefInput } from "../src/lib/daxBriefRules";
@@ -87,7 +89,8 @@ test("delivery waits for approval: docs outstanding, submitted or declined hold 
 test("the guard sits in the one booking path (DAX's delivery card calls it too), before anything is written", () => {
   const fulfilment = read("src/app/actions/fulfilment.ts");
   const schedule = fulfilment.slice(fulfilment.indexOf("export async function scheduleDelivery"));
-  const guard = schedule.indexOf("const financeHold = await financeDeliveryRefusal(tenantId, quote.leadId);");
+  // THIS quote's finance (finance is per quote): another quote on the deal never holds it.
+  const guard = schedule.indexOf("const financeHold = await financeDeliveryRefusal(tenantId, quote.id);");
   assert.ok(guard > 0, "scheduleDelivery asks");
   assert.ok(guard < schedule.indexOf("attachStageDocument("), "before the paperwork is filed");
   assert.ok(guard < schedule.indexOf("prisma.$transaction"), "before the day is booked");
@@ -96,11 +99,11 @@ test("the guard sits in the one booking path (DAX's delivery card calls it too),
 
 test("THE HANDOVER ITSELF asks again (review of #1137): before any paperwork, and under its transaction with the row held", () => {
   const delivery = read("src/lib/quoteDelivery.ts");
-  const gate = delivery.indexOf("const financeHold = await financeDeliveryRefusal(tenantId, quote.leadId);");
+  const gate = delivery.indexOf("const financeHold = await financeDeliveryRefusal(tenantId, quote.id);");
   assert.ok(gate > 0 && gate < delivery.indexOf("input.collectEvidence("), "before the caller's paperwork is staged");
   const tx = delivery.slice(delivery.indexOf("basePrisma.$transaction(async (tx) => {"));
-  assert.ok(tx.indexOf("financeDeliveryRefusalInTx(tx, tenantId, quote.leadId)") > tx.indexOf("const updated = await tx.quote.updateMany("), "again, once the quote's row is held");
-  assert.match(read("src/lib/dealFinance.ts"), /WHERE f\."tenantId" = \$\{tenantId\} AND f\."leadId" = \$\{leadId\}\s*FOR SHARE OF f/);
+  assert.ok(tx.indexOf("financeDeliveryRefusalInTx(tx, tenantId, quote.id)") > tx.indexOf("const updated = await tx.quote.updateMany("), "again, once the quote's row is held");
+  assert.match(read("src/lib/dealFinance.ts"), /WHERE f\."tenantId" = \$\{tenantId\} AND f\."quoteId" = \$\{quoteId\}\s*FOR SHARE OF f/);
   // Both doors use that one handover.
   assert.match(read("src/app/actions/fulfilment.ts"), /return deliverQuote\(\{/);
   assert.match(read("src/app/actions/stock.ts"), /return deliverQuote\(\{/);
@@ -111,6 +114,8 @@ test("THE HANDOVER ITSELF asks again (review of #1137): before any paperwork, an
 test("saving: leads.edit on THIS lead, a finance house of this workspace only, a dated status, and no lost update", () => {
   const action = read("src/app/actions/dealFinance.ts");
   assert.match(action, /requireLeadAccess\(leadId, "leads\.edit"\)/);
+  // Authorised first (the quote, then its deal) — nothing is looked up or refused for someone who can't open it.
+  assert.match(action, /return asActionResult\(async \(\) => \{\s*\/\/[^\n]*\n\s*await requireQuoteAccess\(quoteId, "leads\.edit"\);/);
   assert.match(action, /const vendorId = text\(formData, "vendorId", 64\);/);
   assert.match(action, /tx\.dealVendor\.findFirst\(\{\s*where: \{ tenantId, leadId, vendorId, vendor: \{ deletedAt: null, kind: "finance" \} \}/, "only a finance house ON THIS DEAL, whatever is posted");
   assert.match(action, /isFinanceStatus\(status\)/);
@@ -127,7 +132,7 @@ test("a cash deal shows no Finance (Sean 2026-11-16): only a deal with a finance
   for (const page of ["src/app/(app)/leads/[id]/page.tsx", "src/app/(app)/deals/[id]/page.tsx"]) {
     const src = read(page);
     assert.match(src, /dealFinanceHouses\((lead\.)?tenantId, lead\.id\)/, page);
-    assert.match(src, /finance \|\| financeHouses\.length > 0/, page);
+    assert.match(src, /(finance|financed) \|\| financeHouses\.length > 0/, page);
     assert.doesNotMatch(src, /kind: "finance"/, `${page}: not every finance house in the workspace`);
   }
 });
@@ -137,9 +142,12 @@ test("the finance house can't be taken off a deal while its finance is live (rev
   for (const s of ["paid_out", "withdrawn"]) assert.equal(financeIsClosed(s), true, s);
   const vendors = read("src/app/actions/vendors.ts");
   const remove = vendors.slice(vendors.indexOf("export async function removeDealVendor("));
-  assert.match(remove, /tx\.dealFinance\.findFirst\(\{ where: \{ tenantId, leadId: quote\.leadId, vendorId \}/);
-  assert.ok(remove.indexOf("financeIsClosed(finance.status)") < remove.indexOf("tx.dealVendor.deleteMany("), "checked before the link goes");
-  assert.match(remove, /Set the finance to Withdrawn first/);
+  // Every finance with that house on the deal's quotes — live only while open AND its quote is still in play.
+  assert.match(remove, /tx\.dealFinance\.findMany\(\{ where: \{ tenantId, leadId: quote\.leadId, vendorId \}/);
+  assert.match(remove, /if \(financeIsClosed\(f\.status\)\) return false;/);
+  assert.match(remove, /return !f\.quoteId \|\| \(on !== undefined && quoteInPlay\(on\)\);/);
+  assert.ok(remove.indexOf("if (live) {") < remove.indexOf("tx.dealVendor.deleteMany("), "checked before the link goes");
+  assert.match(remove, /Set that finance to Withdrawn first/);
 });
 
 test("the lead board shows a financed deal's finance status (Sean 2026-11-16); a cash deal shows nothing", () => {
@@ -166,10 +174,46 @@ test("starting finance and taking its finance house off the deal take turns: bot
   const vendors = read("src/app/actions/vendors.ts");
   const remove = vendors.slice(vendors.indexOf("export async function removeDealVendor("));
   assert.match(remove, /const link = await prisma\.\$transaction\(async \(tx\) => \{\s*if \(quote\.leadId\) await tx\.\$queryRaw`SELECT 1 FROM "Lead"/);
-  assert.ok(remove.search(LOCK) < remove.indexOf("tx.dealFinance.findFirst("), "the lock comes before the finance is checked");
+  assert.ok(remove.search(LOCK) < remove.indexOf("tx.dealFinance.findMany("), "the lock comes before the finance is checked");
 });
 
-test("the table: tenant FKs, one per lead, the statuses checked, row-level security forced", () => {
+test("FINANCE PER QUOTE (Sean 2026-11-16): one per quote; a cancelled or replaced quote's counts for nothing", () => {
+  const q = (status: string, more: Partial<{ supersededAt: Date | null; deletedAt: Date | null }> = {}) => ({ status, supersededAt: null, deletedAt: null, ...more });
+  for (const s of ["draft", "sent", "accepted"]) assert.equal(quoteInPlay(q(s)), true, s);
+  for (const s of ["cancelled", "declined"]) assert.equal(quoteInPlay(q(s)), false, s);
+  assert.equal(quoteInPlay(q("sent", { supersededAt: new Date() })), false, "replaced");
+  assert.equal(quoteInPlay(q("draft", { deletedAt: new Date() })), false, "deleted");
+  // The table: unique per quote, several per deal, the quote in this workspace; existing records moved onto the
+  // deal's newest quote still in play.
+  const sql = read("prisma/migrations/20261116190000_deal_finance_per_quote/migration.sql");
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS "quoteId" TEXT;/);
+  assert.match(sql, /ORDER BY \(q\."supersededAt" IS NULL AND q\."status" NOT IN \('cancelled', 'declined'\)\) DESC, q\."createdAt" DESC/);
+  assert.match(sql, /DROP INDEX IF EXISTS "DealFinance_tenantId_leadId_key";/);
+  assert.match(sql, /CREATE UNIQUE INDEX IF NOT EXISTS "DealFinance_tenantId_quoteId_key"/);
+  assert.match(sql, /FOREIGN KEY \("tenantId", "quoteId"\) REFERENCES "Quote"\("tenantId", "id"\) ON DELETE CASCADE/);
+  // Everything that reads finance reads the quote's: the hold, the panels, the save, the chaser, the board.
+  const lib = read("src/lib/dealFinance.ts");
+  assert.match(lib, /export async function loadDealFinance\(tenantId: string, quoteId: string\) \{\s*return prisma\.dealFinance\.findFirst\(\{\s*where: \{ tenantId, quoteId \}/);
+  for (const name of ["loadFinanceDeals", "financeAttentionSignals", "financeOnBoard"]) {
+    const body = lib.slice(lib.indexOf(`export async function ${name}(`));
+    assert.match(body.slice(0, body.indexOf("\n}\n")), /counts\(row, quotes\)/, `${name}: a cancelled quote's finance doesn't count`);
+  }
+  assert.match(read("src/app/actions/dealFinance.ts"), /where: \{ tenantId, quoteId \},/);
+  assert.match(read("src/app/(app)/leads/[id]/page.tsx"), /\{quoteFinances\.map\(\(\{ quote, finance \}\) => \(\s*<DealFinancePanel key=\{quote\.id\} quote=\{quote\}/, "one panel per quote");
+});
+
+test("a finance-house email naming the customer files once per DEAL, however many of its quotes are financed", () => {
+  const deals = [
+    { id: "f1", leadId: "lead_jody", reference: "APP-1", customer: "Jody Van Heerden" },
+    { id: "f2", leadId: "lead_jody", reference: null, customer: "Jody Van Heerden" },
+    { id: "f3", leadId: "lead_grant", reference: null, customer: "Grant Smith" },
+  ];
+  assert.equal(matchFinanceEmail("Update on Jody Van Heerden", deals)?.leadId, "lead_jody", "two of Jody's quotes are not two customers");
+  assert.equal(matchFinanceEmail("APP-1 approved", deals)?.id, "f1", "the reference still names the quote");
+  assert.equal(matchFinanceEmail("Jody Van Heerden and Grant Smith", deals), null, "two customers: left in the mailbox");
+});
+
+test("the table as first made (one per lead then — per quote since 20261116190000): tenant FKs, statuses checked, RLS forced", () => {
   const sql = read("prisma/migrations/20261116120000_deal_finance/migration.sql");
   assert.match(sql, /FOREIGN KEY \("tenantId", "leadId"\) REFERENCES "Lead"\("tenantId", "id"\)/);
   assert.match(sql, /FOREIGN KEY \("tenantId", "vendorId"\) REFERENCES "Vendor"\("tenantId", "id"\) ON DELETE RESTRICT/);

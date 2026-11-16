@@ -32,6 +32,13 @@ export const financeTone = (status: string): "success" | "warning" | "danger" | 
  * A finance deal can be delivered once the finance house has approved it (or paid). Declined or still waiting: no.
  * Withdrawn means the customer is no longer financing — the deal goes ahead on its own terms.
  */
+/**
+ * Finance is per QUOTE (Sean, 2026-11-16: "only one quote will be accepted"). A cancelled, declined, replaced or
+ * deleted quote's finance is kept on file but counts for nothing: never chased, never on the board, never holding.
+ */
+export const quoteInPlay = (q: { status: string; supersededAt: Date | null; deletedAt: Date | null }): boolean =>
+  !q.deletedAt && !q.supersededAt && q.status !== "cancelled" && q.status !== "declined";
+
 /** Finished with: paid out, or withdrawn. Anything else is live — its finance house stays on the deal. */
 export const financeIsClosed = (status: string): boolean => status === "paid_out" || status === "withdrawn";
 
@@ -71,7 +78,7 @@ export function financeChase(input: { status: string; statusAt: Date; financeHou
  * reference first (a whole word, any case), else the customer's full name; exactly ONE deal, never a guess between two.
  * `text`: the email's subject and body.
  */
-export function matchFinanceEmail<D extends { reference: string | null; customer: string }>(text: string, deals: readonly D[]): D | null {
+export function matchFinanceEmail<D extends { reference: string | null; customer: string; leadId?: string }>(text: string, deals: readonly D[]): D | null {
   const folded = ` ${text.toLowerCase().replace(/\s+/g, " ")} `;
   const has = (needle: string) => {
     const n = needle.toLowerCase().replace(/\s+/g, " ").trim();
@@ -83,7 +90,16 @@ export function matchFinanceEmail<D extends { reference: string | null; customer
     return false;
   };
   const byReference = deals.filter((deal) => deal.reference && has(deal.reference));
-  const byName = deals.filter((deal) => deal.customer.trim().includes(" ") && has(deal.customer));
+  // By name, once per DEAL: finance is per quote, so one deal can carry several records — the email is filed on the
+  // deal either way, and two of its own quotes are not two different customers.
+  const seenLead = new Set<string>();
+  const byName = deals.filter((deal) => {
+    if (!deal.customer.trim().includes(" ") || !has(deal.customer)) return false;
+    if (!deal.leadId) return true;
+    if (seenLead.has(deal.leadId)) return false;
+    seenLead.add(deal.leadId);
+    return true;
+  });
   if (byReference.length > 1) return null;
   if (byReference.length === 1) {
     // A reference that points at one deal while the email names ANOTHER financed customer in full: a forwarded or

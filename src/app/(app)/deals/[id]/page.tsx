@@ -26,7 +26,7 @@ import { prisma } from "@/lib/db";
 import { canAccessContact, canAccessLead, hasAnyPermission, hasPermission, requireQuoteReadAccess, requireRoute } from "@/lib/permissions";
 import { dealFinanceHouses, loadDealFinance } from "@/lib/dealFinance";
 import { isModuleEnabled } from "@/lib/modules/enabled";
-import { financeBlocksDelivery, financeStatusShort } from "@/lib/dealFinanceRules";
+import { financeBlocksDelivery, financeStatusShort, quoteInPlay } from "@/lib/dealFinanceRules";
 import DealFinancePanel from "@/components/deals/DealFinancePanel";
 import { formatDate, formatDateTime, formatZAR } from "@/lib/format";
 import { loadBillToFleet, quoteBillTo } from "@/lib/quoteBillTo";
@@ -240,10 +240,10 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
     quote.lead && (await hasAnyPermission(user, "leads.view_all", "leads.view_owned")) && (await canAccessLead(user, quote.lead.id))
       ? quote.lead
       : null;
-  // Finance through an outside finance house — on the deal's lead, for someone who may open that lead.
+  // Finance through an outside finance house — THIS quote's (finance is per quote), for someone who may open the lead.
   const [finance, financeHouses, canEditFinance] = lead && (await isModuleEnabled("finance"))
     ? await Promise.all([
-        loadDealFinance(tenantId, lead.id),
+        loadDealFinance(tenantId, quote.id),
         dealFinanceHouses(tenantId, lead.id),
         hasPermission(user, "leads.edit"),
       ])
@@ -430,7 +430,7 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
             </Surface>
 
             {lead && (finance || financeHouses.length > 0) && (
-              <DealFinancePanel leadId={lead.id} finance={finance} financeHouses={financeHouses} canEdit={canEditFinance} now={requestNow} />
+              <DealFinancePanel quote={{ id: quote.id, number: quote.number, inPlay: quoteInPlay(quote) }} finance={finance} financeHouses={financeHouses} canEdit={canEditFinance} now={requestNow} />
             )}
 
             {invoice && (

@@ -437,7 +437,7 @@ async function main() {
     const lead = await basePrisma.lead.create({ data: { tenantId, stageId: stage.id, name: customer, title: "Nomad XL", contactId: contact.id, createdById: rep.id, status: "won" } });
     const q = await quoteReadyToDeliver();
     await basePrisma.quote.update({ where: { id: q.id }, data: { leadId: lead.id } });
-    const finance = await basePrisma.dealFinance.create({ data: { tenantId, leadId: lead.id, vendorId: house.id, status, createdById: rep.id } });
+    const finance = await basePrisma.dealFinance.create({ data: { tenantId, leadId: lead.id, quoteId: q.id, vendorId: house.id, status, createdById: rep.id } });
     return { quoteId: q.id, financeId: finance.id };
   };
   for (const status of ["docs_outstanding", "submitted", "declined"]) {
@@ -463,6 +463,15 @@ async function main() {
   await basePrisma.dealFinance.update({ where: { id: revoked.financeId }, data: { status: "declined" } });
   const revokedWhy = await refusal(() => deliver(revoked.quoteId));
   check("approved, signed for, then declined: not handed over", /declined the finance/.test(revokedWhy ?? "") && (await record(revoked.quoteId)).deliveredAt === null, String(revokedWhy));
+  // Finance is PER QUOTE (Sean, 2026-11-16): the deal's OTHER quote's declined finance holds nothing back here.
+  const twoQuotes = await basePrisma.lead.create({ data: { tenantId, stageId: stage.id, name: customer, title: "Two quotes", contactId: contact.id, createdById: rep.id, status: "won" } });
+  const otherQuote = await quoteReadyToDeliver();
+  const thisQuote = await quoteReadyToDeliver();
+  await basePrisma.quote.updateMany({ where: { id: { in: [otherQuote.id, thisQuote.id] } }, data: { leadId: twoQuotes.id } });
+  await basePrisma.dealFinance.create({ data: { tenantId, leadId: twoQuotes.id, quoteId: otherQuote.id, vendorId: house.id, status: "declined", createdById: rep.id } });
+  await signedFor(thisQuote.id);
+  await deliver(thisQuote.id);
+  check("another quote's declined finance on the same deal: this one is delivered", Boolean((await record(thisQuote.id)).deliveredAt));
 
   __setTenantEnforcingForTests(null);
   console.log(`\n${passed} passed, ${failed} failed`);

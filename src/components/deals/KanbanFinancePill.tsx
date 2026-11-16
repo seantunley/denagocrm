@@ -7,6 +7,8 @@ import { cn } from "@/lib/utils";
 /** A financed deal's finance, as the lead board shows it — worked out on the server (dealFinance.financeOnBoard). */
 export type KanbanFinance = {
   house: string;
+  /** "Q-1045" — which of the deal's quotes this finance is for (finance is per quote). */
+  quote: string | null;
   /** Short status: "Submitted", "Approved"… */
   status: string;
   tone: "success" | "warning" | "danger" | "info" | "neutral";
@@ -36,7 +38,7 @@ export default function KanbanFinancePill({ finance }: { finance?: KanbanFinance
           {finance.status}
         </span>
       </TooltipTrigger>
-      <TooltipContent>{finance.chase ?? `Finance with ${finance.house}: ${finance.status.toLowerCase()}`}</TooltipContent>
+      <TooltipContent>{finance.chase ?? `Finance${finance.quote ? ` on ${finance.quote}` : ""} with ${finance.house}: ${finance.status.toLowerCase()}`}</TooltipContent>
     </Tooltip>
   );
 }

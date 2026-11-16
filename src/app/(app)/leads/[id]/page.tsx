@@ -56,7 +56,7 @@ import { payableTotalCents } from "@/lib/pricing";
 import { getAccessibleContactIds, getAccessibleQuoteIds } from "@/lib/permissions";
 import { quotePrintLinks } from "@/lib/quotePrintLinks";
 import { isModuleEnabled } from "@/lib/modules/enabled";
-import { dealFinanceHouses, loadDealFinance } from "@/lib/dealFinance";
+import { dealFinanceHouses, loadLeadFinances } from "@/lib/dealFinance";
 import { financeStatusShort, financeTone } from "@/lib/dealFinanceRules";
 import DealFinancePanel from "@/components/deals/DealFinancePanel";
 import { UPCOMING_TEST_DRIVE_STATUSES } from "@/lib/testDriveBooking";
@@ -137,12 +137,14 @@ export default async function LeadDetailPage({
   ]);
   const alreadyViewed = !!lead.viewedAt;
   // Finance through an outside finance house (Finance module): only on a deal with a finance house among its suppliers.
-  const [finance, financeHouses] = lead.tenantId && (await isModuleEnabled("finance"))
+  // Per QUOTE: each of the deal's quotes has its own (only one is accepted).
+  const [quoteFinances, financeHouses] = lead.tenantId && (await isModuleEnabled("finance"))
     ? await Promise.all([
-        loadDealFinance(lead.tenantId, lead.id),
+        loadLeadFinances(lead.tenantId, lead.id),
         dealFinanceHouses(lead.tenantId, lead.id),
       ])
-    : [null, []];
+    : [[], []];
+  const financed = quoteFinances.some((q) => q.finance);
   // This lead's next test drive whose indemnity is still outstanding — it is
   // signed on a screen from the booking, so the lead points there.
   const testDriveToSign = automotiveOn && canBookTestDrive
@@ -271,7 +273,9 @@ export default async function LeadDetailPage({
         title={lead.title}
         status={<>
           <StatusPill tone={lead.status === "won" ? "success" : lead.status === "lost" ? "danger" : "info"}>{lead.status === "open" ? lead.stage.name : lead.status}</StatusPill>
-          {finance && <TabLink tab="finance"><StatusPill tone={financeTone(finance.status)}>Finance: {financeStatusShort(finance.status)}</StatusPill></TabLink>}
+          {quoteFinances.map(({ quote, finance }) => finance && quote.inPlay && (
+            <TabLink key={quote.id} tab="finance"><StatusPill tone={financeTone(finance.status)}>Finance Q-{quote.number}: {financeStatusShort(finance.status)}</StatusPill></TabLink>
+          ))}
           {leadScore && leadScore.score > 0 && (
             <Link href="/today?view=all" className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground" title={leadScore.reasons.join(" · ")}>
               <LeadScoreBadge score={leadScore.score} />
@@ -654,11 +658,20 @@ export default async function LeadDetailPage({
                   </div>
                 ),
               },
-              // Only where finance is relevant: a finance house is set up, or this deal is already financed.
-              ...(finance || financeHouses.length > 0 ? [{
+              // Only where finance is relevant: a finance house is on the deal, or a quote on it is already financed.
+              // One panel per quote — each quote has its own finance.
+              ...(financed || financeHouses.length > 0 ? [{
                 key: "finance",
                 label: "Finance",
-                content: <DealFinancePanel leadId={lead.id} finance={finance} financeHouses={financeHouses} canEdit={canEditLead} now={new Date()} />,
+                content: quoteFinances.length ? (
+                  <div className="space-y-4">
+                    {quoteFinances.map(({ quote, finance }) => (
+                      <DealFinancePanel key={quote.id} quote={quote} finance={finance} financeHouses={financeHouses} canEdit={canEditLead} now={new Date()} />
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">Finance is kept per quote — make the quote first, then start its finance here.</p>
+                ),
               }] : []),
               {
                 key: "research",

@@ -14,7 +14,7 @@ import { Prisma } from "@prisma/client";
 import { getSetting } from "@/lib/settings";
 import { DOCUMENT_TYPES_KEY, parseDocumentTypes } from "@/lib/documentLabels";
 import { tickedTypes } from "@/lib/dealFile";
-import { financeIsClosed, financeStatusShort } from "@/lib/dealFinanceRules";
+import { financeIsClosed, financeStatusShort, quoteInPlay } from "@/lib/dealFinanceRules";
 
 /** Settings → Suppliers: the businesses deals and purchase orders name. Owner only; every change audited. */
 
@@ -152,13 +152,24 @@ export async function removeDealVendor(quoteId: string, vendorId: string): Promi
       if (quote.leadId) await tx.$queryRaw`SELECT 1 FROM "Lead" WHERE "id" = ${quote.leadId} AND "tenantId" = ${tenantId} FOR UPDATE`;
       const link = await tx.dealVendor.findFirst({ where: { tenantId, vendorId, ...dealKey(quote) }, select: { id: true, vendor: { select: { name: true } } } });
       if (!link) refuse("That supplier is no longer on this deal — refresh the page.");
-      // The deal's finance house stays on while its finance is live (review of #1137): taking it off would leave a
-      // finance record that still holds delivery but can no longer be edited. Paid out or withdrawn, it may go.
-      const finance = quote.leadId
-        ? await tx.dealFinance.findFirst({ where: { tenantId, leadId: quote.leadId, vendorId }, select: { status: true } })
-        : null;
-      if (finance && !financeIsClosed(finance.status)) {
-        refuse(`${link.vendor.name} is this deal's finance house (${financeStatusShort(finance.status).toLowerCase()}). Set the finance to Withdrawn first, or to Paid out once it is.`);
+      // The deal's finance house stays on while finance with it is live on any of the deal's quotes still in play
+      // (review of #1137): taking it off would leave a finance record that still holds delivery but can no longer be
+      // edited. Paid out or withdrawn — or on a cancelled or replaced quote — it may go.
+      const finances = quote.leadId
+        ? await tx.dealFinance.findMany({ where: { tenantId, leadId: quote.leadId, vendorId }, select: { status: true, quoteId: true } })
+        : [];
+      const onQuotes = await tx.quote.findMany({
+        where: { tenantId, id: { in: finances.flatMap((f) => (f.quoteId ? [f.quoteId] : [])) } },
+        select: { id: true, number: true, status: true, supersededAt: true, deletedAt: true },
+      });
+      const live = finances.find((f) => {
+        if (financeIsClosed(f.status)) return false;
+        const on = onQuotes.find((q) => q.id === f.quoteId);
+        return !f.quoteId || (on !== undefined && quoteInPlay(on));
+      });
+      if (live) {
+        const number = onQuotes.find((q) => q.id === live.quoteId)?.number;
+        refuse(`${link.vendor.name} is financing ${number ? `Q-${number}` : "this deal"} (${financeStatusShort(live.status).toLowerCase()}). Set that finance to Withdrawn first, or to Paid out once it is.`);
       }
       await tx.dealVendor.deleteMany({ where: { id: link.id, tenantId } });
       return link;
