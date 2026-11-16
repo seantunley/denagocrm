@@ -76,7 +76,13 @@ export function effectiveModuleIds(
     if ((MANDATORY_MODULE_IDS as string[]).includes(trimmed)) continue;
     effective.delete(trimmed as ModuleId);
   }
-  return effective;
+  return withoutUnmet(effective);
+}
+
+/** A module whose `requires` is off is off too (Finance needs Suppliers: the finance house is a supplier). */
+export function withoutUnmet(set: Set<ModuleId>): Set<ModuleId> {
+  for (const mod of MODULE_REGISTRY) if (mod.requires && !set.has(mod.requires)) set.delete(mod.id);
+  return set;
 }
 
 /**
@@ -128,5 +134,5 @@ export function installWideModuleIds(locallyDisabled: readonly string[]): Set<Mo
     const trimmed = id.trim();
     if ((OPTIONAL_MODULE_IDS as string[]).includes(trimmed)) set.delete(trimmed as ModuleId);
   }
-  return set;
+  return withoutUnmet(set);
 }

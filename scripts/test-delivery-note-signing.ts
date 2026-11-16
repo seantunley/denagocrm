@@ -428,6 +428,8 @@ async function main() {
   // deliverQuote is the one handover the Deliveries board (markDelivered) and the stock page (deliverStockUnit) both
   // call. Approval can be declined or reopened AFTER the day was booked: the handover asks again.
   console.log("\nFinance holds the handover");
+  // Finance is its own module (on Suppliers): a workspace without it has no hold at all.
+  await basePrisma.tenant.update({ where: { id: tenantId }, data: { modules: "automotive,suppliers,finance" } });
   const pipeline = await basePrisma.salesPipeline.create({ data: { tenantId, name: `Sales ${SFX}` } });
   const stage = await basePrisma.pipelineStage.create({ data: { tenantId, pipelineId: pipeline.id, name: "Won", order: 0 } });
   const house = await basePrisma.vendor.create({ data: { tenantId, name: `WesBank ${SFX}`, kind: "finance" } });

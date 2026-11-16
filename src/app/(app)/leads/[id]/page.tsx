@@ -56,7 +56,7 @@ import { payableTotalCents } from "@/lib/pricing";
 import { getAccessibleContactIds, getAccessibleQuoteIds } from "@/lib/permissions";
 import { quotePrintLinks } from "@/lib/quotePrintLinks";
 import { isModuleEnabled } from "@/lib/modules/enabled";
-import { loadDealFinance } from "@/lib/dealFinance";
+import { dealFinanceHouses, loadDealFinance } from "@/lib/dealFinance";
 import { financeStatusShort, financeTone } from "@/lib/dealFinanceRules";
 import DealFinancePanel from "@/components/deals/DealFinancePanel";
 import { UPCOMING_TEST_DRIVE_STATUSES } from "@/lib/testDriveBooking";
@@ -136,11 +136,11 @@ export default async function LeadDetailPage({
     }),
   ]);
   const alreadyViewed = !!lead.viewedAt;
-  // Finance through an outside finance house (Suppliers module: the finance house is a supplier of type Finance).
-  const [finance, financeHouses] = lead.tenantId && (await isModuleEnabled("suppliers"))
+  // Finance through an outside finance house (Finance module): only on a deal with a finance house among its suppliers.
+  const [finance, financeHouses] = lead.tenantId && (await isModuleEnabled("finance"))
     ? await Promise.all([
         loadDealFinance(lead.tenantId, lead.id),
-        prisma.vendor.findMany({ where: { tenantId: lead.tenantId, deletedAt: null, kind: "finance" }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
+        dealFinanceHouses(lead.tenantId, lead.id),
       ])
     : [null, []];
   // This lead's next test drive whose indemnity is still outstanding — it is

@@ -18,7 +18,8 @@ const matches = (row: Row, where: Record<string, unknown>) =>
 
 const db = {
   lead: { findFirst: async () => ({ id: LEAD, contactId: null }) },
-  vendor: { findFirst: async ({ where }: { where: { id: string } }) => (where.id === HOUSE ? { id: HOUSE, name: "WesBank" } : null) },
+  // WesBank is on this deal's suppliers; any other id is not.
+  dealVendor: { findFirst: async ({ where }: { where: { vendorId: string } }) => (where.vendorId === HOUSE ? { vendor: { id: HOUSE, name: "WesBank" } } : null) },
   dealFinance: {
     findFirst: async ({ where }: { where: Record<string, unknown> }) => rows.find((r) => matches(r, where)) ?? null,
     create: async ({ data }: { data: Omit<Row, "id" | "statusAt" | "updatedAt" | "vendor"> }) => {
@@ -46,7 +47,6 @@ loader._load = function (this: unknown, request: string, parent, isMain) {
   if (request === "@/lib/audit") return { logAudit: async () => {} };
   if (request === "@/lib/permissions") return { requireLeadAccess: async () => ({ id: "user_1" }) };
   if (request === "@/lib/modules/enabled") return { isModuleEnabled: async () => true };
-  if (request === "@/lib/dealVendors") return { linkVendorToDeal: async () => true };
   return realLoad.call(this, request, parent, isMain);
 } as Loader;
 const { saveDealFinance } = createRequire(import.meta.url)("../src/app/actions/dealFinance.ts") as typeof import("../src/app/actions/dealFinance");
@@ -72,6 +72,11 @@ test("a stale form can't overwrite a newer reference or note — same status or 
   // Refreshed, B's note lands over A's version.
   assert.ok((await saveDealFinance(LEAD, form({ reference: "APP-2", note: "called them", version: rows[0].updatedAt.toISOString() }))).success);
   assert.equal(rows[0].note, "called them");
+});
+
+test("a finance house that isn't on the deal is refused — a cash deal can't be financed by a stray post", async () => {
+  assert.match(String((await saveDealFinance(LEAD, form({ vendorId: "vendor_other", version: "" }))).error), /Add the finance house to this deal's suppliers first/);
+  assert.equal(rows.length, 0);
 });
 
 test("a form with no version can't overwrite a finance it never showed; the chaser's clock moves only with the status", async () => {
