@@ -272,12 +272,32 @@ async function checkLeadQuiet(user: PermissionUser, tenantId: string, w: Watch, 
   const hits: Hit[] = [];
   // Moved past the first stage = contacted, as of that move (stageContact.ts).
   const firstOrders = await firstStageOrders(leads);
+  // No contact logged is not "never contacted" when somebody is working the deal — a note, a call booked (the lead
+  // score's rule, leadScore.ts lastWorkedAt; Sean 2026-11-16). Read only for leads with no contact at all.
+  const unlogged = leads.filter((lead) => !latestContactAt(lead.communications, lead.activities) && !stageContactAt(lead, firstOrders)).map((lead) => lead.id);
+  const [entries, tasks] = unlogged.length
+    ? await Promise.all([
+        prisma.communication.groupBy({ by: ["leadId"], where: { tenantId, leadId: { in: unlogged } }, _max: { occurredAt: true } }),
+        prisma.activity.groupBy({ by: ["leadId"], where: { tenantId, leadId: { in: unlogged } }, _max: { createdAt: true } }),
+      ])
+    : [[], []];
+  const worked = new Map<string, Date>();
+  for (const [id, at] of [...entries.map((r) => [r.leadId, r._max.occurredAt] as const), ...tasks.map((r) => [r.leadId, r._max.createdAt] as const)]) {
+    if (id && at && !(worked.get(id)! > at)) worked.set(id, at);
+  }
   for (const lead of leads) {
     const own = latestContactAt(lead.communications, lead.activities);
     const moved = stageContactAt(lead, firstOrders);
     const last = own && moved ? (own > moved ? own : moved) : own ?? moved;
     if (last && last >= cutoff) continue;
-    const detail = last ? `last contact ${Math.floor((now.getTime() - last.getTime()) / DAY)} days ago` : "never contacted";
+    const workedAt = last ? null : worked.get(lead.id) ?? null;
+    if (workedAt && workedAt >= cutoff) continue;
+    const daysAgo = (at: Date) => Math.floor((now.getTime() - at.getTime()) / DAY);
+    const detail = last
+      ? `last contact ${daysAgo(last)} days ago`
+      : workedAt
+        ? `no contact logged — nothing new on the deal for ${daysAgo(workedAt)} days`
+        : "never contacted";
     hits.push({ id: lead.id, ref: lead.title, customer: lead.name, detail });
   }
   return hits;

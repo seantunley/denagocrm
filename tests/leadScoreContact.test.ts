@@ -10,7 +10,7 @@ import Module, { createRequire } from "node:module";
 
 type Comm = { id?: string; leadId: string | null; contactId?: string | null; type: string; direction: string | null; occurredAt: Date };
 type OutboxRow = { communicationId: string | null; status: string; createdAt: Date; leadId?: string | null; contactId?: string | null };
-type Act = { leadId: string | null; contactId?: string | null; type: string; status: string; availabilityBlock: boolean; doneAt: Date | null; dueDate: Date };
+type Act = { leadId: string | null; contactId?: string | null; type: string; status: string; availabilityBlock: boolean; doneAt: Date | null; dueDate: Date; createdAt?: Date };
 type Where = Record<string, unknown>;
 
 /** `links`: which customer each lead belongs to (Lead.contactId). */
@@ -123,7 +123,13 @@ test("MOVED PAST THE FIRST STAGE IS CONTACT (Sean, 2026-10-18: a lead in Contact
   assert.equal(uncontacted(s), false, JSON.stringify(s.reasons));
   // Dated to the move: entered Contacted on the 4th → seven days by the 11th.
   assert.ok(s.reasons.includes("No contact for 7 days"), JSON.stringify(s.reasons));
-  // Still in the first stage with only the note: "Never contacted" is still the truth.
+  // Still in the first stage with only the note: never "Never contacted" (Sean, 2026-11-16) — the note is somebody
+  // working the deal. Nine days without anything new is said as that.
+  const noted = await score();
+  assert.equal(uncontacted(noted), false, JSON.stringify(noted.reasons));
+  assert.ok(noted.reasons.includes("Nothing new on the deal for 9 days — no contact logged"), JSON.stringify(noted.reasons));
+  // With nothing at all on it, it is: the stage tests below read only the stage.
+  state.comms = [];
   assert.ok(uncontacted(await score()));
   // "First" is the pipeline's own lowest open stage, not order 0: a pipeline starting at 5.
   state.stages = [{ pipelineId: "p2", order: 5, isClosed: false }, { pipelineId: "p2", order: 6, isClosed: false }];
@@ -197,6 +203,28 @@ test("…but not another customer's quote, a quote on the customer's OTHER deal,
 
 const uncontacted = (s: { reasons: string[] }) => s.reasons.some((r) => /not contacted yet|Never contacted/.test(r));
 
+test("A DEAL SOMEBODY IS WORKING IS NEVER 'NOT CONTACTED' (Sean, 2026-11-16: a pinned note of the WhatsApp chat and a call booked)", async () => {
+  // What production held: a new lead in the first stage, one internal note, one planned call — nothing logged as contact.
+  const fresh = { ...LEAD, createdAt: day(10), stageEnteredAt: day(10) };
+  state.comms = [{ leadId: "lead1", type: "note", direction: null, occurredAt: day(10) }];
+  state.acts = [{ leadId: "lead1", type: "call", status: "planned", availabilityBlock: false, doneAt: null, dueDate: day(12), createdAt: day(10) }];
+  let s = (await scoreLeads([fresh], day(11))).get("lead1")!;
+  assert.equal(uncontacted(s), false, JSON.stringify(s.reasons));
+  assert.equal(s.reasons.some((r) => /no contact/i.test(r)), false, "worked on yesterday: nothing about contact to say");
+  // Either one alone is enough: the booked call…
+  state.comms = [];
+  assert.equal(uncontacted((await scoreLeads([fresh], day(11))).get("lead1")!), false, "a booked next step");
+  // …or a note filed on the customer with no deal.
+  state.acts = [];
+  state.links = [{ id: "lead1", contactId: "cust1" }];
+  state.comms = [{ leadId: null, contactId: "cust1", type: "note", direction: null, occurredAt: day(10) }];
+  s = (await scoreLeads([fresh], day(11))).get("lead1")!;
+  assert.equal(uncontacted(s), false, JSON.stringify(s.reasons));
+  // Not the customer's note on ANOTHER deal.
+  state.comms = [{ leadId: "lead2", contactId: "cust1", type: "note", direction: null, occurredAt: day(10) }];
+  assert.ok(uncontacted((await scoreLeads([fresh], day(11))).get("lead1")!));
+});
+
 test("an undelivered WhatsApp is not contact in the SCORE either — a new lead keeps 'not contacted yet'", async () => {
   state.links = [{ id: "lead1", contactId: "cust1" }];
   for (const leadId of ["lead1", null]) {
@@ -231,12 +259,11 @@ test("AN EMAIL FILED ON THE CUSTOMER, WITH NO LEAD, IS CONTACT: the lead no long
   assert.equal(uncontacted(await score()), false);
 });
 
-test("…but not another customer's, not the customer's rows on ANOTHER lead, and never a note", async () => {
+test("…but not another customer's, and not the customer's rows on ANOTHER lead", async () => {
   state.links = [{ id: "lead1", contactId: "cust1" }];
   state.comms = [
     { leadId: null, contactId: "cust2", type: "email", direction: "outbound", occurredAt: day(10) }, // somebody else
     { leadId: "lead2", contactId: "cust1", type: "email", direction: "outbound", occurredAt: day(10) }, // this customer's other deal
-    { leadId: null, contactId: "cust1", type: "note", direction: "outbound", occurredAt: day(10) }, // written for ourselves
   ];
   assert.ok(uncontacted(await score()));
   // A lead with no customer attached reads only its own rows, as before.

@@ -127,6 +127,18 @@ export async function scoreLeads(leads: ScorableLead[], now: Date = new Date()):
   const customerActivity = byCustomer(customerDone, (row) => row._max.doneAt);
   const customerSent = byCustomer(customerOutbound, (row) => row._max.occurredAt);
 
+  // WORKED ON — anything anybody put on the deal (or its customer with no deal):
+  // every timeline entry, internal notes included, and every activity added,
+  // planned or done. Not contact; only what stops "not contacted" being said of a
+  // deal somebody is plainly working (leadScore.ts lastWorkedAt). A message the
+  // outbox never delivered is still left out: then "not contacted" is the truth.
+  const [leadEntries, leadTasks, customerEntries, customerTasks] = await Promise.all([
+    prisma.communication.groupBy({ by: ["leadId"], where: { leadId, ...sentOnly }, _max: { occurredAt: true } }),
+    prisma.activity.groupBy({ by: ["leadId"], where: { leadId }, _max: { createdAt: true } }),
+    customerOf.size ? prisma.communication.groupBy({ by: ["contactId"], where: { contactId, leadId: null, ...sentOnly }, _max: { occurredAt: true } }) : [],
+    customerOf.size ? prisma.activity.groupBy({ by: ["contactId"], where: { contactId, leadId: null }, _max: { createdAt: true } }) : [],
+  ]);
+
   /*
    * QUOTES ARE PART OF THE CONTACT. A quote that has reached the customer —
    * emailed from the CRM, opened, or signed — is contact at that moment; and a
@@ -167,6 +179,10 @@ export async function scoreLeads(leads: ScorableLead[], now: Date = new Date()):
   const quoteViewed = byLead(viewed, (row) => row._max.viewedAt);
   const quoteOutstanding = new Set(outstanding.map((row) => row.leadId));
   const lastSent = byLead(outbound, (row) => row._max.occurredAt);
+  const leadWorked = byLead(leadEntries, (row) => row._max.occurredAt);
+  const leadTaskAdded = byLead(leadTasks, (row) => row._max.createdAt);
+  const customerWorked = byCustomer(customerEntries, (row) => row._max.occurredAt);
+  const customerTaskAdded = byCustomer(customerTasks, (row) => row._max.createdAt);
   // Moved past the first stage = contacted, as of that move (stageContact.ts).
   const firstOrders = await firstStageOrders(leads);
 
@@ -203,6 +219,10 @@ export async function scoreLeads(leads: ScorableLead[], now: Date = new Date()):
           nextPlannedActivityAt: next,
           createdAt: lead.createdAt,
           hasQuote: quoted.has(lead.id) || customerQuoted.has(customer),
+          lastWorkedAt: latest(
+            latest(leadWorked.get(lead.id), leadTaskAdded.get(lead.id)),
+            latest(customerWorked.get(customer), customerTaskAdded.get(customer)),
+          ),
         },
         now,
       ),
