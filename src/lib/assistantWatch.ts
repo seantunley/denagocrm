@@ -19,6 +19,7 @@ import {
 import { accessibleTestDriveWhere } from "./testDriveAccess";
 import { contactActivityWhere, contactCommunicationWhere, latestContactAt } from "./customerContact";
 import { firstStageOrders, stageContactAt } from "./stageContact";
+import { lastWorkedAt } from "./dealWorked";
 import { isModuleEnabled } from "./modules/enabled";
 import { contactName } from "./format";
 import { ownedWriteTenantId } from "./tenantWrite";
@@ -263,6 +264,7 @@ async function checkLeadQuiet(user: PermissionUser, tenantId: string, w: Watch, 
       title: true,
       name: true,
       stageEnteredAt: true,
+      contactId: true,
       stage: { select: { order: true, pipelineId: true } },
       // Real contact only (customerContact.ts) — the same rule as DAX's "gone quiet".
       communications: { where: contactCommunicationWhere, orderBy: { occurredAt: "desc" }, take: 1, select: { type: true, occurredAt: true } },
@@ -272,19 +274,9 @@ async function checkLeadQuiet(user: PermissionUser, tenantId: string, w: Watch, 
   const hits: Hit[] = [];
   // Moved past the first stage = contacted, as of that move (stageContact.ts).
   const firstOrders = await firstStageOrders(leads);
-  // No contact logged is not "never contacted" when somebody is working the deal — a note, a call booked (the lead
-  // score's rule, leadScore.ts lastWorkedAt; Sean 2026-11-16). Read only for leads with no contact at all.
-  const unlogged = leads.filter((lead) => !latestContactAt(lead.communications, lead.activities) && !stageContactAt(lead, firstOrders)).map((lead) => lead.id);
-  const [entries, tasks] = unlogged.length
-    ? await Promise.all([
-        prisma.communication.groupBy({ by: ["leadId"], where: { tenantId, leadId: { in: unlogged } }, _max: { occurredAt: true } }),
-        prisma.activity.groupBy({ by: ["leadId"], where: { tenantId, leadId: { in: unlogged } }, _max: { createdAt: true } }),
-      ])
-    : [[], []];
-  const worked = new Map<string, Date>();
-  for (const [id, at] of [...entries.map((r) => [r.leadId, r._max.occurredAt] as const), ...tasks.map((r) => [r.leadId, r._max.createdAt] as const)]) {
-    if (id && at && !(worked.get(id)! > at)) worked.set(id, at);
-  }
+  // No contact logged is not "never contacted" when somebody is working the deal — a note, a call booked — by the
+  // lead score's own rule (dealWorked.ts; Sean 2026-11-16). Read only for leads with no contact at all.
+  const worked = await lastWorkedAt(leads.filter((lead) => !latestContactAt(lead.communications, lead.activities) && !stageContactAt(lead, firstOrders)));
   for (const lead of leads) {
     const own = latestContactAt(lead.communications, lead.activities);
     const moved = stageContactAt(lead, firstOrders);

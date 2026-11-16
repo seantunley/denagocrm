@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { beforeEach, test } from "node:test";
 import Module, { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
 
 /*
  * The lead score, run for real against a fake database that applies the same
@@ -84,7 +85,7 @@ const realLoad = loader._load;
 loader._load = function (this: unknown, request: string, parent, isMain) {
   if (request === "server-only") return {};
   const from = (parent?.filename ?? "").replace(/\\/g, "/");
-  if (from.endsWith("src/lib/stageContact.ts") && request === "./db") return { prisma: fakePrisma };
+  if ((from.endsWith("src/lib/stageContact.ts") || from.endsWith("src/lib/dealWorked.ts")) && request === "./db") return { prisma: fakePrisma };
   if (from.endsWith("src/lib/leadScoreLoader.ts")) {
     if (request === "./db") return { prisma: fakePrisma };
     if (request === "./permissions") return { getAccessibleLeadIds: async () => null };
@@ -94,6 +95,7 @@ loader._load = function (this: unknown, request: string, parent, isMain) {
 
 const require_ = createRequire(import.meta.url);
 const { scoreLeads } = require_("../src/lib/leadScoreLoader.ts") as typeof import("../src/lib/leadScoreLoader");
+const { lastWorkedAt } = require_("../src/lib/dealWorked.ts") as typeof import("../src/lib/dealWorked");
 
 // In its pipeline's FIRST stage, so the stage says nothing about contact unless a test moves it on.
 const LEAD = { id: "lead1", valueCents: 25_000_000, status: "open", createdAt: day(1), stageEnteredAt: day(1), stage: { name: "Quoted", isClosed: false, staleAfterDays: null, order: 0, pipelineId: "p1" } };
@@ -202,6 +204,38 @@ test("…but not another customer's quote, a quote on the customer's OTHER deal,
 });
 
 const uncontacted = (s: { reasons: string[] }) => s.reasons.some((r) => /not contacted yet|Never contacted/.test(r));
+
+test("ONE 'WORKED ON' RULE for the score AND DAX's quiet-lead watch (review of #1136): the customer's own rows count, an undelivered message doesn't", async () => {
+  const deal = [{ id: "lead1", contactId: "cust1" }];
+  const at = async () => (await lastWorkedAt(deal)).get("lead1") ?? null;
+  assert.equal(await at(), null, "nothing on it");
+  // A note on the customer with no deal: worked on.
+  state.comms = [{ id: "n1", leadId: null, contactId: "cust1", type: "note", direction: null, occurredAt: day(9) }];
+  assert.deepEqual(await at(), day(9));
+  // …but not the customer's note on another deal, nor somebody else's.
+  state.comms = [{ id: "n2", leadId: "lead2", contactId: "cust1", type: "note", direction: null, occurredAt: day(9) }, { id: "n3", leadId: null, contactId: "cust2", type: "note", direction: null, occurredAt: day(9) }];
+  assert.equal(await at(), null);
+  // An outbound WhatsApp the outbox never delivered is not work — on the deal or on the customer; delivered, it is.
+  for (const leadId of ["lead1", null]) {
+    state.comms = [{ id: "w1", leadId, contactId: "cust1", type: "whatsapp", direction: "outbound", occurredAt: day(10) }];
+    for (const status of ["pending", "retry", "dead", "cancelled"]) {
+      state.outbox = [{ communicationId: "w1", status, createdAt: day(10), leadId, contactId: "cust1" }];
+      assert.equal(await at(), null, `${status} (${leadId ? "deal" : "customer"})`);
+    }
+    state.outbox = [{ communicationId: "w1", status: "sent", createdAt: day(10), leadId, contactId: "cust1" }];
+    assert.deepEqual(await at(), day(10));
+  }
+  // A task added on the customer with no deal, planned: worked on.
+  state.comms = []; state.outbox = [];
+  state.acts = [{ leadId: null, contactId: "cust1", type: "call", status: "planned", availabilityBlock: false, doneAt: null, dueDate: day(12), createdAt: day(8) }];
+  assert.deepEqual(await at(), day(8));
+  // The watch reads the very same rule, with each lead's customer.
+  const watch = readFileSync(new URL("../src/lib/assistantWatch.ts", import.meta.url), "utf8");
+  const quiet = watch.slice(watch.indexOf("async function checkLeadQuiet"), watch.indexOf("async function checkTestDriveNoFollowUp"));
+  assert.match(quiet, /contactId: true,/);
+  assert.match(quiet, /const worked = await lastWorkedAt\(leads\.filter\(/);
+  assert.doesNotMatch(quiet, /communication\.groupBy|activity\.groupBy/, "no second, drifting copy of the rule");
+});
 
 test("A DEAL SOMEBODY IS WORKING IS NEVER 'NOT CONTACTED' (Sean, 2026-11-16: a pinned note of the WhatsApp chat and a call booked)", async () => {
   // What production held: a new lead in the first stage, one internal note, one planned call — nothing logged as contact.
