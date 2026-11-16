@@ -51,6 +51,8 @@ const TARGETS = {
   leadEmail: { table: "Lead", column: "email", fold: "lower" },
   userEmail: { table: "User", column: "email", fold: "lower" },
   supportMailboxEmail: { table: "SupportMailbox", column: "email", fold: "lower" },
+  // An email from a finance house (financeEmail.ts): the supplier whose address it IS, never one it merely contains.
+  vendorEmail: { table: "Vendor", column: "email", fold: "lower" },
   vehicleVin: { table: "Vehicle", column: "vin", fold: "upper" },
   stockUnitSerial: { table: "StockUnit", column: "serial", fold: "upper" },
   // Not identity, but the same comparison: "the product CALLED this" for the

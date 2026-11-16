@@ -14,6 +14,7 @@ import { normalizeHtml } from "./competitors";
 import { logError } from "./errorLog";
 import { logAudit, logAuditStrict } from "./audit";
 import { bounceLines, failedAddresses, newBounceLines, readBounce, type Bounce } from "./emailBounce";
+import { fileFinanceHouseEmail } from "./financeEmail";
 
 // The transaction client handed to prisma.$transaction — derived from our
 // EXTENDED client (soft-delete filtering), which differs from the plain
@@ -470,6 +471,15 @@ export async function handleParsedMessage(parsed: ParsedMail, ourAddress: string
   // known contact's/lead's timeline.
   const mailbox = await matchSupportMailbox(parsed);
   if (mailbox) return fileSupportEmail(mailbox, parsed, fromEmail, transportKey);
+  // A finance house writing about a deal it is financing: onto that deal (financeEmail.ts). null = not a finance house.
+  const finance = await fileFinanceHouseEmail(fromEmail, {
+    subject: parsed.subject ?? "(no subject)",
+    body: emailBody(parsed, 5000),
+    when: parsed.date ?? new Date(),
+    messageId: parsed.messageId ?? null,
+    dedupeKey: emailIdemKey(parsed.messageId ?? null, transportKey),
+  });
+  if (finance !== null) return finance;
   return fileTimelineEmail(parsed, fromEmail, transportKey);
 }
 

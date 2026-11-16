@@ -63,6 +63,29 @@ export function financeChase(input: { status: string; statusAt: Date; financeHou
     : { detail: `Customer's finance documents outstanding for ${days} working days (${input.financeHouse})`, actionLabel: "Chase the customer", since: input.statusAt };
 }
 
+/**
+ * Which financed deal an email from the finance house is about — or null when it can't be told. Its application
+ * reference first (a whole word, any case), else the customer's full name; exactly ONE deal, never a guess between two.
+ * `text`: the email's subject and body.
+ */
+export function matchFinanceEmail<D extends { reference: string | null; customer: string }>(text: string, deals: readonly D[]): D | null {
+  const folded = ` ${text.toLowerCase().replace(/\s+/g, " ")} `;
+  const has = (needle: string) => {
+    const n = needle.toLowerCase().replace(/\s+/g, " ").trim();
+    if (n.length < 3) return false;
+    // Whole word: "APP-7" is not found in "APP-77" (every occurrence is tried).
+    for (let at = folded.indexOf(n); at >= 0; at = folded.indexOf(n, at + 1)) {
+      if (!/[a-z0-9]/.test(folded[at - 1] ?? " ") && !/[a-z0-9]/.test(folded[at + n.length] ?? " ")) return true;
+    }
+    return false;
+  };
+  const byReference = deals.filter((deal) => deal.reference && has(deal.reference));
+  if (byReference.length === 1) return byReference[0];
+  if (byReference.length > 1) return null;
+  const byName = deals.filter((deal) => deal.customer.trim().includes(" ") && has(deal.customer));
+  return byName.length === 1 ? byName[0] : null;
+}
+
 /** Whole working days (Mon–Fri) from `from`'s Johannesburg day to `to`'s. */
 export function workingDaysBetween(from: Date, to: Date): number {
   const end = johannesburgDateKey(to);
