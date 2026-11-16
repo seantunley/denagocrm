@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import Module from "node:module";
 import { REPLY_MARKER, STATE_INSTRUCTIONS, parseState, splitReply } from "../src/lib/assistantReply";
 import { conversationBlock, parseStep, planInstructions, recallArgs } from "../src/lib/crmAssistantPlan";
+import { daxCore } from "./daxCore";
 
 // crmAssistant reaches server-only + Prisma; the recall helpers are pure, so load it with server-only stubbed.
 type Loader = (request: string, parent: unknown, isMain: boolean) => unknown;
@@ -186,7 +187,7 @@ test("recall takes other wordings and a customer; nothing else", () => {
 /* ── Source guards ────────────────────────────────────────────────────────── */
 
 test("every recall query names the asker AND the tenant; customer lookups go through visibility", () => {
-  const lib = code("src/lib/crmAssistant.ts");
+  const lib = daxCore(code);
   const recall = lib.slice(lib.indexOf("async function recall("), lib.indexOf("export function turnRefs("));
   const raw = recall.match(/\$queryRaw[\s\S]*?`;/g) ?? [];
   assert.equal(raw.length, 1);
@@ -211,7 +212,7 @@ test("every recall query names the asker AND the tenant; customer lookups go thr
 });
 
 test("each saved turn carries its working memory and record links", () => {
-  const lib = code("src/lib/crmAssistant.ts");
+  const lib = daxCore(code);
   const save = lib.slice(lib.indexOf("prisma.assistantTurn\n    .create("), lib.indexOf("select: { id: true }", lib.indexOf("prisma.assistantTurn\n    .create(")));
   // Working memory, plus the records the answer listed in order (assistantListedRules) — the server's, never the model's.
   assert.match(save, /state: \{ \.\.\.reply\.state, \.\.\.\(shownHere\.length \? \{ listed: shownHere \} : \{\}\) \}, tags: reply\.state\?\.tags/);
@@ -233,7 +234,7 @@ test("the migration is additive and its search index matches the query", () => {
   assert.match(sql, /CREATE EXTENSION IF NOT EXISTS pg_trgm/);
   const expr = `to_tsvector('english', "question" || ' ' || "answer")`;
   assert.ok(sql.includes(`USING GIN (${expr})`));
-  assert.ok(code("src/lib/crmAssistant.ts").includes(`${expr} @@`), "the query uses the indexed expression");
+  assert.ok(daxCore(code).includes(`${expr} @@`), "the query uses the indexed expression");
   const schema = readFileSync(new URL("../prisma/schema.prisma", import.meta.url), "utf8");
   const model = schema.slice(schema.indexOf("model AssistantTurn"), schema.indexOf("}", schema.indexOf("model AssistantTurn")));
   assert.match(model, /state\s+Json\?/);

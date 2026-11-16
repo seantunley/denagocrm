@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { MAX_STEPS, conversationBlock, parseStep, planInstructions } from "../src/lib/crmAssistantPlan";
 import { DEFAULT_PROFILE, DEFAULT_SOUL, LOCKED_RULES, cleanOwnerText, normaliseSoul, parseProfile, soulText } from "../src/lib/assistantSoul";
+import { daxCore } from "./daxCore";
 
 const code = (rel: string) =>
   readFileSync(new URL(`../${rel}`, import.meta.url), "utf8")
@@ -104,7 +105,7 @@ test("the owner can rewrite the whole soul — but never the honesty rules", () 
 });
 
 test("the assistant only reads the CRM, and only through each user's own visibility", () => {
-  const lib = code("src/lib/crmAssistant.ts");
+  const lib = daxCore(code);
   // Its one write is its own conversation history.
   const writes = lib.match(/\.(create|createMany|update|updateMany|upsert|delete|deleteMany)\(/g) ?? [];
   assert.deepEqual(writes, [".create("]);

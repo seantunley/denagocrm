@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { cleanTitle, snippet, TITLE_MAX, TRASH_DAYS } from "../src/lib/assistantConversationRules";
 import { SOFT_DELETE_MODELS } from "../src/lib/softDeleteModels";
+import { daxCore } from "./daxCore";
 
 const src = (rel: string) => readFileSync(new URL(`../${rel}`, import.meta.url), "utf8").replace(/\r\n/g, "\n");
 
@@ -73,7 +74,7 @@ test("rename, delete and restore: by id AND person AND workspace, audited withou
 });
 
 test("DAX stops remembering a deleted conversation: recall, recent turns and the nightly tidy-up skip it", () => {
-  const ask = src("src/lib/crmAssistant.ts");
+  const ask = daxCore(src);
   assert.match(ask, /AND NOT EXISTS \(SELECT 1 FROM "AssistantConversation" c WHERE c\."id" = "AssistantTurn"\."conversationId" AND c\."deletedAt" IS NOT NULL\)/);
   assert.equal((ask.match(/AND: \[live\]/g) ?? []).length, 3, "the turns around a recalled one, and recent turns");
   const tidy = src("src/lib/assistantTidy.ts");

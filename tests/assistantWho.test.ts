@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { OR_AUTOMATIC, WHO_LEGEND, messageAuthor, whoLogged } from "../src/lib/assistantWho";
+import { daxCore } from "./daxCore";
 
 /*
  * WHO did it. The assistant was told what a note said and when, but not who
@@ -41,7 +42,7 @@ test("WHEN THE STAND-IN CANNOT BE ESTABLISHED, no name is certain — 'could not
   // The same through a message: an outbound automatic reply, with the stand-in unknown.
   assert.deepEqual(messageAuthor({ direction: "outbound", type: "whatsapp", user: SEAN }, null), { from: "us", loggedBy: `Sean Tunley ${OR_AUTOMATIC}` });
   // In the brief, a failed lookup becomes exactly that null — it is never swallowed into "certain".
-  const lib = code("src/lib/crmAssistant.ts");
+  const lib = daxCore(code);
   assert.match(lib, /const standInId = \(await resolveTenantActor\(\)\.catch\(\(\) => null\)\)\?\.id \?\? null;/);
   const who = code("src/lib/assistantWho.ts");
   assert.match(who, /return standInId && person\.id !== standInId \? name : `\$\{name\} \$\{OR_AUTOMATIC\}`;/, "certain ONLY when the stand-in is known and this is somebody else");
@@ -86,7 +87,7 @@ test("the assistant is told how to read these fields, next to the data", () => {
 });
 
 test("a lead's brief carries who logged each message, who owns and who scheduled each activity, and who created the lead", () => {
-  const lib = code("src/lib/crmAssistant.ts");
+  const lib = daxCore(code);
   const brief = lib.slice(lib.indexOf("export async function leadBrief"), lib.indexOf("async function quotesForLead"));
   // Read from the records…
   assert.match(brief, /occurredAt: true, direction: true, type: true, subject: true, body: true, user: \{ select: \{ id: true, name: true \} \},/);
@@ -103,7 +104,7 @@ test("a lead's brief carries who logged each message, who owns and who scheduled
 });
 
 test("the brief asks ONE rule who each message is from and who logged it — never direction alone", () => {
-  const lib = code("src/lib/crmAssistant.ts");
+  const lib = daxCore(code);
   assert.match(lib, /const \{ from, loggedBy \} = messageAuthor\(c, standInId\);/);
   // The first version: "inbound means the customer wrote it and nobody logged it". It lost the staff member who logged an incoming call.
   assert.doesNotMatch(lib, /c\.direction === "inbound" \? null : whoLogged/);
@@ -111,7 +112,7 @@ test("the brief asks ONE rule who each message is from and who logged it — nev
 });
 
 test("still nothing that identifies a customer beyond what the brief already gave: no ids, emails or numbers of staff either", () => {
-  const lib = code("src/lib/crmAssistant.ts");
+  const lib = daxCore(code);
   const brief = lib.slice(lib.indexOf("export async function leadBrief"), lib.indexOf("async function quotesForLead"));
   // Staff are selected as id + name only — the id is used to compare, and only the name is returned.
   for (const select of brief.match(/(?:user|assignedTo|createdBy): \{ select: \{[^}]*\} \}/g) ?? []) {
