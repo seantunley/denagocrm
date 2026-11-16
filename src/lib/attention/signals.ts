@@ -2,7 +2,7 @@ import "server-only";
 
 import { prisma } from "../db";
 import { contactActivityWhere, contactCommunicationWhere } from "../customerContact";
-import { financeChase } from "../dealFinanceRules";
+import { financeAttentionSignals } from "../dealFinance";
 import {
   ATTENTION_CATEGORY, ATTENTION_WEIGHTS, FOLLOWUP_LOOKBACK_DAYS, LIVE_CONTACT_TYPES, attentionSignalKey, unansweredFollowUp,
   type AttentionSignal,
@@ -312,30 +312,9 @@ export async function collectAttentionSignals(input: {
     }
   }
 
-  // ── finance_waiting ───────────────────────────────────────────────────────
-  // A financed deal whose status has sat for FINANCE_CHASE_WORKING_DAYS waiting on somebody else: the customer's
-  // documents, or the finance house's answer (dealFinanceRules.financeChase). Keyed by the status's date, so moving it
-  // along ends the warning and a later wait is a new one, not a snoozed one.
+  // ── finance_waiting ── finance stalled on the customer or the finance house (dealFinance.ts).
   for (const batch of batches) {
-    const waiting = await prisma.dealFinance.findMany({
-      where: { leadId: { in: batch }, status: { in: ["docs_outstanding", "submitted"] } },
-      select: { id: true, leadId: true, status: true, statusAt: true, reference: true, vendor: { select: { name: true } } },
-    });
-    for (const row of waiting) {
-      const chase = financeChase({ status: row.status, statusAt: row.statusAt, financeHouse: row.vendor.name, reference: row.reference }, now);
-      if (!chase) continue;
-      add(signals, row.leadId, {
-        kind: "finance_waiting",
-        key: attentionSignalKey("finance_waiting", `${row.id}:${row.status}:${row.statusAt.getTime()}`),
-        category: ATTENTION_CATEGORY.finance_waiting,
-        weight: ATTENTION_WEIGHTS.finance_waiting,
-        detail: chase.detail,
-        since: chase.since.toISOString(),
-        context: "Nothing has moved on the finance since then. Chase, then update the status on the deal.",
-        actionHref: `/leads/${row.leadId}?tab=finance`,
-        actionLabel: chase.actionLabel,
-      });
-    }
+    for (const { leadId, signal } of await financeAttentionSignals(batch, now)) add(signals, leadId, signal);
   }
 
   return signals;

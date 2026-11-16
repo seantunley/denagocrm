@@ -84,8 +84,8 @@ test("the table: tenant FKs, one per lead, the statuses checked, row-level secur
 
 test("the chaser reaches people: the Attention Centre (open deals), the morning brief and the Finance page (signed ones too)", () => {
   assert.match(read("src/app/actions/attention.ts"), /"finance_waiting", "followup_unanswered",\n\]\);/, "it can be snoozed or dismissed");
-  const signals = read("src/lib/attention/signals.ts");
-  assert.match(signals, /prisma\.dealFinance\.findMany\(\{\s*where: \{ leadId: \{ in: batch \}/, "batched, through the guarded client");
+  assert.match(read("src/lib/attention/signals.ts"), /for \(const batch of batches\) \{\s*for \(const \{ leadId, signal \} of await financeAttentionSignals\(batch, now\)\)/, "batched");
+  assert.match(read("src/lib/dealFinance.ts"), /prisma\.dealFinance\.findMany\(\{\s*where: \{ leadId: \{ in: leadIds \}/, "through the guarded client, only the leads handed in");
   // A quote signed subject to finance WINS its lead, and the attention list reads open deals only: the brief reads
   // loadFinanceDeals, which keeps won deals.
   assert.match(read("src/lib/dealFinance.ts"), /status: \{ in: \["open", "won"\] \}/);
