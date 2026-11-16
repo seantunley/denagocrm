@@ -17,8 +17,8 @@ import { contactName } from "./format";
 import { listActingTenantStaff } from "./tenantActor";
 import { nurtureReasonLabel } from "./leadNurture";
 import { baseValueCents } from "./currencyRules";
-import { buildBrief, buildTeamRows, openingLine, type BriefInput, type BriefLead, type DaxBrief, type NurtureReview, type OpeningLine, type TeamRow } from "./daxBriefRules";
-import { loadFinanceDeals } from "./dealFinance";
+import { buildBrief, buildTeamRows, openingLine, type BriefLead, type DaxBrief, type NurtureReview, type OpeningLine, type TeamRow } from "./daxBriefRules";
+import { financeToChase } from "./dealFinance";
 import { getWorkspaceSetting } from "./settings";
 import { ownedWriteTenantId } from "./tenantWrite";
 import { openingLineKey, openingLineOn } from "./proactiveRules";
@@ -263,16 +263,6 @@ export const loadDaxBrief = cache(async (user: PermissionUser, now: Date = new D
     finance,
   });
 });
-
-/** Financed deals to chase (dealFinance.ts), in the base currency like every amount the brief adds. Suppliers module only. */
-async function financeToChase(user: PermissionUser, now: Date): Promise<NonNullable<BriefInput["finance"]>> {
-  if (!(await isModuleEnabled("suppliers"))) return [];
-  const deals = await loadFinanceDeals(user, now, { active: true });
-  return deals
-    .filter((deal) => deal.chase)
-    .map((deal) => ({ leadId: deal.leadId, name: deal.name, ownerId: deal.ownerId, detail: deal.chase!.detail, since: deal.chase!.since, valueCents: baseValueCents(deal) }));
-}
-
 /**
  * DAX SPEAKS FIRST: the opening line for a new, empty conversation (Ask page and panel only — never WhatsApp), from
  * this person's own brief, so it never says more than their own lists show. Null when they switched it off, or when
