@@ -480,6 +480,8 @@ const CUSTOMER_RECORD_WRITERS = [
   "src/lib/composerSend.ts",
   "src/lib/botOutbox.ts",
   "src/lib/flowActions.ts",
+  // A finance house's email on the financed deal it names (2026-11-16). Stamped from that deal's own finance row.
+  "src/lib/financeEmail.ts",
   "src/lib/governedSurveyRuntime.ts",
   "src/lib/imapSync.ts",
   "src/lib/journeyStepExecutor.ts",
