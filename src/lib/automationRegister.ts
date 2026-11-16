@@ -245,7 +245,7 @@ export const AUTOMATIONS: Automation[] = [
     notJourney: "An acknowledgement to a customer who emailed first, only for a mailbox whose auto-reply is switched on.",
     messagesAt: { label: "each mailbox's auto-reply", href: "/settings/helpdesk" },
     label: "Inbound email and help-desk auto-reply",
-    does: "Collects incoming email into the inbox and help desk; sends an acknowledgement to the customer only if a mailbox's auto-reply is on. An email from a finance house (a supplier of type Finance) is filed on the one financed deal it names — by its application reference, else the customer's full name — as a note on that deal's timeline; its attachments stay in the mailbox, and nothing is changed or sent.",
+    does: "Collects incoming email into the inbox and help desk; sends an acknowledgement to the customer only if a mailbox's auto-reply is on. An email from a finance house (a supplier of type Finance) is filed on the one financed deal it names — by its application reference, else the customer's full name — as a note on that deal's timeline — shortened, with ID, account and contact numbers masked; the full email and its attachments stay in the mailbox. Only the deal's own salesperson is notified. Nothing is changed or sent.",
     reaches: "customer",
     channels: ["email"],
     when: "Every 30 minutes",

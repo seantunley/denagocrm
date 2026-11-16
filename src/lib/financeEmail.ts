@@ -4,6 +4,8 @@ import { ciExactIds } from "./ciExact";
 import { resolveTenantActor } from "./tenantActor";
 import { sendPushToAll } from "./push";
 import { matchFinanceEmail } from "./dealFinanceRules";
+import { storedFinanceEmailBody } from "./financeEmailRules";
+import { canAccessLead } from "./permissions";
 
 export type InboundEmail = { subject: string; body: string; when: Date; messageId: string | null; dedupeKey: string };
 
@@ -35,11 +37,11 @@ export async function fileFinanceHouseEmail(fromEmail: string, email: InboundEma
     select: { id: true, tenantId: true, leadId: true, reference: true, vendorId: true },
   });
   if (deals.length === 0) return false;
-  const leads = await prisma.lead.findMany({ where: { id: { in: deals.map((deal) => deal.leadId) }, deletedAt: null }, select: { id: true, name: true, contactId: true } });
+  const leads = await prisma.lead.findMany({ where: { id: { in: deals.map((deal) => deal.leadId) }, deletedAt: null }, select: { id: true, name: true, contactId: true, assignedToId: true } });
   const leadOf = new Map(leads.map((lead) => [lead.id, lead]));
   const candidates = deals.flatMap((deal) => {
     const lead = leadOf.get(deal.leadId);
-    return lead ? [{ ...deal, customer: lead.name, contactId: lead.contactId }] : [];
+    return lead ? [{ ...deal, customer: lead.name, contactId: lead.contactId, ownerId: lead.assignedToId }] : [];
   });
   const deal = matchFinanceEmail(`${email.subject}\n${email.body}`, candidates);
   if (!deal) return false; // no single deal named — left in the mailbox
@@ -53,7 +55,8 @@ export async function fileFinanceHouseEmail(fromEmail: string, email: InboundEma
         type: "note",
         direction: null,
         subject: `Email from ${house.name}: ${email.subject}`.slice(0, 300),
-        body: email.body,
+        // The answer, not the applicant: shortened and masked (financeEmailRules.ts). The full email stays in the mailbox.
+        body: storedFinanceEmailBody(email.body),
         occurredAt: email.when,
         messageId: email.messageId,
         dedupeKey: email.dedupeKey,
@@ -68,6 +71,15 @@ export async function fileFinanceHouseEmail(fromEmail: string, email: InboundEma
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") return false;
     throw error;
   }
-  await sendPushToAll({ title: `🏦 Email from ${house.name}`, body: `About ${deal.customer}'s finance — update its status`.slice(0, 100), url: `/leads/${deal.leadId}?tab=finance` }, "email_in").catch(() => {});
+  // ONLY THE DEAL'S OWN SALESPERSON, and only if they may open it (review of #1138): a customer's finance never reaches
+  // the lock screen of someone who can't see the deal. No salesperson: nobody is notified — it is on the deal.
+  const owner = deal.ownerId ? await prisma.user.findUnique({ where: { id: deal.ownerId }, select: { id: true, name: true, email: true, role: true } }) : null;
+  if (owner && (await canAccessLead(owner, deal.leadId).catch(() => false))) {
+    await sendPushToAll(
+      { title: `🏦 Email from ${house.name}`, body: `About ${deal.customer}'s finance — update its status`.slice(0, 100), url: `/leads/${deal.leadId}?tab=finance` },
+      "email_in",
+      { userId: owner.id },
+    ).catch(() => {});
+  }
   return true;
 }

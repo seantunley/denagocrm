@@ -80,9 +80,14 @@ export function matchFinanceEmail<D extends { reference: string | null; customer
     return false;
   };
   const byReference = deals.filter((deal) => deal.reference && has(deal.reference));
-  if (byReference.length === 1) return byReference[0];
-  if (byReference.length > 1) return null;
   const byName = deals.filter((deal) => deal.customer.trim().includes(" ") && has(deal.customer));
+  if (byReference.length > 1) return null;
+  if (byReference.length === 1) {
+    // A reference that points at one deal while the email names ANOTHER financed customer in full: a forwarded or
+    // mistyped reference would file their finance on the wrong person — left in the mailbox instead (review of #1138).
+    const [deal] = byReference;
+    return byName.some((other) => other.customer.trim().toLowerCase() !== deal.customer.trim().toLowerCase()) ? null : deal;
+  }
   return byName.length === 1 ? byName[0] : null;
 }
 
