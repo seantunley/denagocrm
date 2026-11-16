@@ -39,6 +39,15 @@ import {
  * active member who may use the assistant. Nothing here is reached otherwise.
  */
 
+/**
+ * A row that was OFFERED, not bookkeeping kept in the same table: a spent confirm key (`qk_…`, kind "confirm_key";
+ * assistantConfirmKey and the actions that save in one transaction) or a plan step's claim (`ps_…`, assistantPlan).
+ * Both are written already confirmed and are newer than the offer, so "the newest offer" picked them, and "yes to
+ * all" right after a Confirm said nothing was waiting. Offered rows have cuid ids, never these prefixes.
+ */
+export const BOOKKEEPING_ID_PREFIXES = ["qk_", "ps_"] as const;
+const OFFERED = { AND: BOOKKEEPING_ID_PREFIXES.map((p) => ({ NOT: { id: { startsWith: p } } })) };
+
 const say = async (waId: string, text: string) => {
   const sent = await sendWhatsAppText(waId, text).catch(() => ({ ok: false }));
   if (!sent.ok) await logError("assistant-whatsapp", "confirm reply send failed").catch(() => {});
@@ -327,7 +336,7 @@ export async function confirmAllFromWhatsApp(tenantId: string, user: PermissionU
   } else {
     // "Yes to all": the NEWEST offer, whatever became of it — never the newest one still waiting, which after the
     // last set was done would be an older offer (review of #939). Done or expired: nothing remains.
-    offeredAt = (await basePrisma.assistantPendingAction.findFirst({ where: { tenantId, userId: user.id, forCrm: false }, orderBy: { createdAt: "desc" }, select: { createdAt: true } }))?.createdAt ?? null;
+    offeredAt = (await basePrisma.assistantPendingAction.findFirst({ where: { tenantId, userId: user.id, forCrm: false, ...OFFERED }, orderBy: { createdAt: "desc" }, select: { createdAt: true } }))?.createdAt ?? null;
   }
   const rows = offeredAt
     ? await basePrisma.assistantPendingAction.findMany({
@@ -357,7 +366,7 @@ export async function waitingForConfirm(tenantId: string, userId: string): Promi
   /** Every task waiting, oldest first, with what its card shows — numbered to DAX so a correction can name one. */
   all: { id: string; title: string; detail?: string }[];
 }> {
-  const latest = await basePrisma.assistantPendingAction.findFirst({ where: { tenantId, userId, forCrm: false }, orderBy: { createdAt: "desc" }, select: { createdAt: true } });
+  const latest = await basePrisma.assistantPendingAction.findFirst({ where: { tenantId, userId, forCrm: false, ...OFFERED }, orderBy: { createdAt: "desc" }, select: { createdAt: true } });
   const rows = await basePrisma.assistantPendingAction.findMany({
     where: { tenantId, userId, forCrm: false, confirmedAt: null, completedAt: null, failedAt: null, expiresAt: { gt: new Date() } },
     orderBy: { createdAt: "desc" },

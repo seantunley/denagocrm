@@ -6,6 +6,7 @@ import { visibleAnswer } from "../src/lib/assistantStream";
 import { isSameOrigin } from "../src/lib/sameOrigin";
 import { parseCodexStream } from "../src/lib/codexProtocol";
 import { planInstructions } from "../src/lib/crmAssistantPlan";
+import { daxCore } from "./daxCore";
 
 // codex.ts and crmAssistant.ts reach server-only; their pure helpers load with it stubbed.
 type Loader = (request: string, parent: unknown, isMain: boolean) => unknown;
@@ -184,7 +185,7 @@ test("each person's calls share a cache key — hashed, so no id is sent — and
   const codex = code("src/lib/codex.ts");
   assert.match(codex, /\.\.\.\(identity \? \{ prompt_cache_key: identity\.cacheKey \} : \{\}\)/);
   assert.match(codex, /const sessionId = identity\?\.sessionId \?\? crypto\.randomUUID\(\);/);
-  const lib = code("src/lib/crmAssistant.ts");
+  const lib = daxCore(code);
   assert.match(lib, /const cacheKey = `dax:\$\{ownedWriteTenantId\(\)\}:\$\{user\.id\}`;/);
   assert.equal((lib.match(/cacheKey(,| \})/g) ?? []).length >= 2, true, "the plan call (every try) and the answer use it");
 });
@@ -197,11 +198,11 @@ test("what varies comes LAST in the research instructions, so the cached prefix 
   assert.ok(same > 4000, `the first ${same} characters are identical whoever asks, whatever the day`);
   assert.ok(a.indexOf("Today is") > a.indexOf("YOU NEVER WRITE THE ANSWER"));
   // …and sorted lists, so the database's order can't reshuffle them.
-  assert.match(code("src/lib/crmAssistant.ts"), /activityTypes: types\.map\(\(t\) => t\.type\)\.sort\(/);
+  assert.match(daxCore(code), /activityTypes: types\.map\(\(t\) => t\.type\)\.sort\(/);
 });
 
 test("the answer step: the per-question part last; today's date in the prompt, not the cached instructions", () => {
-  const lib = code("src/lib/crmAssistant.ts");
+  const lib = daxCore(code);
   const answer = lib.slice(lib.indexOf("const answerReply = await withRetry("));
   assert.match(answer, /images\.length \? IMAGE_RULE : "",\s*methodInstructions\(observations\),\s*\]/);
   assert.match(answer, /prompt: \[\s*`Now: \$\{nowInSouthAfrica\(\)\}\.`,/);

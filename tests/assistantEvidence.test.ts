@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { readFileSync, readdirSync } from "node:fs";
 import Module from "node:module";
 import { lookupStatus, parseStep, planInstructions } from "../src/lib/crmAssistantPlan";
+import { daxCore } from "./daxCore";
 
 // crmAssistantEvidence reaches server-only + Prisma; its helpers are pure, so load it with server-only stubbed.
 type Loader = (request: string, parent: unknown, isMain: boolean) => unknown;
@@ -47,7 +48,7 @@ test("the planner is told when to use each, and the person sees what it is doing
 });
 
 test("each is wired to its lookup, with its own character budget", () => {
-  const lib = code("src/lib/crmAssistant.ts");
+  const lib = daxCore(code);
   assert.match(lib, /case "search_messages": return searchMessages\(user, step\.args\);/);
   assert.match(lib, /case "open_message": return openMessage\(user, step\.args\);/);
   assert.match(lib, /case "read_document": return readDocument\(user, step\.args\);/);

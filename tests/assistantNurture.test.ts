@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { ACTION_INSTRUCTIONS, NURTURE_RULE, parseActionList } from "../src/lib/assistantActions";
 import { WHATSAPP_CONFIRMABLE } from "../src/lib/assistantWhatsAppRules";
+import { daxCore } from "./daxCore";
 
 /**
  * Sean, 2026-11-02, on WhatsApp: "Full history, but it's not lost — should be in Nurture." DAX proposed a STAGE called
@@ -41,7 +42,7 @@ test("DAX is told what Nurture IS — a status, parked not lost, never a stage �
   assert.match(NURTURE_RULE, /A LOST deal can be parked: the card reopens it first, and says so\. A won deal can't\./);
   assert.match(ACTION_INSTRUCTIONS, /\{"type":"nurture","leadId":"<id>","because":"product\|timing\|budget\|customer\|other"/);
   // Its lookups see it: the deal's nurture details, and nurture as a status to list.
-  const lib = code("src/lib/crmAssistant.ts");
+  const lib = daxCore(code);
   assert.match(lib, /\.\.\.\(lead\.status === "nurture"\s*\? \{ nurture: \{ since: /);
   assert.match(code("src/lib/crmAssistantPlan.ts"), /status: z\.enum\(\["open", "nurture", "won", "lost", "any"\]\)\.optional\(\),/);
   assert.match(code("src/lib/assistantSoul.ts"), /park a deal in Nurture for a later follow-up \(reopening a lost one first\)/);
@@ -50,7 +51,7 @@ test("DAX is told what Nurture IS — a status, parked not lost, never a stage �
 });
 
 test("a stage or a person that isn't found is SAID — never dropped without a word", () => {
-  const lib = code("src/lib/crmAssistant.ts");
+  const lib = daxCore(code);
   const stage = lib.slice(lib.indexOf('} else if (p.type === "stage") {'), lib.indexOf('} else if (p.type === "draft_message") {'));
   assert.match(stage, /if \(!stage\) \{\s*problems\.push\(\/\^nurtur\/i\.test\(wantedStage\)/);
   assert.match(stage, /Nurture isn't a stage — it's how a deal is parked for later\./);
@@ -61,7 +62,7 @@ test("a stage or a person that isn't found is SAID — never dropped without a w
 });
 
 test("the card: offered only when it can run — the lead page's permissions, an active salesperson, a lost deal says it reopens", () => {
-  const lib = code("src/lib/crmAssistant.ts");
+  const lib = daxCore(code);
   const branch = lib.slice(lib.indexOf('} else if (p.type === "nurture") {'), lib.indexOf('} else if (p.type === "quote") {'));
   assert.match(branch, /if \(wasStatus !== "open" && wasStatus !== "nurture" && wasStatus !== "lost"\)/, "a won deal is never parked");
   assert.match(branch, /hasPermission\(user, "leads\.change_stage"\)\) \|\| !\(await hasPermission\(user, "activities\.manage"\)\)/);

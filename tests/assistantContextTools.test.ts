@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import Module from "node:module";
 import { parseStep, planInstructions } from "../src/lib/crmAssistantPlan";
+import { daxCore } from "./daxCore";
 
 // crmAssistant reaches server-only + Prisma; pageHint is pure, so load it with those stubbed.
 type Loader = (request: string, parent: unknown, isMain: boolean) => unknown;
@@ -56,7 +57,7 @@ test("the page hint is only a record id from the path — nothing else gets in",
 });
 
 test("every new lookup goes through the page's own visibility rule and module", () => {
-  const lib = code("src/lib/crmAssistant.ts");
+  const lib = daxCore(code);
   const fn = (name: string) => lib.slice(lib.indexOf(`async function ${name}(`), lib.indexOf("\nasync function", lib.indexOf(`async function ${name}(`) + 10));
   const schedule = fn("schedule");
   assert.match(schedule, /getAccessibleActivityIds\(user\)/);
@@ -91,7 +92,7 @@ test("it can answer questions about itself — truthfully, from a fixed brief", 
   assert.match(about, /anything they've approved you cannot change/i);
   assert.match(about, /until then it is used only with the person it came from/);
   // …and it is actually given to the answer step, after the soul.
-  const lib = code("src/lib/crmAssistant.ts");
+  const lib = daxCore(code);
   assert.match(lib, /instructions: \[\s*soul,\s*selfKnowledge\(profile\.name, modules\),\s*ANSWER_RULES,/);
   assert.match(lib, /getCompanyProfile\(\)\.catch\(\(\) => null\),\s*getEnabledModuleIds\(\),/);
   // What it has learned comes after the fixed rules — it changes, so it can't sit in the cached prefix.
@@ -144,7 +145,7 @@ test("the bubble: same gate as the page, the page's own conversation, no load un
   assert.match(layout, /enabledModules === null \|\| enabledModules\.has\("automation"\)/);
   // Same gate; on a phone it is hidden (lib/phoneScope.ts — there, DAX is on WhatsApp).
   assert.match(layout, /\{showAssistant && <div className="max-md:hidden"><AssistantBubble unseen=\{assistantUnseen\} \/><\/div>\}/);
-  const lib = code("src/lib/crmAssistant.ts");
+  const lib = daxCore(code);
   const today = lib.slice(lib.indexOf("export async function assistantTurnsToday"));
   assert.match(today.slice(0, 500), /where: \{ userId, createdAt: \{ gte: startOfToday \} \}/);
   const action = code("src/app/actions/assistant.ts");

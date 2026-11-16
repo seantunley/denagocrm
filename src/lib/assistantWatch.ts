@@ -19,6 +19,7 @@ import {
 import { accessibleTestDriveWhere } from "./testDriveAccess";
 import { contactActivityWhere, contactCommunicationWhere, latestContactAt } from "./customerContact";
 import { firstStageOrders, stageContactAt } from "./stageContact";
+import { lastWorkedAt } from "./dealWorked";
 import { isModuleEnabled } from "./modules/enabled";
 import { contactName } from "./format";
 import { ownedWriteTenantId } from "./tenantWrite";
@@ -263,6 +264,7 @@ async function checkLeadQuiet(user: PermissionUser, tenantId: string, w: Watch, 
       title: true,
       name: true,
       stageEnteredAt: true,
+      contactId: true,
       stage: { select: { order: true, pipelineId: true } },
       // Real contact only (customerContact.ts) — the same rule as DAX's "gone quiet".
       communications: { where: contactCommunicationWhere, orderBy: { occurredAt: "desc" }, take: 1, select: { type: true, occurredAt: true } },
@@ -272,12 +274,22 @@ async function checkLeadQuiet(user: PermissionUser, tenantId: string, w: Watch, 
   const hits: Hit[] = [];
   // Moved past the first stage = contacted, as of that move (stageContact.ts).
   const firstOrders = await firstStageOrders(leads);
+  // No contact logged is not "never contacted" when somebody is working the deal — a note, a call booked — by the
+  // lead score's own rule (dealWorked.ts; Sean 2026-11-16). Read only for leads with no contact at all.
+  const worked = await lastWorkedAt(leads.filter((lead) => !latestContactAt(lead.communications, lead.activities) && !stageContactAt(lead, firstOrders)));
   for (const lead of leads) {
     const own = latestContactAt(lead.communications, lead.activities);
     const moved = stageContactAt(lead, firstOrders);
     const last = own && moved ? (own > moved ? own : moved) : own ?? moved;
     if (last && last >= cutoff) continue;
-    const detail = last ? `last contact ${Math.floor((now.getTime() - last.getTime()) / DAY)} days ago` : "never contacted";
+    const workedAt = last ? null : worked.get(lead.id) ?? null;
+    if (workedAt && workedAt >= cutoff) continue;
+    const daysAgo = (at: Date) => Math.floor((now.getTime() - at.getTime()) / DAY);
+    const detail = last
+      ? `last contact ${daysAgo(last)} days ago`
+      : workedAt
+        ? `no contact logged — nothing new on the deal for ${daysAgo(workedAt)} days`
+        : "never contacted";
     hits.push({ id: lead.id, ref: lead.title, customer: lead.name, detail });
   }
   return hits;

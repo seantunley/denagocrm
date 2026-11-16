@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { beforeEach, test } from "node:test";
 import Module, { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
 
 /*
  * The lead score, run for real against a fake database that applies the same
@@ -10,7 +11,7 @@ import Module, { createRequire } from "node:module";
 
 type Comm = { id?: string; leadId: string | null; contactId?: string | null; type: string; direction: string | null; occurredAt: Date };
 type OutboxRow = { communicationId: string | null; status: string; createdAt: Date; leadId?: string | null; contactId?: string | null };
-type Act = { leadId: string | null; contactId?: string | null; type: string; status: string; availabilityBlock: boolean; doneAt: Date | null; dueDate: Date };
+type Act = { leadId: string | null; contactId?: string | null; type: string; status: string; availabilityBlock: boolean; doneAt: Date | null; dueDate: Date; createdAt?: Date };
 type Where = Record<string, unknown>;
 
 /** `links`: which customer each lead belongs to (Lead.contactId). */
@@ -84,7 +85,7 @@ const realLoad = loader._load;
 loader._load = function (this: unknown, request: string, parent, isMain) {
   if (request === "server-only") return {};
   const from = (parent?.filename ?? "").replace(/\\/g, "/");
-  if (from.endsWith("src/lib/stageContact.ts") && request === "./db") return { prisma: fakePrisma };
+  if ((from.endsWith("src/lib/stageContact.ts") || from.endsWith("src/lib/dealWorked.ts")) && request === "./db") return { prisma: fakePrisma };
   if (from.endsWith("src/lib/leadScoreLoader.ts")) {
     if (request === "./db") return { prisma: fakePrisma };
     if (request === "./permissions") return { getAccessibleLeadIds: async () => null };
@@ -94,6 +95,7 @@ loader._load = function (this: unknown, request: string, parent, isMain) {
 
 const require_ = createRequire(import.meta.url);
 const { scoreLeads } = require_("../src/lib/leadScoreLoader.ts") as typeof import("../src/lib/leadScoreLoader");
+const { lastWorkedAt } = require_("../src/lib/dealWorked.ts") as typeof import("../src/lib/dealWorked");
 
 // In its pipeline's FIRST stage, so the stage says nothing about contact unless a test moves it on.
 const LEAD = { id: "lead1", valueCents: 25_000_000, status: "open", createdAt: day(1), stageEnteredAt: day(1), stage: { name: "Quoted", isClosed: false, staleAfterDays: null, order: 0, pipelineId: "p1" } };
@@ -123,7 +125,13 @@ test("MOVED PAST THE FIRST STAGE IS CONTACT (Sean, 2026-10-18: a lead in Contact
   assert.equal(uncontacted(s), false, JSON.stringify(s.reasons));
   // Dated to the move: entered Contacted on the 4th → seven days by the 11th.
   assert.ok(s.reasons.includes("No contact for 7 days"), JSON.stringify(s.reasons));
-  // Still in the first stage with only the note: "Never contacted" is still the truth.
+  // Still in the first stage with only the note: never "Never contacted" (Sean, 2026-11-16) — the note is somebody
+  // working the deal. Nine days without anything new is said as that.
+  const noted = await score();
+  assert.equal(uncontacted(noted), false, JSON.stringify(noted.reasons));
+  assert.ok(noted.reasons.includes("Nothing new on the deal for 9 days — no contact logged"), JSON.stringify(noted.reasons));
+  // With nothing at all on it, it is: the stage tests below read only the stage.
+  state.comms = [];
   assert.ok(uncontacted(await score()));
   // "First" is the pipeline's own lowest open stage, not order 0: a pipeline starting at 5.
   state.stages = [{ pipelineId: "p2", order: 5, isClosed: false }, { pipelineId: "p2", order: 6, isClosed: false }];
@@ -197,6 +205,60 @@ test("…but not another customer's quote, a quote on the customer's OTHER deal,
 
 const uncontacted = (s: { reasons: string[] }) => s.reasons.some((r) => /not contacted yet|Never contacted/.test(r));
 
+test("ONE 'WORKED ON' RULE for the score AND DAX's quiet-lead watch (review of #1136): the customer's own rows count, an undelivered message doesn't", async () => {
+  const deal = [{ id: "lead1", contactId: "cust1" }];
+  const at = async () => (await lastWorkedAt(deal)).get("lead1") ?? null;
+  assert.equal(await at(), null, "nothing on it");
+  // A note on the customer with no deal: worked on.
+  state.comms = [{ id: "n1", leadId: null, contactId: "cust1", type: "note", direction: null, occurredAt: day(9) }];
+  assert.deepEqual(await at(), day(9));
+  // …but not the customer's note on another deal, nor somebody else's.
+  state.comms = [{ id: "n2", leadId: "lead2", contactId: "cust1", type: "note", direction: null, occurredAt: day(9) }, { id: "n3", leadId: null, contactId: "cust2", type: "note", direction: null, occurredAt: day(9) }];
+  assert.equal(await at(), null);
+  // An outbound WhatsApp the outbox never delivered is not work — on the deal or on the customer; delivered, it is.
+  for (const leadId of ["lead1", null]) {
+    state.comms = [{ id: "w1", leadId, contactId: "cust1", type: "whatsapp", direction: "outbound", occurredAt: day(10) }];
+    for (const status of ["pending", "retry", "dead", "cancelled"]) {
+      state.outbox = [{ communicationId: "w1", status, createdAt: day(10), leadId, contactId: "cust1" }];
+      assert.equal(await at(), null, `${status} (${leadId ? "deal" : "customer"})`);
+    }
+    state.outbox = [{ communicationId: "w1", status: "sent", createdAt: day(10), leadId, contactId: "cust1" }];
+    assert.deepEqual(await at(), day(10));
+  }
+  // A task added on the customer with no deal, planned: worked on.
+  state.comms = []; state.outbox = [];
+  state.acts = [{ leadId: null, contactId: "cust1", type: "call", status: "planned", availabilityBlock: false, doneAt: null, dueDate: day(12), createdAt: day(8) }];
+  assert.deepEqual(await at(), day(8));
+  // The watch reads the very same rule, with each lead's customer.
+  const watch = readFileSync(new URL("../src/lib/assistantWatch.ts", import.meta.url), "utf8");
+  const quiet = watch.slice(watch.indexOf("async function checkLeadQuiet"), watch.indexOf("async function checkTestDriveNoFollowUp"));
+  assert.match(quiet, /contactId: true,/);
+  assert.match(quiet, /const worked = await lastWorkedAt\(leads\.filter\(/);
+  assert.doesNotMatch(quiet, /communication\.groupBy|activity\.groupBy/, "no second, drifting copy of the rule");
+});
+
+test("A DEAL SOMEBODY IS WORKING IS NEVER 'NOT CONTACTED' (Sean, 2026-11-16: a pinned note of the WhatsApp chat and a call booked)", async () => {
+  // What production held: a new lead in the first stage, one internal note, one planned call — nothing logged as contact.
+  const fresh = { ...LEAD, createdAt: day(10), stageEnteredAt: day(10) };
+  state.comms = [{ leadId: "lead1", type: "note", direction: null, occurredAt: day(10) }];
+  state.acts = [{ leadId: "lead1", type: "call", status: "planned", availabilityBlock: false, doneAt: null, dueDate: day(12), createdAt: day(10) }];
+  let s = (await scoreLeads([fresh], day(11))).get("lead1")!;
+  assert.equal(uncontacted(s), false, JSON.stringify(s.reasons));
+  assert.equal(s.reasons.some((r) => /no contact/i.test(r)), false, "worked on yesterday: nothing about contact to say");
+  // Either one alone is enough: the booked call…
+  state.comms = [];
+  assert.equal(uncontacted((await scoreLeads([fresh], day(11))).get("lead1")!), false, "a booked next step");
+  // …or a note filed on the customer with no deal.
+  state.acts = [];
+  state.links = [{ id: "lead1", contactId: "cust1" }];
+  state.comms = [{ leadId: null, contactId: "cust1", type: "note", direction: null, occurredAt: day(10) }];
+  s = (await scoreLeads([fresh], day(11))).get("lead1")!;
+  assert.equal(uncontacted(s), false, JSON.stringify(s.reasons));
+  // Not the customer's note on ANOTHER deal.
+  state.comms = [{ leadId: "lead2", contactId: "cust1", type: "note", direction: null, occurredAt: day(10) }];
+  assert.ok(uncontacted((await scoreLeads([fresh], day(11))).get("lead1")!));
+});
+
 test("an undelivered WhatsApp is not contact in the SCORE either — a new lead keeps 'not contacted yet'", async () => {
   state.links = [{ id: "lead1", contactId: "cust1" }];
   for (const leadId of ["lead1", null]) {
@@ -231,12 +293,11 @@ test("AN EMAIL FILED ON THE CUSTOMER, WITH NO LEAD, IS CONTACT: the lead no long
   assert.equal(uncontacted(await score()), false);
 });
 
-test("…but not another customer's, not the customer's rows on ANOTHER lead, and never a note", async () => {
+test("…but not another customer's, and not the customer's rows on ANOTHER lead", async () => {
   state.links = [{ id: "lead1", contactId: "cust1" }];
   state.comms = [
     { leadId: null, contactId: "cust2", type: "email", direction: "outbound", occurredAt: day(10) }, // somebody else
     { leadId: "lead2", contactId: "cust1", type: "email", direction: "outbound", occurredAt: day(10) }, // this customer's other deal
-    { leadId: null, contactId: "cust1", type: "note", direction: "outbound", occurredAt: day(10) }, // written for ourselves
   ];
   assert.ok(uncontacted(await score()));
   // A lead with no customer attached reads only its own rows, as before.

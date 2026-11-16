@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { simpleParser } from "mailparser";
 import { bounceLines, bouncedLabel, newBounceLines, readBounce, tidyReason } from "../src/lib/emailBounce";
 import { openedFact } from "../src/lib/emailOpenTracking";
+import { daxCore } from "./daxCore";
 
 const code = (path: string) => readFileSync(path, "utf8");
 const parse = (raw: string | Buffer) => simpleParser(raw);
@@ -152,7 +153,7 @@ test("DAX is told an email was not delivered", () => {
   const fact = openedFact({ type: "email", direction: "outbound", messageId: "<m@d>", bouncedAt: new Date("2026-10-12T10:00:05Z"), bounceReason: "550 High probability of spam" });
   assert.deepEqual((fact as { notDelivered?: unknown }).notDelivered, { at: "2026-10-12T10:00:05.000Z", reason: "550 High probability of spam" });
   assert.match(code("src/lib/emailOpenTracking.ts"), /`notDelivered`: .*NOT delivered/);
-  assert.match(code("src/lib/crmAssistant.ts"), /bouncedAt: true, bounceReason: true/);
+  assert.match(daxCore(code), /bouncedAt: true, bounceReason: true/);
 });
 
 test("wiring: the mailbox sync reads bounces before tickets or replies, and every timeline shows them", () => {

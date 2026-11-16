@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { activityArgs, isSmallTalk, leadArgs, lookupStatus, planInstructions, ANSWER_RULES } from "../src/lib/crmAssistantPlan";
+import { daxCore } from "./daxCore";
 
 // From real questions asked in production on 2026-10-05 that got weak answers.
 const code = (rel: string) =>
@@ -9,7 +10,7 @@ const code = (rel: string) =>
     .replace(/\r\n/g, "\n")
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/^\s*\/\/.*$/gm, "");
-const lib = code("src/lib/crmAssistant.ts");
+const lib = daxCore(code);
 const fn = (name: string) => lib.slice(lib.indexOf(`async function ${name}(`), lib.indexOf("\n}\n", lib.indexOf(`async function ${name}(`)));
 
 test('"How many leads came in last month?" — a real count over the calendar month, any status', () => {

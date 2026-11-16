@@ -6,6 +6,7 @@ import { scoreLead, type LeadScore } from "./leadScore";
 import { handledToday } from "./todayAction";
 import { contactActivityWhere, contactCommunicationWhere } from "./customerContact";
 import { firstStageOrders, stageContactAt } from "./stageContact";
+import { lastWorkedAt } from "./dealWorked";
 
 /**
  * Lead score — the IMPURE half: gathers the signals `scoreLead` reads.
@@ -127,6 +128,9 @@ export async function scoreLeads(leads: ScorableLead[], now: Date = new Date()):
   const customerActivity = byCustomer(customerDone, (row) => row._max.doneAt);
   const customerSent = byCustomer(customerOutbound, (row) => row._max.occurredAt);
 
+  // WORKED ON (dealWorked.ts): not contact — only what stops "not contacted" being said of a deal somebody is working.
+  const worked = await lastWorkedAt(leads.map((lead) => ({ id: lead.id, contactId: customerOf.get(lead.id) ?? null })));
+
   /*
    * QUOTES ARE PART OF THE CONTACT. A quote that has reached the customer —
    * emailed from the CRM, opened, or signed — is contact at that moment; and a
@@ -203,6 +207,7 @@ export async function scoreLeads(leads: ScorableLead[], now: Date = new Date()):
           nextPlannedActivityAt: next,
           createdAt: lead.createdAt,
           hasQuote: quoted.has(lead.id) || customerQuoted.has(customer),
+          lastWorkedAt: worked.get(lead.id) ?? null,
         },
         now,
       ),

@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { emailSendStatus, openedFact } from "../src/lib/emailOpenTracking";
 import { receiptFact } from "../src/lib/deliveryReceipts";
 import { watchNotification } from "../src/lib/assistantWatchRules";
+import { daxCore } from "./daxCore";
 
 /*
  * DAX roadmap, Phase 2: every lookup that talks about a send says what happened to it, in words the CRM can stand
@@ -57,7 +58,7 @@ test("the quote_unsigned note puts a bounced quote under its own heading, not 's
 });
 
 test("every lookup that talks about a send carries it (find_quotes, a lead's quotes, a customer's quotes, messages)", () => {
-  const src = readFileSync(new URL("../src/lib/crmAssistant.ts", import.meta.url), "utf8");
+  const src = daxCore();
   assert.equal(src.match(/sendStatus: sends\.get\((quote|q)\.id\)!\.status/g)?.length, 3);
   assert.match(src, /\.\.\.receiptFact\(c\),/);
   assert.match(src, /deliveredAt: true,/);
