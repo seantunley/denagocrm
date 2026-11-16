@@ -13,7 +13,7 @@ const realLoad = moduleLoader._load;
 moduleLoader._load = function (this: unknown, request: string, parent, isMain) {
   if (request === "server-only") return {};
   if ((parent?.filename ?? "").replace(/\\/g, "/").endsWith("src/lib/assistantFinance.ts")) {
-    if (request === "./dealFinance") return { loadDealFinance: async () => financeNow, loadFinanceDeals: async () => [] };
+    if (request === "./dealFinance") return { loadDealFinance: async () => financeNow, loadFinanceDeals: async () => [], dealFinanceHouses: async () => [] };
     if (request === "./permissions") return { canAccessLead: async () => true, hasPermission: async () => true };
     if (request === "./tenantWrite") return { ownedWriteTenantId: () => "tenant_a" };
     if (request === "./db") return { prisma: {} };
@@ -51,7 +51,8 @@ test("the card: proposed with a real status, shown before Confirm, and refused a
   assert.equal(proposedAction.safeParse({ type: "finance", leadId: LEAD, status: "pending" }).success, false, "only a real status");
   const card = read("src/lib/assistantFinance.ts");
   assert.match(card, /hasPermission\(user, "leads\.edit"\)/);
-  assert.match(card, /kind: "finance"\s*\}/, "only a finance house of this workspace");
+  assert.match(card, /dealFinanceHouses\(tenantId, p\.leadId\)/, "only a finance house ON THIS DEAL — a cash deal gets no card");
+  assert.match(card, /isn't on finance — add the finance house to the deal's suppliers/);
   assert.match(card, /never a guess/, "an unnamed house is the deal's own, else the only one — otherwise it asks");
   assert.match(card, /wasVersion: current\?\.updatedAt\.toISOString\(\) \?\? null/);
   assert.match(card, /Nobody is contacted\./);

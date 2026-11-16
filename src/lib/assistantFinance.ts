@@ -1,9 +1,8 @@
 import "server-only";
-import { prisma } from "./db";
 import { canAccessLead, hasPermission, type PermissionUser } from "./permissions";
 import { isModuleEnabled } from "./modules/enabled";
 import { ownedWriteTenantId } from "./tenantWrite";
-import { loadDealFinance, loadFinanceDeals } from "./dealFinance";
+import { dealFinanceHouses, loadDealFinance, loadFinanceDeals } from "./dealFinance";
 import { financeStatusLabel, financeStatusShort, isFinanceStatus } from "./dealFinanceRules";
 import type { FinanceCard } from "./assistantFinanceRules";
 import { johannesburgDateKey } from "./activityDay";
@@ -58,15 +57,16 @@ export async function financeCard(user: PermissionUser, p: FinanceProposal, lead
   const tenantId = ownedWriteTenantId();
   const [current, houses] = await Promise.all([
     loadDealFinance(tenantId, p.leadId),
-    prisma.vendor.findMany({ where: { tenantId, deletedAt: null, kind: "finance" }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
+    // Only the finance houses ON THIS DEAL: a deal is financed because one was added to its suppliers. A cash deal isn't.
+    dealFinanceHouses(tenantId, p.leadId),
   ]);
-  if (houses.length === 0) return { problem: "No finance house is set up yet — an owner adds it in Settings → Suppliers, with the type Finance." };
-  // Named: that one, exactly or by its start. Not named: the deal's own, else the only one there is — never a guess.
+  if (houses.length === 0) return { problem: `${lead.name}'s deal isn't on finance — add the finance house to the deal's suppliers (on the deal page) first.` };
+  // Named: that one, exactly or by its start. Not named: the deal's own, else the only one on the deal — never a guess.
   const said = p.financeHouse?.trim().toLowerCase();
   const house = said
     ? houses.find((h) => h.name.toLowerCase() === said) ?? (houses.filter((h) => h.name.toLowerCase().startsWith(said)).length === 1 ? houses.find((h) => h.name.toLowerCase().startsWith(said)) : undefined)
     : current ? houses.find((h) => h.id === current.vendorId) : houses.length === 1 ? houses[0] : undefined;
-  if (!house) return { problem: said ? `I can't find a finance house called "${p.financeHouse}" — the ones set up are ${houses.map((h) => h.name).join(", ")}.` : `Which finance house — ${houses.map((h) => h.name).join(" or ")}?` };
+  if (!house) return { problem: said ? `"${p.financeHouse}" isn't a finance house on this deal — on it: ${houses.map((h) => h.name).join(", ")}.` : `Which finance house — ${houses.map((h) => h.name).join(" or ")}?` };
   const reference = p.reference?.trim() || current?.reference || null;
   const note = p.note?.trim() || current?.note || null;
   if (current && current.status === p.status && current.vendorId === house.id && current.reference === reference && current.note === note) {
