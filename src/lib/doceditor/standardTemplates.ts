@@ -354,17 +354,65 @@ function deliveryTemplate(): DocumentModel {
 }
 
 /**
- * The standard delivery note for signing on a SCREEN: the printed one with its
- * ruled sign-off lines replaced by the words they stood for. The customer's
- * signature and date go on the page the signing engine adds for them — a
- * packing list and a checklist with photos run to no fixed length, so nothing
- * here can say where on a page they end. Who handed it over is in the note's
- * own details, and on the certificate as the witness.
+ * THE SIGN-OFF ON A SCREEN-SIGNED DELIVERY NOTE: "Received in good order", the customer's signature box and date,
+ * and the company footer, as one band of fixed height.
+ *
+ * Sean, 2026-11-16 (DN-1037): the signature used to go on a page the signing engine adds — a "Signatures" heading
+ * and one box — after the footer had already spilled onto a page of its own: four pages, two of them nearly empty.
+ * Fields sit at fixed page coordinates while the note above them flows, so the band goes either
+ *   - "bottom": at the foot of page 1, with DELIVERY_SIGN_OFF_ROOM kept free under the content — the note is only
+ *     signed this way when the rendered PDF shows it all fitted on one page (deliveryNoteLayout.ts checks), so the
+ *     content can never run under the box; or
+ *   - "next-page": at the top of a second page, when it doesn't fit.
+ */
+const A4 = PAGE_SIZES.A4;
+const SIGN_OFF_MARGIN = 40;
+/** Label row + signature box + gap + footer. */
+const SIGN_OFF_HEIGHT = 26 + 64 + 22 + 76;
+/** What the flow keeps free at the end of page 1 for the band ("bottom"): the band and a little air above it. */
+export const DELIVERY_SIGN_OFF_ROOM = SIGN_OFF_HEIGHT + 16;
+
+function deliverySignOff(doc: DocumentModel, pageIndex: number, top: number): void {
+  const customer = newRecipient({ party: "customer", name: "Customer", color: "#2563eb" });
+  doc.recipients = [customer];
+  const page = doc.pages[pageIndex];
+  const label = (x: number, width: number, value: string) => {
+    const block = text(value);
+    if (block.type === "text") block.value = [{ type: "p", children: [{ text: value, bold: true }] }];
+    return { id: uid(), x, y: top, width, block: small(block) };
+  };
+  const at = (x: number, y: number) => ({ mode: "page" as const, blockId: null, x, y });
+  const content = A4.w - SIGN_OFF_MARGIN * 2;
+  page.floatingBlocks.push(
+    label(SIGN_OFF_MARGIN, 300, "Received in good order"),
+    label(400, 160, "Date"),
+    { id: uid(), x: SIGN_OFF_MARGIN, y: top + 26 + 64 + 22, width: content, block: footer() },
+  );
+  page.overlayFields.push(
+    newOverlayField("signature", { recipientId: customer.id, label: "Customer signature", anchor: at(SIGN_OFF_MARGIN, top + 26), width: 280, height: 64 }),
+    newOverlayField("date", { recipientId: customer.id, label: "Date", anchor: at(400, top + 26 + 18), width: 160, height: 38 }),
+  );
+}
+
+/**
+ * The standard delivery note for signing on a SCREEN: the printed one with its ruled sign-off lines replaced by the
+ * sign-off band above — at the foot of page 1, or on a page 2 of its own (see DELIVERY_SIGN_OFF_ROOM). Who handed it
+ * over is in the note's own details, and on the certificate as the witness.
  *
  * Only the fallback: a published delivery layout is signed exactly as drawn.
  */
-export function deliveryTemplateForScreen(): DocumentModel {
-  return documentModel("Delivery note", [...deliveryRows(), [text("Received in good order.")], [footer()]]);
+export function deliveryTemplateForScreen(signOff: "bottom" | "next-page" = "next-page"): DocumentModel {
+  if (signOff === "bottom") {
+    const room = newBlock("spacer");
+    if (room.type === "spacer") room.height = DELIVERY_SIGN_OFF_ROOM;
+    const doc = documentModel("Delivery note", [...deliveryRows(), [room]]);
+    deliverySignOff(doc, 0, A4.h - SIGN_OFF_MARGIN - SIGN_OFF_HEIGHT);
+    return doc;
+  }
+  const doc = documentModel("Delivery note", deliveryRows());
+  doc.pages.push(newPage([]));
+  deliverySignOff(doc, 1, SIGN_OFF_MARGIN);
+  return doc;
 }
 
 /**
