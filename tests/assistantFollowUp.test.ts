@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { FOLLOW_UP_CODE, WORDING_EDIT_RULE, followUpRoute } from "../src/lib/assistantFollowUp";
+import { daxCore } from "./daxCore";
 
 const code = (rel: string) => readFileSync(new URL(`../${rel}`, import.meta.url), "utf8").replace(/\r\n/g, "\n");
 
@@ -51,7 +52,7 @@ test("the workspace's own assistant name counts like DAX — beside a bare thank
   assert.equal(followUpRoute("Jarvis send it", false, "Jarvis"), "full");
   assert.equal(followUpRoute("Thanks Anna, and the deposit?", false, "Anna"), "full", "a name that is also a customer's widens nothing");
   assert.equal(followUpRoute("Jarvis", false, "Jarvis"), "full", "the name alone is no greeting");
-  const lib = code("src/lib/crmAssistant.ts");
+  const lib = daxCore(code);
   assert.match(lib, /const route = followUpRoute\(question, Boolean\(opts\.images\?\.length\), parseProfile\(profileRaw\)\.name\);/);
   assert.ok(lib.indexOf("const profileRead = getSetting(ASSISTANT_PROFILE_KEY);") < lib.indexOf("const thread = tasksOn"), "read alongside the conversation pick");
 });
@@ -62,7 +63,7 @@ test("the small talk DAX already answered without research keeps doing so", () =
 });
 
 test("a route that never researches reads no CRM context, and the timings say which route ran", () => {
-  const lib = code("src/lib/crmAssistant.ts");
+  const lib = daxCore(code);
   const ask = lib.slice(lib.indexOf("export async function askCrm("));
   // Decided BEFORE the reads, from the words alone.
   const decided = ask.indexOf("const route = followUpRoute(question, Boolean(opts.images?.length), parseProfile(profileRaw).name);");

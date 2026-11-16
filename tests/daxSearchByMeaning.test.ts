@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { parseStep } from "../src/lib/crmAssistantPlan";
+import { daxCore } from "./daxCore";
 
 const src = (rel: string) => readFileSync(new URL(`../${rel}`, import.meta.url), "utf8").replace(/\r\n/g, "\n");
 
@@ -28,5 +29,5 @@ test("when the words find little, the latest messages come along to be read for 
   assert.match(evidence, /READ FOR MEANING/);
   assert.match(src("src/lib/crmAssistantPlan.ts"), /"alternatives":\["<up to 6 other ways the SAME THING may have been said/);
   // 20 × (200-character excerpt + its date, id and facts) sits inside search_messages' 12 000-character budget.
-  assert.match(src("src/lib/crmAssistant.ts"), /search_messages: 12_000/);
+  assert.match(daxCore(src), /search_messages: 12_000/);
 });

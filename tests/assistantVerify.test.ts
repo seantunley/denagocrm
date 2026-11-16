@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { unsupportedFigures, unsupportedNote } from "../src/lib/assistantVerify";
 import { RECHECK_STEPS, RECHECK_TURNS, stepsToRecheck } from "../src/lib/crmAssistantPlan";
 import { HARD_DEADLINE_MS, RECHECK_MAX_MS, RECHECK_RESERVE_MS, recheckBudgetMs } from "../src/lib/assistantDepth";
+import { daxCore } from "./daxCore";
 
 // What a quotes lookup returns: formatZAR's en-ZA shape, with its odd spaces.
 const quotes = [
@@ -87,7 +88,7 @@ test("the note names what to check, and is said once", () => {
 });
 
 test("every answer goes through the check, and the note is part of what's saved and shown", () => {
-  const src = readFileSync(new URL("../src/lib/crmAssistant.ts", import.meta.url), "utf8");
+  const src = daxCore();
   // The person's words count as evidence; DAX's earlier answers never do (#789 review).
   // Checked with its citations (reply.answer), so a sentence citing a quote is checked against that quote.
   assert.match(src, /const evidenceNow = \[question, \.\.\.history\.map\(\(t\) => t\.question\), \.\.\.observations\.map\(\(o\) => o\.output\.data\)\];\s*let flagged = unsupportedFigures\(reply\.answer, evidenceNow\);/);
@@ -100,7 +101,9 @@ test("every answer goes through the check, and the note is part of what's saved 
   assert.match(src, /earlierLookupsAgain\(user, who\.tenantId, thread\.id, \(\) => timeUp\),\s*new Promise<typeof timedOut>\(\(resolve\) => \{ timer = setTimeout\(\(\) => \{ timeUp = true; resolve\(timedOut\); \}, recheckMs\); \}\),/);
   // Ran out of time: the warning stands as it was.
   assert.match(src, /if \(again === timedOut\) await logError\("crm-assistant", "figure re-check ran out of time"\)\.catch\(\(\) => \{\}\);\s*else if \(again\.length\) flagged = unsupportedFigures\(reply\.answer, \[\.\.\.evidenceNow, \.\.\.again\]\);/);
-  const rerun = src.slice(src.indexOf("async function earlierLookupsAgain("), src.indexOf("/** The records each answer listed travel apart"));
+  // The function alone, to its closing brace (withListed, which followed it, moved to assistant/context.ts).
+  const rerunAt = src.indexOf("async function earlierLookupsAgain(");
+  const rerun = src.slice(rerunAt, src.indexOf("\n}\n", rerunAt) + 2);
   assert.match(rerun, /conversationId: string, timeUp: \(\) => boolean\)/);
   // One at a time, and none started once the time is up: a timed-out re-check leaves at most one lookup running.
   assert.match(rerun, /for \(const step of stepsToRecheck\(turns\.map\(\(t\) => t\.tools\)\)\) \{\s*if \(timeUp\(\)\) break;\s*const output = await runTool\(user, step\)/);
