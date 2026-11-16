@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { canAccessContact, canAccessLead, hasAnyPermission, hasPermission, requireQuoteReadAccess, requireRoute } from "@/lib/permissions";
-import { loadDealFinance } from "@/lib/dealFinance";
+import { dealFinanceHouses, loadDealFinance } from "@/lib/dealFinance";
 import { financeBlocksDelivery, financeStatusShort } from "@/lib/dealFinanceRules";
 import DealFinancePanel from "@/components/deals/DealFinancePanel";
 import { formatDate, formatDateTime, formatZAR } from "@/lib/format";
@@ -243,7 +243,7 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
   const [finance, financeHouses, canEditFinance] = lead && suppliersOn
     ? await Promise.all([
         loadDealFinance(tenantId, lead.id),
-        prisma.vendor.findMany({ where: { tenantId, deletedAt: null, kind: "finance" }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
+        dealFinanceHouses(tenantId, lead.id),
         hasPermission(user, "leads.edit"),
       ])
     : [null, [], false];

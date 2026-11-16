@@ -114,6 +114,19 @@ export async function loadDealFinance(tenantId: string, leadId: string) {
 }
 
 /**
+ * The finance houses ON THIS DEAL — added as a supplier of type Finance (Sean, 2026-11-16: "the deal will only deal
+ * with finance if I put the finance supplier in the deal"). None = a cash deal: no Finance tab, nothing to withdraw.
+ */
+export async function dealFinanceHouses(tenantId: string, leadId: string): Promise<{ id: string; name: string }[]> {
+  const links = await prisma.dealVendor.findMany({
+    where: { tenantId, leadId, vendor: { deletedAt: null, kind: "finance" } },
+    select: { vendor: { select: { id: true, name: true } } },
+    orderBy: { createdAt: "asc" },
+  });
+  return links.map((link) => link.vendor);
+}
+
+/**
  * Why a delivery can't be booked yet because of finance — or null. The one guard every booking path goes through
  * (fulfilment.ts scheduleDelivery, which DAX's delivery card calls too). A quote on no lead has no finance record.
  */
