@@ -16,7 +16,10 @@ const T = "tenant_a", LEAD = "lead_1", HOUSE = "vendor_wesbank";
 const matches = (row: Row, where: Record<string, unknown>) =>
   Object.entries(where).every(([k, v]) => (v instanceof Date ? (row as never as Record<string, Date>)[k]?.getTime() === v.getTime() : (row as never as Record<string, unknown>)[k] === v));
 
-const db = {
+const db: Record<string, unknown> = {
+  // The action's transaction runs against the same fake table; the row lock is a no-op here.
+  $transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(db),
+  $queryRaw: async () => [{ "?column?": 1 }],
   lead: { findFirst: async () => ({ id: LEAD, contactId: null }) },
   // WesBank is on this deal's suppliers; any other id is not.
   dealVendor: { findFirst: async ({ where }: { where: { vendorId: string } }) => (where.vendorId === HOUSE ? { vendor: { id: HOUSE, name: "WesBank" } } : null) },

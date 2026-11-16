@@ -146,19 +146,23 @@ export async function addDealVendor(quoteId: string, formData: FormData): Promis
 export async function removeDealVendor(quoteId: string, vendorId: string): Promise<ActionResult> {
   return asActionResult(async () => {
     const { user, tenantId, quote } = await dealQuote(quoteId);
-    const link = await prisma.dealVendor.findFirst({ where: { tenantId, vendorId, ...dealKey(quote) }, select: { id: true, vendor: { select: { name: true } } } });
-    if (!link) refuse("That supplier is no longer on this deal — refresh the page.");
-    // The deal's finance house stays on while its finance is live (review of #1137): taking it off would leave a
-    // finance record that still holds delivery but can no longer be edited. Paid out or withdrawn, it may go.
-    // ponytail: check-then-delete, not locked against a finance start at the same instant; the panel then says
-    // "add it back" — lock the lead row in both actions if that ever happens.
-    const finance = quote.leadId
-      ? await prisma.dealFinance.findFirst({ where: { tenantId, leadId: quote.leadId, vendorId }, select: { status: true } })
-      : null;
-    if (finance && !financeIsClosed(finance.status)) {
-      refuse(`${link.vendor.name} is this deal's finance house (${financeStatusShort(finance.status).toLowerCase()}). Set the finance to Withdrawn first, or to Paid out once it is.`);
-    }
-    await prisma.dealVendor.deleteMany({ where: { id: link.id, tenantId } });
+    // ONE TRANSACTION, THE DEAL'S LEAD ROW HELD when it has one — the row saveDealFinance holds too, so a finance can't
+    // be started on this supplier while it is being taken off (follow-up to the #1137 review).
+    const link = await prisma.$transaction(async (tx) => {
+      if (quote.leadId) await tx.$queryRaw`SELECT 1 FROM "Lead" WHERE "id" = ${quote.leadId} AND "tenantId" = ${tenantId} FOR UPDATE`;
+      const link = await tx.dealVendor.findFirst({ where: { tenantId, vendorId, ...dealKey(quote) }, select: { id: true, vendor: { select: { name: true } } } });
+      if (!link) refuse("That supplier is no longer on this deal — refresh the page.");
+      // The deal's finance house stays on while its finance is live (review of #1137): taking it off would leave a
+      // finance record that still holds delivery but can no longer be edited. Paid out or withdrawn, it may go.
+      const finance = quote.leadId
+        ? await tx.dealFinance.findFirst({ where: { tenantId, leadId: quote.leadId, vendorId }, select: { status: true } })
+        : null;
+      if (finance && !financeIsClosed(finance.status)) {
+        refuse(`${link.vendor.name} is this deal's finance house (${financeStatusShort(finance.status).toLowerCase()}). Set the finance to Withdrawn first, or to Paid out once it is.`);
+      }
+      await tx.dealVendor.deleteMany({ where: { id: link.id, tenantId } });
+      return link;
+    });
     await logAudit({
       action: "deal.supplier_removed",
       summary: `Took supplier “${link.vendor.name}” off the deal on Q-${quote.number}`,
