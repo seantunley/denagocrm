@@ -16,13 +16,16 @@ export type ModuleId =
   | "commerce"
   | "portal"
   | "multicurrency"
-  | "suppliers";
+  | "suppliers"
+  | "finance";
 
 export type AppModule = {
   id: ModuleId;
   label: string;
   description: string;
   mandatory?: boolean;
+  /** Another module this one is built on: with that one off, this one is off too (entitlement.ts). */
+  requires?: ModuleId;
   routePrefixes: string[];
 };
 
@@ -95,9 +98,18 @@ export const MODULE_REGISTRY: AppModule[] = [
   {
     id: "suppliers",
     label: "Suppliers",
-    description: "Suppliers on deals and purchase orders: each deal's file asks every supplier for its quote, invoice and proof of payment. Finance houses too: each financed deal's status, chased when it stalls.",
-    // Settings → Suppliers and the Finance list. The rest of it lives inside the deal file, documents and purchase orders.
-    routePrefixes: ["/settings/vendors", "/finance"],
+    description: "Suppliers on deals and purchase orders: each deal's file asks every supplier for its quote, invoice and proof of payment.",
+    // Settings → Suppliers only. The rest of it lives inside the deal file, documents and purchase orders.
+    routePrefixes: ["/settings/vendors"],
+  },
+  {
+    id: "finance",
+    label: "Finance",
+    description: "Deals paid through an outside finance house: where each stands, chased when it stalls, and delivery held until it's approved.",
+    // The finance house is a supplier of type Finance, added to the deal (Sean, 2026-11-16).
+    requires: "suppliers",
+    // The Finance list. The rest lives on the deal: its Finance tab, the delivery hold, the chaser, DAX.
+    routePrefixes: ["/finance"],
   },
 ];
 

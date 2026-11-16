@@ -19,7 +19,7 @@ export const metadata = { title: "Finance" };
  */
 export default async function FinancePage({ searchParams }: { searchParams: Promise<{ show?: string }> }) {
   const user = await requireRoute("/finance");
-  await requireModuleEnabled("suppliers");
+  await requireModuleEnabled("finance");
   const all = (await searchParams).show === "all";
   const now = new Date();
   const deals = (await loadFinanceDeals(user, now, { active: !all }))

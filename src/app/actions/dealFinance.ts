@@ -21,7 +21,7 @@ const text = (formData: FormData, name: string, max: number) => String(formData.
 export async function saveDealFinance(leadId: string, formData: FormData): Promise<ActionResult> {
   return asActionResult(async () => {
     const user = await requireLeadAccess(leadId, "leads.edit");
-    if (!(await isModuleEnabled("suppliers"))) refuse("Suppliers aren't switched on for this workspace — the finance house is kept there.");
+    if (!(await isModuleEnabled("finance"))) refuse("Finance isn't switched on for this workspace (Settings → Modules).");
     const tenantId = await actingTenantId();
     const lead = await prisma.lead.findFirst({ where: { id: leadId, tenantId, deletedAt: null }, select: { id: true, contactId: true } });
     if (!lead) refuse("That deal is no longer there — refresh the page.");

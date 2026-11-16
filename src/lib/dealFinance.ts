@@ -71,6 +71,7 @@ export async function loadFinanceDeals(user: PermissionUser, now: Date, { active
  * Keyed by the status's date, so moving it along ends the warning and a later wait is a new one, not a snoozed one.
  */
 export async function financeAttentionSignals(leadIds: string[], now: Date): Promise<{ leadId: string; signal: AttentionSignal }[]> {
+  if (!(await isModuleEnabled("finance"))) return [];
   const waiting = await prisma.dealFinance.findMany({
     where: { leadId: { in: leadIds }, status: { in: ["docs_outstanding", "submitted"] } },
     select: { id: true, leadId: true, status: true, statusAt: true, reference: true, vendor: { select: { name: true } } },
@@ -96,9 +97,9 @@ export async function financeAttentionSignals(leadIds: string[], now: Date): Pro
   });
 }
 
-/** Financed deals to chase, for the morning brief (daxBrief.ts) — in the base currency, like every amount it adds. Suppliers module only. */
+/** Financed deals to chase, for the morning brief (daxBrief.ts) — in the base currency, like every amount it adds. Finance module only. */
 export async function financeToChase(user: PermissionUser, now: Date): Promise<NonNullable<BriefInput["finance"]>> {
-  if (!(await isModuleEnabled("suppliers"))) return [];
+  if (!(await isModuleEnabled("finance"))) return [];
   const deals = await loadFinanceDeals(user, now, { active: true });
   return deals
     .filter((deal) => deal.chase)
@@ -129,9 +130,10 @@ export async function dealFinanceHouses(tenantId: string, leadId: string): Promi
 /**
  * Why a delivery can't be booked yet because of finance — or null. The one guard every booking path goes through
  * (fulfilment.ts scheduleDelivery, which DAX's delivery card calls too). A quote on no lead has no finance record.
+ * The Finance module switched off holds nothing back.
  */
 export async function financeDeliveryRefusal(tenantId: string, leadId: string | null): Promise<string | null> {
-  if (!leadId) return null;
+  if (!leadId || !(await isModuleEnabled("finance"))) return null;
   const finance = await loadDealFinance(tenantId, leadId);
   return finance && financeBlocksDelivery(finance.status) ? deliveryRefusal(finance.vendor.name, finance.status) : null;
 }
@@ -142,7 +144,7 @@ export async function financeDeliveryRefusal(tenantId: string, leadId: string | 
  * handover to commit, or committed first and is seen here.
  */
 export async function financeDeliveryRefusalInTx(tx: Prisma.TransactionClient, tenantId: string, leadId: string | null): Promise<string | null> {
-  if (!leadId) return null;
+  if (!leadId || !(await isModuleEnabled("finance"))) return null;
   const [row] = await tx.$queryRaw<{ status: string; house: string }[]>(Prisma.sql`
     SELECT f."status", v."name" AS house
     FROM "DealFinance" f JOIN "Vendor" v ON v."id" = f."vendorId" AND v."tenantId" = f."tenantId"

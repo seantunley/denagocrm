@@ -136,8 +136,8 @@ export default async function LeadDetailPage({
     }),
   ]);
   const alreadyViewed = !!lead.viewedAt;
-  // Finance through an outside finance house (Suppliers module: the finance house is a supplier of type Finance).
-  const [finance, financeHouses] = lead.tenantId && (await isModuleEnabled("suppliers"))
+  // Finance through an outside finance house (Finance module): only on a deal with a finance house among its suppliers.
+  const [finance, financeHouses] = lead.tenantId && (await isModuleEnabled("finance"))
     ? await Promise.all([
         loadDealFinance(lead.tenantId, lead.id),
         dealFinanceHouses(lead.tenantId, lead.id),

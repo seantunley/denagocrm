@@ -34,7 +34,7 @@ export const dealFinanceArticles: HelpArticle[] = [
       { type: "p", text: "Moving the status along clears it. A later wait starts the 3 days again. Public holidays are counted as working days." },
       { type: "h", text: "Delivery waits for approval" },
       { type: "p", text: "A financed deal can't have its delivery booked until the finance is **Approved** or **Paid out**. While it is outstanding, submitted or declined, **Schedule delivery** — on the Deliveries board or through DAX — says why and books nothing. If the customer pays another way after a decline, set the finance to *Withdrawn*. The deal page's **Ready to deliver?** shows a **Finance approved** line." },
-      { type: "callout", tone: "info", text: "Finance needs the Suppliers module, since the finance house is a supplier. Changing it needs permission to edit leads. The Finance page lists only the deals you may open." },
+      { type: "callout", tone: "info", text: "Finance is its own module — switched off in **Settings → Modules**, everything above goes with it (the records are kept). It needs the Suppliers module on too, since the finance house is a supplier. Changing it needs permission to edit leads. The Finance page lists only the deals you may open." },
     ],
   },
 ];
