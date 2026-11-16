@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { Landmark } from "lucide-react";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { StatusPill, Surface } from "@/components/visual-system";
@@ -27,7 +26,7 @@ export default function DealFinancePanel({ leadId, finance, financeHouses, canEd
           <Landmark className="size-5 text-muted-foreground" />
           <div>
             <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Finance</p>
-            <h2 className="mt-0.5 text-base font-semibold">{finance ? finance.vendor.name : "Not financed"}</h2>
+            <h2 className="mt-0.5 text-base font-semibold">{finance ? finance.vendor.name : "Not started yet"}</h2>
           </div>
         </div>
         {finance && <StatusPill tone={financeTone(finance.status)}>{financeStatusShort(finance.status)} since {formatDate(finance.statusAt)}</StatusPill>}
@@ -68,9 +67,10 @@ export default function DealFinancePanel({ leadId, finance, financeHouses, canEd
           <div className="sm:col-span-2"><SaveButton className="btn-primary btn-sm">{finance ? "Save" : "Start finance"}</SaveButton></div>
         </SaveForm>
       )}
+      {/* Shown only on a deal with a finance record whose finance house was taken off the deal's suppliers. */}
       {canEdit && financeHouses.length === 0 && (
         <p className="mt-3 text-sm text-muted-foreground">
-          Add the finance house in <Link href="/settings/vendors" className="text-primary hover:underline">Settings → Suppliers</Link> with the type Finance.
+          {finance?.vendor.name ?? "The finance house"} is no longer on this deal&apos;s suppliers — add it back to update the finance.
         </p>
       )}
     </Surface>

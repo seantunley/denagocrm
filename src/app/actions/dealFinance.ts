@@ -8,7 +8,6 @@ import { asActionResult, refuse, type ActionResult } from "@/lib/actionResult";
 import { logAudit } from "@/lib/audit";
 import { requireLeadAccess } from "@/lib/permissions";
 import { isModuleEnabled } from "@/lib/modules/enabled";
-import { linkVendorToDeal } from "@/lib/dealVendors";
 import { financeStatusShort, isFinanceStatus } from "@/lib/dealFinanceRules";
 
 const text = (formData: FormData, name: string, max: number) => String(formData.get(name) ?? "").trim().slice(0, max);
@@ -16,7 +15,7 @@ const text = (formData: FormData, name: string, max: number) => String(formData.
 /**
  * Start or update a deal's finance (Sean, 2026-11-16): which finance house, their reference, where it stands and what
  * they said. A status change is dated (`statusAt`) — the Attention Centre chases from that date — and audited
- * old → new. The finance house is added to the deal's suppliers, so the deal file asks for its papers.
+ * old → new. Only a finance house already on the deal's suppliers — that is what makes a deal financed.
  * No applicant documents are taken here: they stay with the finance house.
  */
 export async function saveDealFinance(leadId: string, formData: FormData): Promise<ActionResult> {
@@ -27,12 +26,14 @@ export async function saveDealFinance(leadId: string, formData: FormData): Promi
     const lead = await prisma.lead.findFirst({ where: { id: leadId, tenantId, deletedAt: null }, select: { id: true, contactId: true } });
     if (!lead) refuse("That deal is no longer there — refresh the page.");
 
-    // A finance house only — the form lists those, and the server holds to it whatever is posted.
-    const vendor = await prisma.vendor.findFirst({
-      where: { id: text(formData, "vendorId", 64), tenantId, deletedAt: null, kind: "finance" },
-      select: { id: true, name: true },
+    // A finance house ON THIS DEAL only — the form lists those, and the server holds to it whatever is posted. A deal
+    // is financed because someone added the finance house to its suppliers; a cash deal never is.
+    const link = await prisma.dealVendor.findFirst({
+      where: { tenantId, leadId, vendorId: text(formData, "vendorId", 64), vendor: { deletedAt: null, kind: "finance" } },
+      select: { vendor: { select: { id: true, name: true } } },
     });
-    if (!vendor) refuse("Choose the finance house from the list.");
+    if (!link) refuse("Add the finance house to this deal's suppliers first, then choose it here.");
+    const vendor = link.vendor;
     const status = text(formData, "status", 40);
     if (!isFinanceStatus(status)) refuse("Choose where the finance stands.");
     const reference = text(formData, "reference", 80) || null;
@@ -83,7 +84,6 @@ export async function saveDealFinance(leadId: string, formData: FormData): Promi
       summary = `Finance with ${vendor.name}: ${changes.join("; ")}`;
     }
 
-    await linkVendorToDeal({ tenantId, quote: { id: leadId, leadId }, vendorId: vendor.id, userId: user.id });
     await logAudit({ action: "finance.updated", summary, leadId, ...(lead.contactId ? { contactId: lead.contactId } : {}), user, entityType: "DealFinance", entityId });
     revalidatePath(`/leads/${leadId}`);
     revalidatePath("/deals/[id]", "page");
