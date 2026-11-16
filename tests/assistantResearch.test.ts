@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import Module from "node:module";
 import { MAX_LOOKUPS, MAX_PARALLEL, parseSteps, planInstructions } from "../src/lib/crmAssistantPlan";
 import { MIN_METHOD_LOOKUPS, methodInstructions } from "../src/lib/assistantMemory";
+import { daxCore } from "./daxCore";
 
 // crmAssistant reaches server-only + Prisma; the recall ranking is pure, so load it with those stubbed.
 type Loader = (request: string, parent: unknown, isMain: boolean) => unknown;
@@ -46,7 +47,7 @@ test("independent lookups come as one batch; a bad one is dropped, not the batch
 });
 
 test("the loop runs a batch side by side, skips repeats, and stops at the total cap", () => {
-  const lib = code("src/lib/crmAssistant.ts");
+  const lib = daxCore(code);
   const loop = lib.slice(lib.indexOf("let depth: Depth"), lib.indexOf("const [profileRaw, company]"));
   assert.ok(loop.length > 200);
   // The caps are the question's depth's (assistantDepth: quick keeps MAX_STEPS / MAX_LOOKUPS).
@@ -73,7 +74,7 @@ test("recall searches the words that matter and ranks by how many it matches", a
     { question: "Jacobs", answer: "", createdAt: at(2) },
   ];
   assert.deepEqual(rankRecall(turns, ["jacobs", "fleet", "deal"]).map((t) => t.question), ["Jacobs fleet deal?", "fleet pricing", "Jacobs"]);
-  const lib = code("src/lib/crmAssistant.ts");
+  const lib = daxCore(code);
   const recall = lib.slice(lib.indexOf("async function recall("), lib.indexOf("const RECALL_MATCHES"));
   assert.match(recall, /userId: user\.id/, "only this person's own conversations");
   // The search itself is raw SQL ("userId" = ${user.id}); the turns either side are this person's too.
@@ -94,7 +95,7 @@ test("after several lookups it may save the method as a playbook — never on a 
   assert.doesNotMatch(text, /noContactDays|"x"/);
   assert.match(text, /not one about a particular customer/);
   assert.match(text, /improve it \(replace\)/);
-  assert.match(code("src/lib/crmAssistant.ts"), /LEARN_INSTRUCTIONS,[\s\S]{0,300}methodInstructions\(observations\),\s*\]/);
+  assert.match(daxCore(code), /LEARN_INSTRUCTIONS,[\s\S]{0,300}methodInstructions\(observations\),\s*\]/);
 });
 
 test("tasks are proposed only where someone can confirm them; a scheduled run asks nothing back", async () => {
@@ -103,7 +104,7 @@ test("tasks are proposed only where someone can confirm them; a scheduled run as
   assert.equal(CHANNEL_RULES.chat, "");
   assert.match(CHANNEL_RULES.schedule, /don't ask them anything and don't offer choices/);
   assert.match(CHANNEL_RULES.whatsapp, /put the draft itself in your answer/);
-  const lib = code("src/lib/crmAssistant.ts");
+  const lib = daxCore(code);
   // The chat, or WhatsApp when its caller says what it will do with a task — a Confirm button, or a card
   // saved for the CRM (assistantWhatsAppConfirm.test.ts) — never a schedule or a watch.
   assert.match(lib, /const proposes = source === "chat" \|\| \(source === "whatsapp" && \(opts\.proposeTasks === true \|\| opts\.proposeTasks === "saved"\)\);/);
@@ -145,7 +146,7 @@ test("complex questions get a larger research budget; simple ones do not", async
 });
 
 test("research loop stops on the time budget before the step limit", () => {
-  const lib = code("src/lib/crmAssistant.ts");
+  const lib = daxCore(code);
   const loop = lib.slice(lib.indexOf("let depth: Depth"), lib.indexOf("timings.answer = Date.now() - answerStarted"));
   // The budget is the question's depth's (assistantDepth), against the clock — not just a count.
   assert.match(loop, /const researchLeft = \(\) => researchLeftMs\(depth, elapsed\(\)\)/);

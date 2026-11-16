@@ -9,6 +9,7 @@ import { type PermissionUser } from "../permissions";
 /** What DAX's lookups share (moved from crmAssistant.ts, 2026-11-16 — file-split plan step 2). */
 
 export const DAY = 86_400_000;
+export const HISTORY_DAYS = 30;
 /** Candidate cap before in-memory filters (last-contact needs the full set). */
 // ponytail: in-memory filter over ≤500 leads; move last-contact into SQL if a workspace outgrows it.
 export const CANDIDATES = 500;
