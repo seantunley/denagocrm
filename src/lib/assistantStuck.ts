@@ -28,6 +28,7 @@ export const STUCK_ORDER = [
   "changes_requested",
   "quote_declined",
   "overdue_task",
+  "finance_waiting",
   "after_signing",
   "quote_bounced",
   "quote_unopened",
@@ -60,6 +61,7 @@ const FROM_SIGNAL: Record<AttentionSignal["kind"], StuckKind> = {
   stage_age: "stage_age",
   no_next_step: "no_next_step",
   followup_unanswered: "customer_quiet",
+  finance_waiting: "finance_waiting",
 };
 
 export type StuckQuote = {
@@ -266,7 +268,7 @@ export function conversationFacts(lastIn: { at: Date; channel: string } | null, 
 
 /** Sent with the reasons, so the rule sits next to the data it governs (as WHY_LEGEND does). */
 export const STUCK_LEGEND =
-  "`reasons` are worked out by fixed rules from the dated records linked with them, MOST PRESSING FIRST: parked in nurture, the customer waiting on our reply, changes they asked for, a quote they declined, an overdue follow-up, a step after signing (invoice, deposit, delivery), a quote whose email bounced, a quote they never opened, a quote running out, too long in the stage, no next step, and last the customer going quiet. " +
+  "`reasons` are worked out by fixed rules from the dated records linked with them, MOST PRESSING FIRST: parked in nurture, the customer waiting on our reply, changes they asked for, a quote they declined, an overdue follow-up, finance waiting too long on the customer's documents or the finance house's answer, a step after signing (invoice, deposit, delivery), a quote whose email bounced, a quote they never opened, a quote running out, too long in the stage, no next step, and last the customer going quiet. " +
   "Give them in that order, each with its date and its link. They are the ONLY reasons you may state as fact; the facts after them (stage, conversation, quote, nextStep) are records too and may be given with their dates. Anything else you think is behind it (price, a competitor, finance, timing) is a guess: start it with \"My read:\". " +
   "`setAside`: someone snoozed or dismissed that warning, with the reason they gave — say so. `financeMentions` are messages and notes on the deal that mention finance: evidence to read, not a reason on their own. " +
   "No reasons: say the records show nothing holding it up, then what the facts do show.";

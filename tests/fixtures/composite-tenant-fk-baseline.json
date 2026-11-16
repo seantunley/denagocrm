@@ -691,6 +691,36 @@
       ]
     }
   },
+  "DealFinance.DealFinance_tenantId_leadId_fkey": {
+    "table": "DealFinance",
+    "constraint": "DealFinance_tenantId_leadId_fkey",
+    "columns": [
+      "tenantId",
+      "leadId"
+    ],
+    "references": {
+      "table": "Lead",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "DealFinance.DealFinance_tenantId_vendorId_fkey": {
+    "table": "DealFinance",
+    "constraint": "DealFinance_tenantId_vendorId_fkey",
+    "columns": [
+      "tenantId",
+      "vendorId"
+    ],
+    "references": {
+      "table": "Vendor",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
   "DealVendor.DealVendor_tenantId_leadId_fkey": {
     "table": "DealVendor",
     "constraint": "DealVendor_tenantId_leadId_fkey",

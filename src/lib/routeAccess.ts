@@ -66,6 +66,8 @@ export const ROUTE_RULES = [
   // Invoices — the money side of the Deliveries board, behind the same grants the
   // board and the nav link use, so a visible link never leads to a redirect.
   { prefix: "/invoices", anyOf: ["deliveries.view", "deliveries.manage"] },
+  // Financed deals — lists leads, so the leads grants (and only the leads each person may open).
+  { prefix: "/finance", anyOf: ["leads.view_all", "leads.view_owned"] },
   // Customer health scores every contact — the same grant the nav uses to show
   // the link, so a visible link can no longer lead to a redirect.
   { prefix: "/health", anyOf: ["contacts.view_all", "contacts.view_owned"] },

@@ -2,6 +2,7 @@ import "server-only";
 
 import { prisma } from "../db";
 import { contactActivityWhere, contactCommunicationWhere } from "../customerContact";
+import { financeAttentionSignals } from "../dealFinance";
 import {
   ATTENTION_CATEGORY, ATTENTION_WEIGHTS, FOLLOWUP_LOOKBACK_DAYS, LIVE_CONTACT_TYPES, attentionSignalKey, unansweredFollowUp,
   type AttentionSignal,
@@ -309,6 +310,11 @@ export async function collectAttentionSignals(input: {
         actionLabel: "Try another way",
       });
     }
+  }
+
+  // ── finance_waiting ── finance stalled on the customer or the finance house (dealFinance.ts).
+  for (const batch of batches) {
+    for (const { leadId, signal } of await financeAttentionSignals(batch, now)) add(signals, leadId, signal);
   }
 
   return signals;

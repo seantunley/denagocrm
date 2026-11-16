@@ -424,6 +424,46 @@ async function main() {
   check("not for another workspace's quote", /no longer available/.test((await refusal(() => start(elsewhere.id))) ?? ""));
   check("and none of those made anything", (await requestsFor(unscheduled.id)).length + (await requestsFor(elsewhere.id)).length === 0 && (await requestsFor(quote.id)).length === 3);
 
+  // ── 8. Finance holds the handover itself (review of #1137) ────────────────
+  // deliverQuote is the one handover the Deliveries board (markDelivered) and the stock page (deliverStockUnit) both
+  // call. Approval can be declined or reopened AFTER the day was booked: the handover asks again.
+  console.log("\nFinance holds the handover");
+  // Finance is its own module (on Suppliers): a workspace without it has no hold at all.
+  await basePrisma.tenant.update({ where: { id: tenantId }, data: { modules: "automotive,suppliers,finance" } });
+  const pipeline = await basePrisma.salesPipeline.create({ data: { tenantId, name: `Sales ${SFX}` } });
+  const stage = await basePrisma.pipelineStage.create({ data: { tenantId, pipelineId: pipeline.id, name: "Won", order: 0 } });
+  const house = await basePrisma.vendor.create({ data: { tenantId, name: `WesBank ${SFX}`, kind: "finance" } });
+  const financed = async (status: string) => {
+    const lead = await basePrisma.lead.create({ data: { tenantId, stageId: stage.id, name: customer, title: "Nomad XL", contactId: contact.id, createdById: rep.id, status: "won" } });
+    const q = await quoteReadyToDeliver();
+    await basePrisma.quote.update({ where: { id: q.id }, data: { leadId: lead.id } });
+    const finance = await basePrisma.dealFinance.create({ data: { tenantId, leadId: lead.id, vendorId: house.id, status, createdById: rep.id } });
+    return { quoteId: q.id, financeId: finance.id };
+  };
+  for (const status of ["docs_outstanding", "submitted", "declined"]) {
+    const held = await financed(status);
+    const why = await refusal(() => deliver(held.quoteId, async () => ({ deliveredByName: "Sipho Mahlangu" })));
+    check(`booked, then finance ${status}: not handed over, nothing filed`, /finance/i.test(why ?? "") && (await record(held.quoteId)).deliveredAt === null && (await basePrisma.document.count({ where: { quoteId: held.quoteId } })) === 0, String(why));
+  }
+  // Approved after all — the same delivery goes ahead once the customer signs; withdrawn (paying another way) too.
+  // The guided handover from section 6 is still on: a completed run, frozen into the note the customer signs.
+  const signedFor = async (quoteId: string) => {
+    await start(quoteId, { ...noFacts, runIds: [await runFor(quoteId, true)] });
+    await signInPerson((await requestsFor(quoteId))[0]);
+  };
+  for (const status of ["approved", "withdrawn"]) {
+    const ok = await financed(status);
+    await signedFor(ok.quoteId);
+    await deliver(ok.quoteId);
+    check(`finance ${status}: delivered`, Boolean((await record(ok.quoteId)).deliveredAt));
+  }
+  // Approval REVOKED after the customer signed for it: still refused at the handover.
+  const revoked = await financed("approved");
+  await signedFor(revoked.quoteId);
+  await basePrisma.dealFinance.update({ where: { id: revoked.financeId }, data: { status: "declined" } });
+  const revokedWhy = await refusal(() => deliver(revoked.quoteId));
+  check("approved, signed for, then declined: not handed over", /declined the finance/.test(revokedWhy ?? "") && (await record(revoked.quoteId)).deliveredAt === null, String(revokedWhy));
+
   __setTenantEnforcingForTests(null);
   console.log(`\n${passed} passed, ${failed} failed`);
   await basePrisma.$disconnect();

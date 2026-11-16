@@ -19,13 +19,13 @@ const PERSONAS: Record<string, { admin: boolean; perms: string[]; enabled?: Set<
   salesNoModules: { admin: false, perms: SALES, enabled: new Set() },
 };
 
-/** What buildNav on main (d9ae92b5) showed each persona, before the regroup. */
+/** What buildNav on main (d9ae92b5) showed each persona, before the regroup — plus /finance (2026-11-16) for anyone with leads. */
 const BEFORE: Record<string, string[]> = {
-  owner: ["/", "/activities", "/assistant", "/audit", "/birthdays", "/bot-builder", "/calendar", "/cases", "/chatbot", "/competitors", "/contacts", "/d/home", "/data-quality", "/deliveries", "/document-studio", "/documents", "/fleets", "/forecast", "/health", "/inbox", "/invoices", "/jobcards", "/jobcards/insights", "/journeys", "/leads", "/marketing/audiences", "/marketing/calendar", "/marketing/campaigns", "/marketing/overview", "/marketing/surveys", "/marketing/surveys/insights", "/marketing/templates", "/parts", "/quotes", "/referrals", "/repairs", "/reports", "/service-due", "/signatures", "/stock", "/targets", "/test-drives", "/today", "/vehicles", "/warranty", "/workshop-calendar"],
-  sales: ["/", "/activities", "/assistant", "/birthdays", "/calendar", "/contacts", "/d/home", "/data-quality", "/documents", "/health", "/inbox", "/leads", "/quotes", "/signatures", "/test-drives", "/today"],
+  owner: ["/", "/activities", "/assistant", "/audit", "/birthdays", "/bot-builder", "/calendar", "/cases", "/chatbot", "/competitors", "/contacts", "/d/home", "/data-quality", "/deliveries", "/document-studio", "/documents", "/finance", "/fleets", "/forecast", "/health", "/inbox", "/invoices", "/jobcards", "/jobcards/insights", "/journeys", "/leads", "/marketing/audiences", "/marketing/calendar", "/marketing/campaigns", "/marketing/overview", "/marketing/surveys", "/marketing/surveys/insights", "/marketing/templates", "/parts", "/quotes", "/referrals", "/repairs", "/reports", "/service-due", "/signatures", "/stock", "/targets", "/test-drives", "/today", "/vehicles", "/warranty", "/workshop-calendar"],
+  sales: ["/", "/activities", "/assistant", "/birthdays", "/calendar", "/contacts", "/d/home", "/data-quality", "/documents", "/finance", "/health", "/inbox", "/leads", "/quotes", "/signatures", "/test-drives", "/today"],
   workshop: ["/", "/activities", "/assistant", "/calendar", "/cases", "/d/home", "/jobcards", "/jobcards/insights", "/parts", "/service-due", "/test-drives", "/vehicles", "/warranty", "/workshop-calendar"],
   marketing: ["/", "/d/home", "/documents", "/marketing/audiences", "/marketing/calendar", "/marketing/campaigns", "/marketing/overview", "/marketing/surveys", "/marketing/surveys/insights", "/marketing/templates", "/referrals"],
-  manager: ["/", "/assistant", "/audit", "/d/home", "/deliveries", "/document-studio", "/fleets", "/forecast", "/invoices", "/journeys", "/leads", "/reports", "/stock", "/targets", "/today"],
+  manager: ["/", "/assistant", "/audit", "/d/home", "/deliveries", "/document-studio", "/finance", "/fleets", "/forecast", "/invoices", "/journeys", "/leads", "/reports", "/stock", "/targets", "/today"],
   nobody: ["/", "/d/home"],
   ownerNoModules: ["/", "/activities", "/audit", "/birthdays", "/calendar", "/contacts", "/d/home", "/data-quality", "/document-studio", "/documents", "/forecast", "/health", "/leads", "/quotes", "/repairs", "/reports", "/signatures", "/targets", "/today"],
   salesNoModules: ["/", "/activities", "/birthdays", "/calendar", "/contacts", "/d/home", "/data-quality", "/documents", "/health", "/leads", "/quotes", "/signatures", "/today"],
@@ -43,7 +43,7 @@ test("pinned, then the groups in the order work happens", () => {
   assert.deepEqual(nav.topLinks.map((link) => link.label), ["Home", "Today", "Inbox", "Help desk", "Calendar"]);
   assert.deepEqual(nav.groups.map((group) => group.key), ["sales", "customers", "service", "marketing", "insights", "automation", "admin"]);
   const labels = (key: string) => nav.groups.find((group) => group.key === key)?.links.map((link) => link.label);
-  assert.deepEqual(labels("sales"), ["Leads", "Quotes", "Test Drives", "Signatures", "Deliveries", "Invoices", "Stock"]);
+  assert.deepEqual(labels("sales"), ["Leads", "Quotes", "Test Drives", "Signatures", "Finance", "Deliveries", "Invoices", "Stock"]);
   assert.deepEqual(labels("customers"), ["Contacts", "Fleets", "Activities", "Customer Health", "Birthdays", "Documents"]);
   assert.deepEqual(labels("service"), ["Workshop calendar", "Job Cards", "Vehicles", "Service Due", "Warranty", "Parts"]);
   assert.deepEqual(labels("marketing"), ["Overview", "Campaigns", "Audiences", "Templates", "Calendar", "Surveys", "Survey insights", "Referrals"]);

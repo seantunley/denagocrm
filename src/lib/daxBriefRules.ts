@@ -143,6 +143,8 @@ export type BriefInput = {
   nurtureReviews?: NurtureReview[];
   /** How many are due in all — more than nurtureReviews when the loader read only the most overdue (review of #943). */
   nurtureReviewsTotal?: number;
+  /** Financed deals waiting too long on the customer's documents or the finance house (dealFinance.loadFinanceDeals). */
+  finance?: { leadId: string; name: string; ownerId: string | null; detail: string; since: Date; valueCents: number }[];
 };
 
 /** Enough to read at a glance; the rest is one click away on /today. */
@@ -301,6 +303,13 @@ export function buildBrief(input: BriefInput): DaxBrief {
   const reviewsTotal = Math.max(reviews.length, input.nurtureReviewsTotal ?? 0);
   const reviewRows: Row[] = reviews.map((r) => ({ leadId: r.leadId, name: r.name, detail: nurtureReviewLine(r), href: r.href, valueCents: 0 }));
 
+  // Finance to chase — the same "mine", longest waiting first. Open AND signed deals: a quote signed subject to
+  // finance wins its lead, so the attention list (open deals only) can't carry these.
+  const financeRows: Row[] = (input.finance ?? [])
+    .filter((f) => f.ownerId === userId || f.ownerId === null)
+    .sort((a, b) => a.since.getTime() - b.since.getTime())
+    .map((f) => ({ leadId: f.leadId, name: f.name, detail: f.detail, href: `/leads/${f.leadId}?tab=finance`, valueCents: f.valueCents }));
+
   const todayStart = new Date(`${johannesburgDateKey(now)}T00:00:00+02:00`);
   const deliveryRows = (stage: string): Row[] =>
     input.deliveries
@@ -315,6 +324,7 @@ export function buildBrief(input: BriefInput): DaxBrief {
       () => `${plural(reviewsTotal, "Nurture review due", "Nurture reviews due")}${overdueReviews ? ` (${overdueReviews}${reviewsTotal > reviews.length ? "+" : ""} overdue)` : ""}`, "/leads/nurture?due=1", false),
     group("hot", "green", "🔥", hot, (n) => (n === 1 ? "1 deal looks close" : `${n} deals look close`), "/today"),
     group("quote_expiring", "orange", "🟠", expiring, (n) => plural(n, "quote expiring", "quotes expiring"), "/leads/attention"),
+    group("finance", "orange", "🏦", financeRows, (n) => plural(n, "finance application to chase", "finance applications to chase"), "/finance", false),
     group("quote_viewed", "info", "👀", viewed, (n) => plural(n, "quote opened but not signed", "quotes opened but not signed"), "/quotes"),
     group("delivery_overdue", "orange", "🚚", deliveryRows("overdue"), (n) => plural(n, "delivery overdue", "deliveries overdue"), "/deliveries"),
     group("awaiting_deposit", "info", "💰", deliveryRows("awaiting_deposit"), (n) => plural(n, "delivery awaiting deposit", "deliveries awaiting deposit"), "/deliveries"),

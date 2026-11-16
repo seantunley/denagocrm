@@ -9,6 +9,7 @@ import { tenantOnboardingArticles } from "./articles/tenant-onboarding";
 import { xAndAttentionArticles } from "./articles/x-and-attention";
 import { journeysArticles } from "./articles/journeys";
 import { secureLinkArticles } from "./articles/secure-links";
+import { dealFinanceArticles } from "./articles/deal-finance";
 import { offlineChecklistArticles } from "./articles/offline-checklists";
 import { documentStudioArticles } from "./articles/document-studio";
 import { signingAndInboxArticles } from "./articles/signing-and-inbox";
@@ -98,6 +99,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
   ...(marketingGovernance as HelpArticle[]),
   ...journeysArticles,
   ...secureLinkArticles,
+  ...dealFinanceArticles,
   // The inbox guides lead their category, as the generated ones they replace did.
   ...signingAndInboxArticles.filter((article) => article.category === "comms"),
   ...generated(commsAutomation),

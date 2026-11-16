@@ -56,6 +56,9 @@ import { payableTotalCents } from "@/lib/pricing";
 import { getAccessibleContactIds, getAccessibleQuoteIds } from "@/lib/permissions";
 import { quotePrintLinks } from "@/lib/quotePrintLinks";
 import { isModuleEnabled } from "@/lib/modules/enabled";
+import { dealFinanceHouses, loadDealFinance } from "@/lib/dealFinance";
+import { financeStatusShort, financeTone } from "@/lib/dealFinanceRules";
+import DealFinancePanel from "@/components/deals/DealFinancePanel";
 import { UPCOMING_TEST_DRIVE_STATUSES } from "@/lib/testDriveBooking";
 import { EntityDetailShell, PhoneActions, WideActions } from "@/components/entity-detail-shell";
 import { StatusPill } from "@/components/visual-system";
@@ -133,6 +136,13 @@ export default async function LeadDetailPage({
     }),
   ]);
   const alreadyViewed = !!lead.viewedAt;
+  // Finance through an outside finance house (Finance module): only on a deal with a finance house among its suppliers.
+  const [finance, financeHouses] = lead.tenantId && (await isModuleEnabled("finance"))
+    ? await Promise.all([
+        loadDealFinance(lead.tenantId, lead.id),
+        dealFinanceHouses(lead.tenantId, lead.id),
+      ])
+    : [null, []];
   // This lead's next test drive whose indemnity is still outstanding — it is
   // signed on a screen from the booking, so the lead points there.
   const testDriveToSign = automotiveOn && canBookTestDrive
@@ -261,6 +271,7 @@ export default async function LeadDetailPage({
         title={lead.title}
         status={<>
           <StatusPill tone={lead.status === "won" ? "success" : lead.status === "lost" ? "danger" : "info"}>{lead.status === "open" ? lead.stage.name : lead.status}</StatusPill>
+          {finance && <TabLink tab="finance"><StatusPill tone={financeTone(finance.status)}>Finance: {financeStatusShort(finance.status)}</StatusPill></TabLink>}
           {leadScore && leadScore.score > 0 && (
             <Link href="/today?view=all" className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground" title={leadScore.reasons.join(" · ")}>
               <LeadScoreBadge score={leadScore.score} />
@@ -643,6 +654,12 @@ export default async function LeadDetailPage({
                   </div>
                 ),
               },
+              // Only where finance is relevant: a finance house is set up, or this deal is already financed.
+              ...(finance || financeHouses.length > 0 ? [{
+                key: "finance",
+                label: "Finance",
+                content: <DealFinancePanel leadId={lead.id} finance={finance} financeHouses={financeHouses} canEdit={canEditLead} now={new Date()} />,
+              }] : []),
               {
                 key: "research",
                 label: "Research",

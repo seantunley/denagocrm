@@ -9,6 +9,7 @@ import {
   FileText,
   FolderOpen,
   Library,
+  Landmark,
   Truck,
   Wallet,
   Users,
@@ -92,6 +93,8 @@ export function buildNav(
   if (can("quotes.view_all", "quotes.view_owned")) salesLinks.push({ href: "/quotes", label: "Quotes", icon: FileText });
   if (can("activities.view", "activities.manage")) salesLinks.push({ href: "/test-drives", label: "Test Drives", icon: Route });
   if (can("signing.view", "signing.manage")) salesLinks.push({ href: "/signatures", label: "Signatures", icon: PenLine });
+  // Financed deals and where each stands (Finance module, hidden when it's off). Leads' own door.
+  if (can("leads.view_all", "leads.view_owned")) salesLinks.push({ href: "/finance", label: "Finance", icon: Landmark, keywords: ["finance house", "bank", "approval", "payout"] });
   if (can("deliveries.view", "deliveries.manage")) salesLinks.push({ href: "/deliveries", label: "Deliveries", icon: Truck });
   // The money side of the board (2026-11-11): the same door — deliveries.* — as the board it came off.
   if (can("deliveries.view", "deliveries.manage")) salesLinks.push({ href: "/invoices", label: "Invoices", icon: Wallet, keywords: ["xero", "owing", "paid", "deposit", "accounts"] });
