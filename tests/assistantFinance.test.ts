@@ -40,7 +40,8 @@ test("the finance lookup: planned like any other, by customer, status or what to
   assert.equal(parseSteps('{"tool":"finance","args":{"status":"maybe"}}'), null, "only a real status");
   const lookup = read("src/lib/assistantFinance.ts");
   assert.match(lookup, /loadFinanceDeals\(user, now, \{ active: !args\.all \}\)/, "the Finance page's own list: only deals this person may open");
-  assert.match(lookup, /isModuleEnabled\("suppliers"\)/);
+  assert.equal(lookup.match(/if \(!\(await isModuleEnabled\("finance"\)\)\)/g)?.length, 2, "the Finance module: the lookup and the card");
+  assert.doesNotMatch(lookup, /Enabled\("suppliers"\)/);
 });
 
 test("the card: proposed with a real status, shown before Confirm, and refused at Confirm if it moved since", () => {

@@ -21,7 +21,7 @@ const unavailable = (why: string): Output => ({ rows: [], data: [{ note: why }],
 
 /** The financed deals this person may open: where each stands, since when, and what to chase. */
 export async function financeLookup(user: PermissionUser, args: FinanceArgs): Promise<Output> {
-  if (!(await isModuleEnabled("suppliers"))) return unavailable("Finance is kept with the Suppliers module, which is switched off in this workspace.");
+  if (!(await isModuleEnabled("finance"))) return unavailable("The Finance module is switched off in this workspace.");
   const now = new Date();
   const wanted = (args.customer ?? "").toLowerCase().split(/\s+/).filter(Boolean);
   const deals = (await loadFinanceDeals(user, now, { active: !args.all }))
@@ -51,7 +51,7 @@ export type FinanceProposal = { leadId: string; status: string; financeHouse?: s
 
 /** The card for a proposal, or why there is none. The lead is one the person may open (checked by the caller). */
 export async function financeCard(user: PermissionUser, p: FinanceProposal, lead: { name: string }, id: string, leadLabel: string): Promise<FinanceCard | { problem: string }> {
-  if (!(await isModuleEnabled("suppliers"))) return { problem: "Finance is kept with the Suppliers module, which is switched off in this workspace." };
+  if (!(await isModuleEnabled("finance"))) return { problem: "The Finance module is switched off in this workspace." };
   if (!(await hasPermission(user, "leads.edit"))) return { problem: "Your role can't change a deal's finance." };
   if (!isFinanceStatus(p.status)) return { problem: "Where does the finance stand — submitted, approved, declined, paid out?" };
   const tenantId = ownedWriteTenantId();
