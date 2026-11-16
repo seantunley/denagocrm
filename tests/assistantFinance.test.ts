@@ -1,6 +1,26 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
+import Module, { createRequire } from "node:module";
+import type { FinanceCard } from "../src/lib/assistantFinanceRules";
+
+// confirmFinanceCard against a finance row the test controls (review of #1139).
+type Finance = { status: string; vendorId: string; reference: string | null; note: string | null; updatedAt: Date; statusAt: Date; vendor: { name: string } };
+let financeNow: Finance | null = null;
+type Loader = (request: string, parent: { filename?: string } | undefined, isMain: boolean) => unknown;
+const moduleLoader = Module as unknown as { _load: Loader };
+const realLoad = moduleLoader._load;
+moduleLoader._load = function (this: unknown, request: string, parent, isMain) {
+  if (request === "server-only") return {};
+  if ((parent?.filename ?? "").replace(/\\/g, "/").endsWith("src/lib/assistantFinance.ts")) {
+    if (request === "./dealFinance") return { loadDealFinance: async () => financeNow, loadFinanceDeals: async () => [] };
+    if (request === "./permissions") return { canAccessLead: async () => true, hasPermission: async () => true };
+    if (request === "./tenantWrite") return { ownedWriteTenantId: () => "tenant_a" };
+    if (request === "./db") return { prisma: {} };
+  }
+  return realLoad.call(this, request, parent, isMain);
+} as Loader;
+const { confirmFinanceCard } = createRequire(import.meta.url)("../src/lib/assistantFinance.ts") as typeof import("../src/lib/assistantFinance");
 import { parseSteps } from "../src/lib/crmAssistantPlan";
 import { ACTION_INSTRUCTIONS, proposedAction } from "../src/lib/assistantActions";
 import { FINANCE_RULE } from "../src/lib/assistantFinanceRules";
@@ -33,11 +53,35 @@ test("the card: proposed with a real status, shown before Confirm, and refused a
   assert.match(card, /hasPermission\(user, "leads\.edit"\)/);
   assert.match(card, /kind: "finance"\s*\}/, "only a finance house of this workspace");
   assert.match(card, /never a guess/, "an unnamed house is the deal's own, else the only one — otherwise it asks");
-  assert.match(card, /wasStatus: current\?\.status \?\? null, wasStatusAt: current\?\.statusAt\.toISOString\(\) \?\? null/);
-  assert.match(card, /\(now\?\.status \?\? null\) !== card\.wasStatus \|\| \(now\?\.statusAt\.toISOString\(\) \?\? null\) !== card\.wasStatusAt/);
+  assert.match(card, /wasVersion: current\?\.updatedAt\.toISOString\(\) \?\? null/);
   assert.match(card, /Nobody is contacted\./);
   const confirm = read("src/app/actions/assistant.ts");
   assert.match(confirm, /case "finance": \{[\s\S]*?await saveDealFinance\(card\.leadId, step\.form\)/, "the deal's own Save");
   assert.ok(WHATSAPP_CONFIRMABLE.has("finance"), "confirmable on WhatsApp too");
   assert.equal(familyOf("finance").key, "stage");
+});
+
+test("Confirm (review of #1139): a reference- or note-only card is carried out, and a colleague's edit since is never overwritten", async () => {
+  const v1 = new Date("2026-11-16T09:00:00Z");
+  const user = { id: "user_1" } as Parameters<typeof confirmFinanceCard>[0];
+  financeNow = { status: "submitted", vendorId: "wesbank", reference: "APP-123", note: null, updatedAt: v1, statusAt: v1, vendor: { name: "WesBank" } };
+  const card: FinanceCard = {
+    id: "a0-lead", kind: "finance", leadId: "lead_1", leadLabel: "Jody", title: "Jody's finance: Submitted",
+    vendorId: "wesbank", status: "submitted", reference: "APP-999", note: null, wasVersion: v1.toISOString(), detail: "",
+  };
+  // Same status and house, a new reference: NOT done — it goes to the deal's own Save, with the version the card showed.
+  const step = await confirmFinanceCard(user, card);
+  assert.ok("form" in step, JSON.stringify(step));
+  assert.equal(step.form.get("reference"), "APP-999");
+  assert.equal(step.form.get("version"), v1.toISOString());
+  // A note-only card likewise.
+  assert.ok("form" in (await confirmFinanceCard(user, { ...card, reference: "APP-123", note: "approved subject to deposit" })));
+  // Everything the card sets already stands: done, nothing saved.
+  financeNow = { ...financeNow, reference: "APP-999", updatedAt: new Date("2026-11-16T09:05:00Z") };
+  assert.deepEqual(await confirmFinanceCard(user, card), { done: true });
+  // A colleague changed the note after the card was shown (same status): stale, nothing saved.
+  financeNow = { ...financeNow, reference: "APP-123", note: "they called back", updatedAt: new Date("2026-11-16T09:10:00Z") };
+  assert.ok("stale" in (await confirmFinanceCard(user, card)));
+  // A card shown before the deal was financed, after someone started it: stale.
+  assert.ok("stale" in (await confirmFinanceCard(user, { ...card, wasVersion: null })));
 });

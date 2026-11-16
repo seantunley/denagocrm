@@ -10,7 +10,10 @@ export const FINANCE_RULE =
 export type FinanceCard = {
   id: string; kind: "finance"; leadId: string; leadLabel: string; title: string; reason?: string;
   vendorId: string; status: FinanceStatus; reference: string | null; note: string | null;
-  /** What the card SHOWED: the finance's status and when it last moved (null: not financed yet). Confirm refuses if either changed. */
-  wasStatus: string | null; wasStatusAt: string | null;
+  /**
+   * The version of the deal's finance the card SHOWED (its updatedAt; null: not financed yet). Confirm saves only over
+   * that version — saveDealFinance's own compare-and-swap — so a colleague's edit since (any field) is never overwritten.
+   */
+  wasVersion: string | null;
   detail: string;
 };

@@ -76,7 +76,7 @@ export async function financeCard(user: PermissionUser, p: FinanceProposal, lead
     id, kind: "finance", leadId: p.leadId, leadLabel,
     title: `${lead.name}'s finance: ${financeStatusShort(p.status)}`,
     vendorId: house.id, status: p.status, reference, note,
-    wasStatus: current?.status ?? null, wasStatusAt: current?.statusAt.toISOString() ?? null,
+    wasVersion: current?.updatedAt.toISOString() ?? null,
     detail: [
       `Finance house: ${house.name}${reference ? ` · ref ${reference}` : ""}`,
       current ? `Now: ${financeStatusLabel(current.status)} (since ${johannesburgDateKey(current.statusAt)})` : "Not financed yet — this starts it",
@@ -96,8 +96,9 @@ export async function confirmFinanceCard(user: PermissionUser, card: FinanceCard
   if (!(await canAccessLead(user, card.leadId))) return { stale: "You can't open that deal any more." };
   if (!(await hasPermission(user, "leads.edit"))) return { stale: "Your role can't change a deal's finance." };
   const now = await loadDealFinance(ownedWriteTenantId(), card.leadId);
-  if (now && now.status === card.status && now.vendorId === card.vendorId) return { done: true };
-  if ((now?.status ?? null) !== card.wasStatus || (now?.statusAt.toISOString() ?? null) !== card.wasStatusAt) {
+  // Done only when EVERYTHING the card sets already stands — a reference- or note-only card is not done by its status.
+  if (now && now.status === card.status && now.vendorId === card.vendorId && now.reference === card.reference && now.note === card.note) return { done: true };
+  if ((now?.updatedAt.toISOString() ?? null) !== card.wasVersion) {
     return { stale: "The deal's finance changed since this was proposed — nothing was changed. Ask again to see where it stands." };
   }
   const form = new FormData();
@@ -105,5 +106,7 @@ export async function confirmFinanceCard(user: PermissionUser, card: FinanceCard
   form.set("status", card.status);
   form.set("reference", card.reference ?? "");
   form.set("note", card.note ?? "");
+  // The version the card showed: saveDealFinance refuses if anything moved in between (its compare-and-swap).
+  form.set("version", card.wasVersion ?? "");
   return { form };
 }
