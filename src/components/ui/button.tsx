@@ -4,7 +4,7 @@ import { Slot } from "radix-ui"
 
 import { cn } from "@/lib/utils"
 
-const buttonVariants = cva(
+const buttonClasses = cva(
   "inline-flex min-h-9 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg text-sm font-medium outline-none transition-[background-color,border-color,color,box-shadow] duration-150 focus-visible:border-ring focus-visible:ring-4 focus-visible:ring-ring/25 disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
   {
     variants: {
@@ -38,6 +38,13 @@ const buttonVariants = cva(
   }
 )
 
+/**
+ * The classes, MERGED. The base sets min-h-9 and each size its own min-h; the Button component merged them, but a
+ * link styled as a button (`<Link className={buttonVariants(…)}>`, 35 files) got the raw string with both, and
+ * min-h-9 won — an "sm" link stood 36px tall beside 32px buttons (Sean, 2026-11-16: "Open deal" vs Send and PDF).
+ */
+const buttonVariants = (...args: Parameters<typeof buttonClasses>): string => cn(buttonClasses(...args))
+
 function Button({
   className,
   variant = "default",
@@ -45,7 +52,7 @@ function Button({
   asChild = false,
   ...props
 }: React.ComponentProps<"button"> &
-  VariantProps<typeof buttonVariants> & {
+  VariantProps<typeof buttonClasses> & {
     asChild?: boolean
   }) {
   const Comp = asChild ? Slot.Root : "button"
@@ -55,7 +62,7 @@ function Button({
       data-slot="button"
       data-variant={variant}
       data-size={size}
-      className={cn(buttonVariants({ variant, size, className }))}
+      className={buttonVariants({ variant, size, className })}
       {...props}
     />
   )
