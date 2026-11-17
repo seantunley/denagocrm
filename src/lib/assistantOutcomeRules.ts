@@ -66,6 +66,7 @@ const SUMMARY_KINDS: [RegExp, Kind][] = [
   [/^block time on their own calendar$/, "block_time"],
   [/^reschedule an activity$/, "reschedule"],
   [/^cancel an activity$/, "cancel_activity"],
+  [/^mark an activity done$/, "complete_activity"],
   [/^mark the deal lost$/, "lost"],
   [/^park the deal in Nurture$/, "nurture"],
   [/^bring the deal back from Nurture$/, "reactivate"],

@@ -186,6 +186,8 @@ export const CRM_CARD_TTL_MS = 24 * 60 * 60 * 1000;
  */
 export const WHATSAPP_CONFIRMABLE: ReadonlySet<string> = new Set([
   "note", "customer_note", "follow_up", "assign", "stage", "meeting", "block_time", "reschedule", "cancel_activity", "schedule", "watch",
+  // complete_activity (Sean, 2026-11-17): a follow-up done, with the note of what happened shown before Confirm.
+  "complete_activity",
   // log_call (Sean, 2026-11-14): a call just made, told to DAX from the car — filed on the CRM only, nobody contacted.
   "log_call",
   // quote_add: the same kind of change — it adds to a DRAFT, and the updated PDF comes back to this phone.
@@ -335,7 +337,7 @@ export const whatsappBold = (text: string) => `*${text.replace(/\*/g, "").trim()
 /** Each kind of task its own emoji, so a list of them reads at a glance. */
 const CARD_EMOJI: Record<string, string> = {
   note: "📝", customer_note: "📝", log_call: "📞", follow_up: "📅", meeting: "🤝", test_drive: "🚗", block_time: "🗓️",
-  reschedule: "🔁", cancel_activity: "✖️", assign: "👤", stage: "➡️", lost: "❌", nurture: "🌱",
+  reschedule: "🔁", cancel_activity: "✖️", complete_activity: "✅", assign: "👤", stage: "➡️", lost: "❌", nurture: "🌱",
   quote: "🧾", quote_build: "🧾", quote_add: "🧾", quote_change: "🧾", quote_pdf: "📄", schedule: "⏰", watch: "👀",
   create_customer: "🆕", create_lead: "🆕", update_customer: "✏️", attach_file: "📎", record_payment: "💰",
   schedule_delivery: "🚚", job_card: "🔧", plan: "📋",

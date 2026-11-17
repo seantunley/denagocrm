@@ -123,6 +123,8 @@ export default function AssistantActionCard({
       )}
       {/* The whole quote, line by line at catalogue prices: what Confirm will create, as a draft. */}
       {(card.kind === "quote_build" || card.kind === "quote_add" || card.kind === "quote_change") && <p className="mt-2 whitespace-pre-line text-xs text-muted-foreground">{card.text}</p>}
+      {/* A follow-up marked done: the note of what happened, saved with it. */}
+      {card.kind === "complete_activity" && <p className="mt-2 whitespace-pre-line text-xs text-muted-foreground">{card.text}</p>}
       {card.kind === "schedule" && <p className="mt-2 whitespace-pre-line text-xs">&ldquo;{card.question}&rdquo;</p>}
       {/* A call to file: its notes, next step and follow-up — everything Confirm saves. */}
       {card.kind === "log_call" && <p className="mt-1 whitespace-pre-line text-xs text-muted-foreground">{card.detail}</p>}

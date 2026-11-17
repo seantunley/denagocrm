@@ -455,6 +455,8 @@ function unstampedWrites(rel: string): string[] {
 
 const CUSTOMER_RECORD_WRITERS = [
   "src/app/actions/activities.ts",
+  // The note a Done saves, in the done's own transaction — stamped with the tenant activities.ts resolves for it.
+  "src/lib/activityComplete.ts",
   // The private reply to a public comment. Stamped from the THREAD's owner
   // rather than the acting scope, because Communication(tenantId,
   // conversationId) → Conversation(tenantId, id) is a composite key and the

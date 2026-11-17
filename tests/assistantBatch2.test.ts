@@ -150,9 +150,11 @@ test("each phase is timed — numbers only — and the median is what the owner 
 
 test("a card about a record that has moved on is refused, not applied", () => {
   const action = code("src/app/actions/assistant.ts");
-  for (const kind of ["assign", "stage", "reschedule", "cancel_activity", "lost"]) {
+  for (const kind of ["assign", "stage", "lost"]) {
     assert.match(action, new RegExp(`case "${kind}": \\{\\s*if \\(!\\(await stillAsProposed\\(card\\)\\)\\) return untouched\\(STALE_CARD\\);`), kind);
   }
+  // A planned activity's cards share one door (assistantActivityConfirm), behind the same check.
+  assert.match(action, /case "reschedule":\s*case "cancel_activity":\s*case "complete_activity": \{\s*if \(!\(await stillAsProposed\(card\)\)\) return untouched\(STALE_CARD\);/);
   const check = action.slice(action.indexOf("async function stillAsProposed"));
   assert.match(check, /if \(card\.kind === "stage"\) return lead\.stageId === card\.fromStageId;/);
   assert.match(check, /if \(card\.kind === "assign"\) return lead\.assignedToId === card\.fromUserId;/);
@@ -162,7 +164,7 @@ test("a card about a record that has moved on is refused, not applied", () => {
   // reason is optional and spread after the ids; the from* fields must still be present.
   assert.match(lib, /stageId: stage\.id, fromStageId: lead\.stageId/);
   assert.match(lib, /userId: person\.id, fromUserId: lead\.assignedToId/);
-  assert.equal((lib.match(/fromDue: activity\.dueDate\.toISOString\(\)/g) ?? []).length, 2);
+  assert.equal((lib.match(/fromDue: activity\.dueDate\.toISOString\(\)/g) ?? []).length, 3);
 });
 
 

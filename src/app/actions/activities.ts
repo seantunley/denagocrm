@@ -13,6 +13,7 @@ import { requireUser } from "@/lib/auth";
 import { asActionResult, refuse, ActionRefusal } from "@/lib/actionResult";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { futureActivityRefusal, isFutureDay } from "@/lib/activityDay";
+import { completePlannedActivity } from "@/lib/activityComplete";
 import { resolveAssignableUser } from "@/lib/tenantActor";
 import { logAudit } from "@/lib/audit";
 import { logError } from "@/lib/errorLog";
@@ -310,11 +311,25 @@ async function finishActivity(id: string, note: string) {
   if (isFutureDay(scheduled.dueDate)) {
     refuse(futureActivityRefusal(scheduled.dueDate));
   }
-  const activity = await prisma.activity.update({
-    where: { id },
-    data: { status: "done", doneAt: new Date() },
-    include: { lead: true },
-  });
+  // The move and its note commit together, and only while it is still planned (completePlannedActivity).
+  const trimmed = note.trim();
+  const noteRow = trimmed
+    ? {
+        type: scheduled.type === "todo" ? "note" : scheduled.type,
+        direction: "outbound",
+        subject: `Activity done: ${scheduled.summary}`,
+        body: trimmed,
+        leadId: scheduled.leadId,
+        contactId: scheduled.contactId,
+        userId: user.id,
+      }
+    : null;
+  const tenantId = noteRow ? await customerRecordTenantId({ contactId: scheduled.contactId, leadId: scheduled.leadId }) : null;
+  const moved = await prisma.$transaction((tx) => completePlannedActivity(tx, { id, activityTenantId: scheduled.tenantId, now: new Date(), tenantId, note: noteRow }));
+  if (!moved) refuse("That activity is already done or was cancelled — refresh the page.");
+  const activity = await prisma.activity.findUnique({ where: { id }, include: { lead: true } });
+  if (!activity) refuse("That activity is no longer there — refresh the page.");
+  // Best-effort, as before: logAudit never throws, so it cannot report a done that happened as failed.
   await logAudit({
     action: "activity.done",
     summary: `Completed ${activity.type}: ${activity.summary}`,
@@ -322,21 +337,6 @@ async function finishActivity(id: string, note: string) {
     leadId: activity.leadId,
     user,
   });
-  const trimmed = note.trim();
-  if (trimmed) {
-    await prisma.communication.create({
-      data: {
-        type: activity.type === "todo" ? "note" : activity.type,
-        direction: "outbound",
-        subject: `Activity done: ${activity.summary}`,
-        body: trimmed,
-        leadId: activity.leadId,
-        contactId: activity.contactId,
-        userId: user.id,
-        tenantId: await customerRecordTenantId({ contactId: activity.contactId, leadId: activity.leadId }),
-      },
-    });
-  }
   /*
    * NO REVALIDATION HERE — the caller decides when it is safe.
    *

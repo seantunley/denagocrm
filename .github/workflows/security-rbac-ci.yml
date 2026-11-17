@@ -564,6 +564,11 @@ jobs:
       - name: Concurrency -- a checklist revision cannot disagree with its template
         run: npm run test:checklist-concurrency
 
+      # A follow-up marked done (the CRM's Done, and DAX's complete_activity): the done and its note commit together,
+      # and two Confirms racing make one done and one note. Only real transactions show it.
+      - name: Concurrency -- a follow-up is done once, with its note
+        run: npm run test:activity-complete
+
       # A workflow rule on "Discount %" read a literal 0 and never fired, a step
       # left for the sender to fill was never asked for, and an approver was told
       # at the next cron run. The unit tests run the arithmetic; only the real

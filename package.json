@@ -67,6 +67,7 @@
     "test:draft-concurrency": "tsx --tsconfig tsconfig.scripts.json scripts/test-conversation-draft-concurrency.ts",
     "test:signing-verify": "tsx --tsconfig tsconfig.scripts.json scripts/test-signing-verify.ts",
     "test:checklist-concurrency": "tsx --tsconfig tsconfig.scripts.json scripts/test-checklist-template-concurrency.ts",
+    "test:activity-complete": "tsx --tsconfig tsconfig.scripts.json scripts/test-activity-complete-concurrency.ts",
     "test:signing-workflows": "tsx --tsconfig tsconfig.scripts.json scripts/test-signing-workflows.ts",
     "test:signflow-send-workspace": "tsx --tsconfig tsconfig.harness.json scripts/test-signflow-send-workspace.ts",
     "test:receipt-isolation": "tsx --tsconfig tsconfig.scripts.json scripts/test-receipt-tenant-isolation.ts",
