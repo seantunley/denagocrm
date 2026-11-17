@@ -26,14 +26,21 @@ const TONE: Record<KanbanFinance["tone"], string> = {
  * The finance pill on a lead card (Sean, 2026-11-16: "put the finance status on the kanban lead if it is present").
  * Nothing on a cash deal. A stalled one says what to chase on hover.
  */
-export default function KanbanFinancePill({ finance }: { finance?: KanbanFinance | null }) {
+export default function KanbanFinancePill({ finance, compact = false }: {
+  finance?: KanbanFinance | null;
+  /** A collapsed card's top row: the icon alone, coloured by where it stands (Sean: "no finance pills" on a collapsed card). */
+  compact?: boolean;
+}) {
   if (!finance) return null;
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span className={cn("inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] ring-1", TONE[finance.chase ? "warning" : finance.tone])}>
+        <span
+          aria-label={compact ? `Finance: ${finance.status}` : undefined}
+          className={cn("inline-flex items-center gap-1 rounded-md ring-1", compact ? "p-1" : "px-1.5 py-0.5 text-[11px]", TONE[finance.chase ? "warning" : finance.tone])}
+        >
           <Landmark className="size-3" />
-          {finance.status}
+          {!compact && finance.status}
         </span>
       </TooltipTrigger>
       <TooltipContent>{finance.chase ?? `Finance with ${finance.house}: ${finance.status.toLowerCase()}`}</TooltipContent>
