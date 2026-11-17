@@ -308,7 +308,8 @@ export function buildBrief(input: BriefInput): DaxBrief {
   const financeRows: Row[] = (input.finance ?? [])
     .filter((f) => f.ownerId === userId || f.ownerId === null)
     .sort((a, b) => a.since.getTime() - b.since.getTime())
-    .map((f) => ({ leadId: f.leadId, name: f.name, detail: f.detail, href: `/leads/${f.leadId}?tab=finance`, valueCents: f.valueCents }));
+    // One row per quote being chased, but a deal's value once (review of #1150): only one of its quotes is accepted.
+    .map((f, i, all) => ({ leadId: f.leadId, name: f.name, detail: f.detail, href: `/leads/${f.leadId}?tab=finance`, valueCents: all.findIndex((o) => o.leadId === f.leadId) === i ? f.valueCents : 0 }));
 
   const todayStart = new Date(`${johannesburgDateKey(now)}T00:00:00+02:00`);
   const deliveryRows = (stage: string): Row[] =>

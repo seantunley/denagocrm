@@ -15,7 +15,8 @@ const tick = () => new Date((clock += 1000));
 const T = "tenant_a", LEAD = "lead_1", HOUSE = "vendor_wesbank";
 // One deal, three quotes: Q-1044 and Q-1045 both in play (only one will be accepted), Q-1043 cancelled.
 const Q44 = "quote_1044", Q45 = "quote_1045", Q43 = "quote_1043";
-const QUOTES = [
+let QUOTES: { id: string; number: number; leadId: string; status: string; supersededAt: null; deletedAt: null }[] = [];
+const freshQuotes = () => [
   { id: Q44, number: 1044, leadId: LEAD, status: "draft", supersededAt: null, deletedAt: null },
   { id: Q45, number: 1045, leadId: LEAD, status: "draft", supersededAt: null, deletedAt: null },
   { id: Q43, number: 1043, leadId: LEAD, status: "cancelled", supersededAt: null, deletedAt: null },
@@ -27,7 +28,12 @@ const matches = (row: Row, where: Record<string, unknown>) =>
 const db: Record<string, unknown> = {
   // The action's transaction runs against the same fake table; the row lock is a no-op here.
   $transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(db),
-  $queryRaw: async () => [{ "?column?": 1 }],
+  // The row holds are no-ops — except that a cancellation "committed just before the save took its hold on the quote"
+  // can be staged with cancelOnHold.
+  $queryRaw: async (sql: TemplateStringsArray, ...values: unknown[]) => {
+    if (sql.join("").includes(`FROM "Quote"`) && cancelOnHold === values[0]) QUOTES = QUOTES.map((q) => (q.id === cancelOnHold ? { ...q, status: "cancelled" } : q));
+    return [{ "?column?": 1 }];
+  },
   lead: { findFirst: async () => ({ id: LEAD, contactId: null }) },
   quote: { findFirst: async ({ where }: { where: { id: string } }) => QUOTES.find((q) => q.id === where.id) ?? null },
   // WesBank is on this deal's suppliers; any other id is not.
@@ -68,7 +74,8 @@ const form = (fields: Record<string, string>) => {
   for (const [k, v] of Object.entries({ vendorId: HOUSE, status: "submitted", reference: "", note: "", ...fields })) data.set(k, v);
   return data;
 };
-beforeEach(() => { rows = []; });
+let cancelOnHold: string | null = null;
+beforeEach(() => { rows = []; QUOTES = freshQuotes(); cancelOnHold = null; });
 
 test("a stale form can't overwrite a newer reference or note — same status or not", async () => {
   assert.deepEqual(await saveDealFinance(QUOTE, form({ reference: "APP-1", version: "" })), { success: "Finance: Submitted" });
@@ -100,6 +107,12 @@ test("FINANCE IS PER QUOTE (Sean: changing Q-1045's changed Q-1044's): each of t
 
 test("no new finance on a cancelled quote — finance goes on the quote that's going ahead", async () => {
   assert.match(String((await saveDealFinance(Q43, form({ version: "" }))).error), /Q-1043 is cancelled — start the finance on the quote that's going ahead/);
+  assert.equal(rows.length, 0);
+});
+
+test("a quote cancelled while the finance is being started: read again under the hold, refused (review of #1150)", async () => {
+  cancelOnHold = Q45; // in play when the action first looked; cancelled by the time the save holds the quote
+  assert.match(String((await saveDealFinance(Q45, form({ version: "" }))).error), /Q-1045 is cancelled/);
   assert.equal(rows.length, 0);
 });
 

@@ -145,7 +145,8 @@ test("the finance house can't be taken off a deal while its finance is live (rev
   // Every finance with that house on the deal's quotes — live only while open AND its quote is still in play.
   assert.match(remove, /tx\.dealFinance\.findMany\(\{ where: \{ tenantId, leadId: quote\.leadId, vendorId \}/);
   assert.match(remove, /if \(financeIsClosed\(f\.status\)\) return false;/);
-  assert.match(remove, /return !f\.quoteId \|\| \(on !== undefined && quoteInPlay\(on\)\);/);
+  // A finance on no quote (from before finance was per quote) counts for nothing and holds no supplier (review of #1150).
+  assert.match(remove, /return on !== undefined && quoteInPlay\(on\);/);
   assert.ok(remove.indexOf("if (live) {") < remove.indexOf("tx.dealVendor.deleteMany("), "checked before the link goes");
   assert.match(remove, /Set that finance to Withdrawn first/);
 });
@@ -240,4 +241,8 @@ test("the chaser reaches people: the Attention Centre (open deals), the morning 
   const item = buildBrief(input).items.find((i) => i.key === "finance");
   assert.equal(item?.count, 2, "mine and the unassigned — not another rep's");
   assert.equal(item?.href, "/finance");
+  // Two stalled quotes on one R140,000 deal: two applications to chase, but the deal's value once (review of #1150).
+  const twice = buildBrief({ ...input, finance: [{ ...finance("me"), detail: "Q-1044: …", valueCents: 14_000_000 }, { ...finance("me"), detail: "Q-1045: …", valueCents: 14_000_000 }] }).items.find((i) => i.key === "finance");
+  assert.equal(twice?.count, 2);
+  assert.equal(twice?.valueCents, 14_000_000, "not R280,000");
 });

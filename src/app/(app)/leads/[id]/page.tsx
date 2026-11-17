@@ -56,7 +56,7 @@ import { payableTotalCents } from "@/lib/pricing";
 import { getAccessibleContactIds, getAccessibleQuoteIds } from "@/lib/permissions";
 import { quotePrintLinks } from "@/lib/quotePrintLinks";
 import { isModuleEnabled } from "@/lib/modules/enabled";
-import { dealFinanceHouses, loadLeadFinances } from "@/lib/dealFinance";
+import { dealFinanceHouses, loadLeadFinances, loadUnattachedFinances } from "@/lib/dealFinance";
 import { financeStatusShort, financeTone } from "@/lib/dealFinanceRules";
 import DealFinancePanel from "@/components/deals/DealFinancePanel";
 import { UPCOMING_TEST_DRIVE_STATUSES } from "@/lib/testDriveBooking";
@@ -138,13 +138,14 @@ export default async function LeadDetailPage({
   const alreadyViewed = !!lead.viewedAt;
   // Finance through an outside finance house (Finance module): only on a deal with a finance house among its suppliers.
   // Per QUOTE: each of the deal's quotes has its own (only one is accepted).
-  const [quoteFinances, financeHouses] = lead.tenantId && (await isModuleEnabled("finance"))
+  const [quoteFinances, financeHouses, unattachedFinances] = lead.tenantId && (await isModuleEnabled("finance"))
     ? await Promise.all([
         loadLeadFinances(lead.tenantId, lead.id),
         dealFinanceHouses(lead.tenantId, lead.id),
+        loadUnattachedFinances(lead.tenantId, lead.id),
       ])
-    : [[], []];
-  const financed = quoteFinances.some((q) => q.finance);
+    : [[], [], []];
+  const financed = quoteFinances.some((q) => q.finance) || unattachedFinances.length > 0;
   // This lead's next test drive whose indemnity is still outstanding — it is
   // signed on a screen from the booking, so the lead points there.
   const testDriveToSign = automotiveOn && canBookTestDrive
@@ -663,14 +664,23 @@ export default async function LeadDetailPage({
               ...(financed || financeHouses.length > 0 ? [{
                 key: "finance",
                 label: "Finance",
-                content: quoteFinances.length ? (
+                content: (
                   <div className="space-y-4">
                     {quoteFinances.map(({ quote, finance }) => (
                       <DealFinancePanel key={quote.id} quote={quote} finance={finance} financeHouses={financeHouses} canEdit={canEditLead} now={new Date()} />
                     ))}
+                    {quoteFinances.length === 0 && (
+                      <p className="text-sm text-muted-foreground">Finance is kept per quote — make the quote first, then start its finance here.</p>
+                    )}
+                    {/* From before finance was per quote, on a deal with no quote then (review of #1150): kept, counts for nothing. */}
+                    {unattachedFinances.map((f) => (
+                      <div key={f.id} className="rounded-lg border border-dashed p-3 text-sm">
+                        <p className="font-medium">Earlier finance · {f.vendor.name}: {financeStatusShort(f.status)}{f.reference ? ` · ref ${f.reference}` : ""}</p>
+                        {f.note && <p className="mt-1 text-muted-foreground">{f.note}</p>}
+                        <p className="mt-1 text-xs text-muted-foreground">Recorded before finance was kept per quote, so it isn&apos;t on a quote. Kept for the record — it isn&apos;t chased and holds nothing back. Start the finance on the quote that&apos;s going ahead.</p>
+                      </div>
+                    ))}
                   </div>
-                ) : (
-                  <p className="text-sm text-muted-foreground">Finance is kept per quote — make the quote first, then start its finance here.</p>
                 ),
               }] : []),
               {

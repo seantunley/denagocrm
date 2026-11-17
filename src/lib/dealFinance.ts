@@ -48,10 +48,13 @@ async function quotesOf(rows: { quoteId: string | null }[]): Promise<Map<string,
   return new Map(quotes.map((quote) => [quote.id, quote]));
 }
 
-/** Whether a record still counts: its quote is in play (or it predates per-quote finance and has none). */
+/**
+ * Whether a record still counts: its quote is in play. One from before finance was per quote whose deal had no quote
+ * (review of #1150) has none and counts for nothing — not chased, not on the board, holds no delivery or supplier. It
+ * is kept and shown on the lead's Finance tab (loadUnattachedFinances); new finance goes on the deal's quote.
+ */
 const counts = (row: { quoteId: string | null }, quotes: Map<string, QuoteState>): boolean => {
-  if (!row.quoteId) return true;
-  const quote = quotes.get(row.quoteId);
+  const quote = row.quoteId ? quotes.get(row.quoteId) : undefined;
   return Boolean(quote && quoteInPlay(quote));
 };
 
@@ -203,6 +206,15 @@ export async function loadLeadFinances(tenantId: string, leadId: string): Promis
   return quotes
     .map((quote) => ({ quote: { id: quote.id, number: quote.number, inPlay: quoteInPlay(quote) }, finance: byQuote.get(quote.id) ?? null }))
     .filter(({ quote, finance }) => quote.inPlay || finance);
+}
+
+/** A deal's finance on no quote — from before finance was per quote, when the deal had none. Kept, read-only. */
+export async function loadUnattachedFinances(tenantId: string, leadId: string) {
+  return prisma.dealFinance.findMany({
+    where: { tenantId, leadId, quoteId: null },
+    select: { id: true, status: true, statusAt: true, reference: true, note: true, vendor: { select: { name: true } } },
+    orderBy: { statusAt: "desc" },
+  });
 }
 
 /**

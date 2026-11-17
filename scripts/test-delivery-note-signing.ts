@@ -43,6 +43,7 @@ import {
   type HandoverFacts,
 } from "../src/lib/deliveryNoteSigning";
 import { deliverQuote } from "../src/lib/quoteDelivery";
+import { financeAttentionSignals, financeOnBoard, loadUnattachedFinances } from "../src/lib/dealFinance";
 import { completeSubject, lockSubject } from "../src/lib/signing/subjectCompletion";
 import { DELIVERY_NOTE } from "../src/lib/signing/subject";
 import { renderRequestDocHtml } from "../src/lib/signing/render";
@@ -472,6 +473,22 @@ async function main() {
   await signedFor(thisQuote.id);
   await deliver(thisQuote.id);
   check("another quote's declined finance on the same deal: this one is delivered", Boolean((await record(thisQuote.id)).deliveredAt));
+
+  // A finance from before finance was per quote, on a deal that had NO quote: the per-quote migration leaves it on no
+  // quote (review of #1150). Kept — but it counts for nothing: not chased, not on the board, and the deal's later
+  // quote is delivered without it.
+  const noQuote = await basePrisma.lead.create({ data: { tenantId, stageId: stage.id, name: customer, title: "Financed before quotes", contactId: contact.id, createdById: rep.id, status: "open" } });
+  const longAgo = new Date(Date.now() - 20 * 24 * 3600 * 1000);
+  await basePrisma.dealFinance.create({ data: { tenantId, leadId: noQuote.id, quoteId: null, vendorId: house.id, status: "submitted", statusAt: longAgo, createdById: rep.id } });
+  const now = new Date();
+  check("finance on no quote: not chased", (await inScope(() => financeAttentionSignals([noQuote.id], now))).length === 0);
+  check("finance on no quote: no pill on the board", (await inScope(() => financeOnBoard([noQuote.id], now))).size === 0);
+  check("finance on no quote: kept, shown on the lead", (await inScope(() => loadUnattachedFinances(tenantId, noQuote.id))).length === 1);
+  const laterQuote = await quoteReadyToDeliver();
+  await basePrisma.quote.update({ where: { id: laterQuote.id }, data: { leadId: noQuote.id } });
+  await signedFor(laterQuote.id);
+  await deliver(laterQuote.id);
+  check("finance on no quote: the deal's later quote is delivered", Boolean((await record(laterQuote.id)).deliveredAt));
 
   __setTenantEnforcingForTests(null);
   console.log(`\n${passed} passed, ${failed} failed`);

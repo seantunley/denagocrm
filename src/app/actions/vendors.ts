@@ -154,7 +154,8 @@ export async function removeDealVendor(quoteId: string, vendorId: string): Promi
       if (!link) refuse("That supplier is no longer on this deal — refresh the page.");
       // The deal's finance house stays on while finance with it is live on any of the deal's quotes still in play
       // (review of #1137): taking it off would leave a finance record that still holds delivery but can no longer be
-      // edited. Paid out or withdrawn — or on a cancelled or replaced quote — it may go.
+      // edited. Paid out or withdrawn — or on a cancelled or replaced quote, or on no quote (from before finance was per
+      // quote: it counts for nothing, review of #1150) — it may go.
       const finances = quote.leadId
         ? await tx.dealFinance.findMany({ where: { tenantId, leadId: quote.leadId, vendorId }, select: { status: true, quoteId: true } })
         : [];
@@ -165,7 +166,7 @@ export async function removeDealVendor(quoteId: string, vendorId: string): Promi
       const live = finances.find((f) => {
         if (financeIsClosed(f.status)) return false;
         const on = onQuotes.find((q) => q.id === f.quoteId);
-        return !f.quoteId || (on !== undefined && quoteInPlay(on));
+        return on !== undefined && quoteInPlay(on);
       });
       if (live) {
         const number = onQuotes.find((q) => q.id === live.quoteId)?.number;

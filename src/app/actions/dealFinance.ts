@@ -26,7 +26,7 @@ export async function saveDealFinance(quoteId: string, formData: FormData): Prom
     const tenantId = await actingTenantId();
     const quote = await prisma.quote.findFirst({
       where: { id: quoteId, tenantId, deletedAt: null },
-      select: { id: true, number: true, leadId: true, status: true, supersededAt: true, deletedAt: true },
+      select: { id: true, number: true, leadId: true },
     });
     if (!quote) refuse("That quote is no longer there — refresh the page.");
     if (!quote.leadId) refuse("Finance is kept on a deal's quote — link this quote to a lead first.");
@@ -49,7 +49,15 @@ export async function saveDealFinance(quoteId: string, formData: FormData): Prom
     // ONE TRANSACTION, THE LEAD ROW HELD (follow-up to the #1137 review): taking the finance house off the deal
     // (removeDealVendor) holds the same row, so a finance can't be started on a supplier that is being removed.
     const saved = await prisma.$transaction(async (tx) => {
+      // The quote held too, first (review of #1150): a cancellation at the same moment either landed and is read
+      // below, or waits for this save — a new finance never lands on a quote cancelled in between.
+      await tx.$queryRaw`SELECT 1 FROM "Quote" WHERE "id" = ${quoteId} AND "tenantId" = ${tenantId} FOR SHARE`;
       await tx.$queryRaw`SELECT 1 FROM "Lead" WHERE "id" = ${leadId} AND "tenantId" = ${tenantId} FOR UPDATE`;
+      const held = await tx.quote.findFirst({
+        where: { id: quoteId, tenantId, deletedAt: null },
+        select: { status: true, supersededAt: true, deletedAt: true },
+      });
+      if (!held) refuse("That quote is no longer there — refresh the page.");
       // A finance house ON THIS DEAL only — the form lists those, and the server holds to it whatever is posted. A deal
       // is financed because someone added the finance house to its suppliers; a cash deal never is.
       const link = await tx.dealVendor.findFirst({
@@ -67,7 +75,7 @@ export async function saveDealFinance(quoteId: string, formData: FormData): Prom
       }
       if (!existing) {
         // New finance only on a quote still in play; a cancelled or replaced quote's finance is kept, never started.
-        if (!quoteInPlay(quote)) refuse(`Q-${quote.number} is ${quote.supersededAt ? "replaced" : quote.status} — start the finance on the quote that's going ahead.`);
+        if (!quoteInPlay(held)) refuse(`Q-${quote.number} is ${held.supersededAt ? "replaced" : held.status} — start the finance on the quote that's going ahead.`);
         try {
           const row = await tx.dealFinance.create({
             data: { tenantId, leadId, quoteId, vendorId: vendor.id, reference, status, note, createdById: user.id },
