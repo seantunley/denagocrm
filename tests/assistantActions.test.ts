@@ -185,10 +185,14 @@ test("Confirm runs the action a person would use by hand — and Confirm never s
   assert.match(run, /await requireAnyPermission\(\.\.\.ASSISTANT_PERMISSIONS\);\s*if \(!\(await isModuleEnabled\("automation"\)\)\)/);
   for (const delegate of [
     "scheduleFollowUp(", "addCommunication(", "assignLead(", "moveLead(", "scheduleActivity(", "createTestDriveBooking(",
-    "rescheduleActivity(", "cancelActivity(", "markLost(", "createQuoteFromLead(",
+    "runActivityCard(", "markLost(", "createQuoteFromLead(",
   ]) {
     assert.ok(run.includes(delegate), delegate);
   }
+  // A planned activity's cards share one door (#1152) — the activity list's own move, cancel and Done.
+  const activityDoor = code("src/lib/assistantActivityConfirm.ts");
+  for (const delegate of ["rescheduleActivity(", "cancelActivity(", "completeActivity("]) assert.ok(activityDoor.includes(delegate), delegate);
+  assert.doesNotMatch(activityDoor, /sendWhatsApp|sendEmail|sendMessenger|sendTelegram|dispatch/i);
   // Confirm on any card sends nothing to a customer.
   assert.doesNotMatch(run, /sendWhatsApp|sendEmail|sendMessenger|sendTelegram|dispatch/i);
   // The model's own path — research, answer, proposals — has no way to send at all.
