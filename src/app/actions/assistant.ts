@@ -21,6 +21,7 @@ import { johannesburgDateKey } from "@/lib/activityDay";
 import { getSetting, getRegionalSettings } from "@/lib/settings";
 import { isCodexConnected } from "@/lib/codex";
 import { ASSISTANT_PROFILE_KEY, parseProfile } from "@/lib/assistantSoul";
+import { splitFreeFees } from "@/lib/quoteFreeItems";
 import { CONFIRM_KEY, CUSTOMER_FIELDS, leadQuotesReply, QUOTE_ADD_MAX_FEES, QUOTE_ADD_MAX_FEE_RANDS, QUOTE_BUILD_MAX_LINES, STALE_CARD, type ActionCard } from "@/lib/assistantActions";
 import { editorDefaults, quoteFromLeadDefaults } from "@/lib/quoteFromLead";
 import { QUOTE_PDF_SOURCE } from "@/lib/assistantWhatsAppRules";
@@ -792,7 +793,7 @@ export async function runAssistantAction(
         if (lines.length === 0 || lines.length > QUOTE_BUILD_MAX_LINES) return untouched("That quote isn't valid — ask again.");
         // Fees said with the request, on the same draft (2026-10-24) — checked as quote_add checks them.
         const buildFees = Array.isArray(card.fees) ? card.fees : [];
-        if (buildFees.length > QUOTE_ADD_MAX_FEES || buildFees.some((fee) => !Number.isInteger(fee.amountCents) || fee.amountCents <= 0 || fee.amountCents > QUOTE_ADD_MAX_FEE_RANDS * 100 || !String(fee.label ?? "").trim())) {
+        if (buildFees.length > QUOTE_ADD_MAX_FEES || buildFees.some((fee) => !Number.isInteger(fee.amountCents) || fee.amountCents < 0 || fee.amountCents > QUOTE_ADD_MAX_FEE_RANDS * 100 || !String(fee.label ?? "").trim())) {
           return untouched("That quote isn't valid — ask again.");
         }
         // Asked here as a yes/no first: saveQuoteDraft's own check REDIRECTS, which a Confirm tapped on WhatsApp has
@@ -857,10 +858,11 @@ export async function runAssistantAction(
           quoteContactId = made.contactId;
         }
         if (!quoteContactId) return { ok: false, error: STALE_CARD };
+        const builtFees = splitFreeFees(buildFees);
         const saved = await saveQuoteDraft({
           contactId: quoteContactId,
           leadId: card.leadId ?? null,
-          ...(buildFees.length ? { fees: buildFees.map((fee) => ({ label: String(fee.label).trim(), kind: fee.delivery ? "delivery" as const : "fee" as const, amountCents: fee.amountCents })) } : {}),
+          ...(builtFees.fees.length ? { fees: builtFees.fees.map((fee) => ({ label: String(fee.label).trim(), kind: fee.delivery ? "delivery" as const : "fee" as const, amountCents: fee.amountCents })) } : {}),
           validUntil: editorDefaults(defaults).validUntil,
           terms: defaults.terms,
           intent: "draft",
@@ -876,13 +878,13 @@ export async function runAssistantAction(
           // ONE JOB SHEET, ONE QUOTE: the sheet is locked and linked in the save's own transaction (saveQuoteDraft) —
           // a second card for the same sheet, with its own key, gets the sheet's quote back instead of a new one.
           ...(card.taskId ? { assistantTaskId: card.taskId } : {}),
-          items: lines.map((line) => {
+          items: [...lines.map((line) => {
             const product = byId.get(line.productId)!;
             return {
               description: product.name, qty: line.qty, unitPriceCents: product.basePriceCents, productId: product.id,
               discountPct: line.discountPct, ...(line.colour ? { colorPreference: line.colour } : {}),
             };
-          }),
+          }), ...builtFees.free],
         }).catch(async (error: unknown) => {
           // Thrown (a database timeout, say) after the customer was made: with the key, a retry is still at most once.
           // A guard's redirect, or no customer made here, is thrown on as before.
@@ -1021,7 +1023,7 @@ export async function runAssistantAction(
         const fees = Array.isArray(card.fees) ? card.fees : [];
         const lines = Array.isArray(card.lines) ? card.lines : [];
         if (fees.length + lines.length === 0 || fees.length > QUOTE_ADD_MAX_FEES || lines.length > QUOTE_BUILD_MAX_LINES) return untouched("That isn't valid — ask again.");
-        if (fees.some((fee) => !Number.isInteger(fee.amountCents) || fee.amountCents <= 0 || fee.amountCents > QUOTE_ADD_MAX_FEE_RANDS * 100 || !String(fee.label ?? "").trim())) {
+        if (fees.some((fee) => !Number.isInteger(fee.amountCents) || fee.amountCents < 0 || fee.amountCents > QUOTE_ADD_MAX_FEE_RANDS * 100 || !String(fee.label ?? "").trim())) {
           return untouched("That isn't valid — ask again.");
         }
         const quote = await prisma.quote.findFirst({ where: { id: String(card.quoteId ?? ""), deletedAt: null }, select: { id: true, status: true, contactId: true, leadId: true } });
@@ -1036,6 +1038,7 @@ export async function runAssistantAction(
         if (lines.some((line) => byId.get(line.productId)?.basePriceCents !== line.unitPriceCents)) {
           return untouched("The catalogue changed since DAX suggested this — ask again to see today's prices.");
         }
+        const added = splitFreeFees(fees);
         const saved = await saveQuoteDraft({
           id: quote.id,
           contactId: quote.contactId,
@@ -1045,14 +1048,14 @@ export async function runAssistantAction(
           appendOnly: true,
           confirmKey: card.confirmKey,
           pdfToMyWhatsApp: true,
-          items: lines.map((line) => {
+          items: [...lines.map((line) => {
             const product = byId.get(line.productId)!;
             return {
               description: product.name, qty: line.qty, unitPriceCents: product.basePriceCents, productId: product.id,
               discountPct: line.discountPct, ...(line.colour ? { colorPreference: line.colour } : {}),
             };
-          }),
-          fees: fees.map((fee) => ({ label: String(fee.label).trim(), kind: fee.delivery ? "delivery" as const : "fee" as const, amountCents: fee.amountCents })),
+          }), ...added.free],
+          fees: added.fees.map((fee) => ({ label: String(fee.label).trim(), kind: fee.delivery ? "delivery" as const : "fee" as const, amountCents: fee.amountCents })),
         });
         // Already carried out (the first Confirm's answer never reached them): said as done, and nothing is added again.
         if (!saved.ok && saved.repeated) return { ok: true, success: "Already added — nothing was added twice. It has NOT been sent to the customer.", href: `/quotes?edit=${quote.id}` };
