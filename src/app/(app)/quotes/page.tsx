@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { CheckCircle2, CircleDollarSign, Download, FileText, Plus, Search, Send } from "lucide-react";
+import { CheckCircle2, CircleDollarSign, Download, FileText, FolderOpen, Plus, Search, Send } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { getRecordLabels } from "@/lib/recordLabelsServer";
 import {
@@ -337,7 +337,7 @@ export default async function QuotesPage({
                         <MobileDataField label="Created">{formatDate(quote.createdAt)}</MobileDataField>
                       </MobileDataFields>
                       <div className="mt-2 flex items-center justify-end gap-3">
-                        <Link href={`/deals/${quote.id}`} className={`${buttonVariants({ variant: "outline", size: "sm" })} mr-auto`}>Open deal</Link>
+                        <Link href={`/deals/${quote.id}`} className={`${buttonVariants({ variant: "outline", size: "sm" })} mr-auto`}><FolderOpen />Open deal</Link>
                         <QuoteRowActions quoteId={quote.id} number={quote.number} status={quote.status} signed={Boolean(quote.signedAt)} emailed={Boolean(quote.emailedAt)} canSend={canCancel} canCancel={canCancel} canDuplicate={canDuplicate} deleteAction={deleteQuote.bind(null, quote.id)} canDelete={canDelete} />
                       </div>
                     </MobileDataCard>
@@ -397,7 +397,7 @@ export default async function QuotesPage({
                           <td className="text-slate-400">{formatDate(quote.validUntil, quoteDefaults.regional)}</td>
                           <td className="text-slate-400">{formatDate(quote.createdAt)}{quote.createdBy ? ` · ${quote.createdBy.name}` : ""}</td>
                           <td className="whitespace-nowrap text-right">
-                            <Link href={`/deals/${quote.id}`} className={`${buttonVariants({ variant: "outline", size: "sm" })} mr-3`}>Open deal</Link>
+                            <Link href={`/deals/${quote.id}`} className={`${buttonVariants({ variant: "outline", size: "sm" })} mr-2`}><FolderOpen />Open deal</Link>
                             <QuoteRowActions quoteId={quote.id} number={quote.number} status={quote.status} signed={Boolean(quote.signedAt)} emailed={Boolean(quote.emailedAt)} canSend={canCancel} canCancel={canCancel} canDuplicate={canDuplicate} deleteAction={deleteQuote.bind(null, quote.id)} canDelete={canDelete} />
                           </td>
                         </tr>
