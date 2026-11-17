@@ -88,7 +88,7 @@ const taskSchema = z.object({
   }).passthrough()).max(50).optional(),
   fees: z.array(z.object({
     label: z.string().max(200),
-    amount: z.number().positive().max(QUOTE_ADD_MAX_FEE_RANDS),
+    amount: z.number().min(0).max(QUOTE_ADD_MAX_FEE_RANDS), // 0: given free (quoteFreeItems)
     delivery: z.boolean().optional(),
   }).passthrough()).max(50).optional(),
   confirmed: looseList.optional(),

@@ -22,10 +22,11 @@ test("a fee is proposed with the amount the person said; nothing else about the 
     { type: "quote_add", quote: "Q-1030", fees: [{ label: "Delivery Fee", amount: 5000, delivery: true }] },
   ]);
   assert.equal(propose({ type: "quote_add", quote: "Q-1030", lines: [{ product: "Rover XL", qty: 1 }] }).length, 1);
-  // Refused: a credit, a zero, a status, a recipient, a price on a product line, too many fees.
+  // Something given free is a fee at R0 (Donovan, 2026-11-17: "free dust cover" could not be confirmed).
+  assert.equal(propose({ type: "quote_add", quote: "Q-1030", fees: [{ label: "Dust cover (free)", amount: 0 }] }).length, 1);
+  // Refused: a credit, a status, a recipient, a price on a product line, too many fees.
   for (const bad of [
     { fees: [{ label: "Discount", amount: -5000 }] },
-    { fees: [{ label: "Free", amount: 0 }] },
     { fees: [{ label: "Delivery", amount: 5000 }], status: "sent" },
     { fees: [{ label: "Delivery", amount: 5000 }], to: "customer" },
     { lines: [{ product: "Rover XL", qty: 1, unitPrice: 1 }] },

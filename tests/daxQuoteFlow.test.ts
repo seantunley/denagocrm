@@ -49,7 +49,7 @@ test("a quote can carry the fee said with it — one Confirm, not a second quote
   assert.match(text, /Delivery: Delivery — Hermanus — R6500/);
   assert.match(text, /Werner Kilian becomes a customer record too/);
   assert.match(QUOTE_BUILD_RULE, /goes IN the same quote_build as \\?"fees\\?"/);
-  assert.match(run, /fees: buildFees\.map\(\(fee\) => \(\{ label: String\(fee\.label\)\.trim\(\), kind: fee\.delivery \? "delivery" as const : "fee" as const, amountCents: fee\.amountCents \}\)\)/, "and the fees are SAVED");
+  assert.match(run, /fees: builtFees\.fees\.map\(\(fee\) => \(\{ label: String\(fee\.label\)\.trim\(\), kind: fee\.delivery \? "delivery" as const : "fee" as const, amountCents: fee\.amountCents \}\)\)/, "and the fees are SAVED");
 });
 
 test("a deal with no customer record: Confirm makes the customer (Add to contacts), it is not dropped", () => {

@@ -288,8 +288,9 @@ export const proposedAction = z.discriminatedUnion("type", [
     // A fee said with the request ("delivery to Hermanus, R6 500") goes on the SAME draft — one Confirm, not a
     // second quote_add that needs the number of a quote not created yet (Sean, 2026-10-24). The amount is the
     // person's, as on quote_add; the card shows it before anything is saved.
+    // amount 0: something given free — saved as a R0 line (quoteFreeItems).
     fees: z.array(
-      z.object({ label: text.max(120), amount: z.number().positive().max(QUOTE_ADD_MAX_FEE_RANDS), delivery: z.boolean().optional() }).strict(),
+      z.object({ label: text.max(120), amount: z.number().min(0).max(QUOTE_ADD_MAX_FEE_RANDS), delivery: z.boolean().optional() }).strict(),
     ).max(QUOTE_ADD_MAX_FEES).optional(),
     reason,
   }).strict(),
@@ -304,7 +305,7 @@ export const proposedAction = z.discriminatedUnion("type", [
     // Left out on a job sheet that has its quote: the CRM uses the sheet's.
     quote: text.max(40).optional(),
     fees: z.array(
-      z.object({ label: text.max(120), amount: z.number().positive().max(QUOTE_ADD_MAX_FEE_RANDS), delivery: z.boolean().optional() }).strict(),
+      z.object({ label: text.max(120), amount: z.number().min(0).max(QUOTE_ADD_MAX_FEE_RANDS), delivery: z.boolean().optional() }).strict(),
     ).max(QUOTE_ADD_MAX_FEES).optional(),
     lines: z.array(
       z.object({
@@ -385,6 +386,7 @@ export const QUOTE_BUILD_RULE =
   "A COLOUR the product does not come in is not a dead end: ask with the nearest one it does (\"Dove gray\" → \"It comes in Gray — is that the one?\"), and carry on with everything else meanwhile. " +
   "A CUSTOMER NOT FOUND by the exact name may be a misspelling (a voice note often is): when lead_brief gives closeMatches, offer them as the choice, closest first (\"Did you mean Clive Jammine, or Clive James?\") — never say there is no such customer, and never ask them to spell the name. " +
   "The price is always the catalogue's: never put a price in the task, and if they want a different price, a once-off product line or a deposit, tell them that part is done on the quote in the CRM after it is created. A FEE SAID WITH THE REQUEST (delivery, licensing, admin — \"delivery to Hermanus is R6 500\") goes IN the same quote_build as \"fees\" ([{\"label\":\"Delivery — Hermanus\",\"amount\":6500,\"delivery\":true}]), so ONE Confirm makes the whole quote; quote_add is only for a fee added to a draft that already exists. " +
+  "Something GIVEN FREE with it (\"a free dust cover\") is a fee with \"amount\":0 — it goes on the quote as a line at R0. Never give it a value they did not say. " +
   "A DEAL WITH NO CUSTOMER RECORD can still be quoted: give its leadId — Confirm creates the customer from the deal first, and the card says so. " +
   "When the person has said yes to everything you asked, PROPOSE the quote_build in that same answer — do not ask them to confirm in words again; the Confirm button is the confirmation. " +
   `At most ${QUOTE_BUILD_MAX_LINES} lines. One quote per task. ` +
@@ -396,7 +398,7 @@ export const QUOTE_BUILD_RULE =
 /** Adding to a draft quote (Sean, 2026-10-12: "Please add R5000 Delivery Fee to the quote"). */
 export const QUOTE_ADD_RULE =
   "- quote_add: ADD to a quote that is still a DRAFT, when they ask (\"add R5000 delivery fee to the quote\", \"put another Nomad on Q-1030\"). \"quote\" is its number (Q-1030) — the one you were just talking about, and ask which if that is not clear. " +
-  "A fee goes in \"fees\": its label in their words, and \"amount\" in RANDS exactly as THEY said it (R5000 → 5000) — never an amount you worked out or assumed, and ask if they gave none; \"delivery\":true when it is a delivery charge. " +
+  "A fee goes in \"fees\": its label in their words, and \"amount\" in RANDS exactly as THEY said it (R5000 → 5000) — never an amount you worked out or assumed, and ask if they gave none; \"delivery\":true when it is a delivery charge; something given free is \"amount\":0 (a line at R0). " +
   "A product goes in \"lines\", exactly as on quote_build: catalogue products at the catalogue price, looked up first. " +
   "It only ADDS — to change or remove something already on the quote, use quote_change. It cannot set a product's price or add a deposit: say those are done on the quote in the CRM. Never say you cannot add a fee or a line to a draft quote. " +
   "Only a draft: a quote already sent, signed or out for signature cannot be added to — say so. Confirming saves it and sends the updated PDF to THEM on their linked WhatsApp, never to the customer. " +
@@ -807,7 +809,7 @@ export function quoteBuildText(
     ...lines.map((line) =>
       `${line.qty} × ${line.description}${line.colour ? ` (${line.colour})` : ""} — ${money(line.unitPriceCents)} each${line.discountPct > 0 ? `, less ${line.discountPct}%` : ""}`,
     ),
-    ...(extra.fees ?? []).map((fee) => `${fee.delivery ? "Delivery" : "Fee"}: ${fee.label} — ${money(fee.amountCents)}`),
+    ...(extra.fees ?? []).map((fee) => feeText(fee, money)),
     ...(extra.newCustomer ? [`${extra.newCustomer} becomes a customer record too (from the deal's details) — the deal has none yet.`] : []),
     "Catalogue prices. Created as a DRAFT — it is not sent to the customer.",
   ].join("\n");
@@ -864,10 +866,12 @@ export function quoteChangeText(changes: readonly QuoteChange[], money: (cents: 
  */
 export const CONFIRM_KEY = /^qk_[a-f0-9]{32}$/;
 export type QuoteAddFee ={ label: string; amountCents: number; delivery: boolean };
+const feeText = (fee: QuoteAddFee, money: (cents: number) => string) =>
+  fee.amountCents === 0 ? `Included free: ${fee.label} — a line at ${money(0)}` : `${fee.delivery ? "Delivery" : "Fee"}: ${fee.label} — ${money(fee.amountCents)}`;
 /** What a quote_add card adds, as the person reads it before confirming. */
 export function quoteAddText(lines: readonly QuoteBuildLine[], fees: readonly QuoteAddFee[], money: (cents: number) => string): string {
   return [
-    ...fees.map((fee) => `${fee.delivery ? "Delivery" : "Fee"}: ${fee.label} — ${money(fee.amountCents)}`),
+    ...fees.map((fee) => feeText(fee, money)),
     ...lines.map((line) =>
       `${line.qty} × ${line.description}${line.colour ? ` (${line.colour})` : ""} — ${money(line.unitPriceCents)} each${line.discountPct > 0 ? `, less ${line.discountPct}%` : ""}`,
     ),
