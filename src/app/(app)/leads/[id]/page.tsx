@@ -137,10 +137,14 @@ export default async function LeadDetailPage({
   ]);
   const alreadyViewed = !!lead.viewedAt;
   // Finance through an outside finance house (Finance module): only on a deal with a finance house among its suppliers.
-  // Per QUOTE: each of the deal's quotes has its own (only one is accepted).
+  // Per QUOTE: each of the deal's quotes has its own (only one is accepted) — shown only for the quotes this person may
+  // see, like the Quotes tab (review of #1150).
+  // Invoice / agreement links only for quotes the print routes would open:
+  // requireQuoteReadAccess is quote view permission + getAccessibleQuoteIds.
+  const printableQuoteIds = await getAccessibleQuoteIds(user);
   const [quoteFinances, financeHouses, unattachedFinances] = lead.tenantId && (await isModuleEnabled("finance"))
     ? await Promise.all([
-        loadLeadFinances(lead.tenantId, lead.id),
+        loadLeadFinances(lead.tenantId, lead.id, printableQuoteIds),
         dealFinanceHouses(lead.tenantId, lead.id),
         loadUnattachedFinances(lead.tenantId, lead.id),
       ])
@@ -213,9 +217,6 @@ export default async function LeadDetailPage({
   // Marketing attribution the website captured with the enquiry (ad click / UTMs).
   const attribution = leadAttribution(lead.raw);
   const fromAd = isAdClick(attribution);
-  // Invoice / agreement links only for quotes the print routes would open:
-  // requireQuoteReadAccess is quote view permission + getAccessibleQuoteIds.
-  const printableQuoteIds = await getAccessibleQuoteIds(user);
   const canPrintQuote = (quoteId: string) => printableQuoteIds === null || printableQuoteIds.includes(quoteId);
 
   const visibleQuotes = lead.quotes.filter((quote) => canPrintQuote(quote.id));

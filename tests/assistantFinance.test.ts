@@ -14,7 +14,7 @@ moduleLoader._load = function (this: unknown, request: string, parent, isMain) {
   if (request === "server-only") return {};
   if ((parent?.filename ?? "").replace(/\\/g, "/").endsWith("src/lib/assistantFinance.ts")) {
     if (request === "./dealFinance") return { loadDealFinance: async () => financeNow, loadFinanceDeals: async () => [], dealFinanceHouses: async () => [] };
-    if (request === "./permissions") return { canAccessLead: async () => true, hasPermission: async () => true };
+    if (request === "./permissions") return { canAccessLead: async () => true, canAccessQuote: async () => true, getAccessibleQuoteIds: async () => null, hasPermission: async () => true };
     if (request === "./tenantWrite") return { ownedWriteTenantId: () => "tenant_a" };
     if (request === "./db") return { prisma: {} };
   }

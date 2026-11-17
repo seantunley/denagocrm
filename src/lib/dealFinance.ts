@@ -2,7 +2,7 @@ import "server-only";
 
 import { Prisma } from "@prisma/client";
 import { prisma } from "./db";
-import { getAccessibleLeadIds, type PermissionUser } from "./permissions";
+import { getAccessibleLeadIds, getAccessibleQuoteIds, type PermissionUser } from "./permissions";
 import { isModuleEnabled } from "./modules/enabled";
 import { baseValueCents } from "./currencyRules";
 import { ATTENTION_CATEGORY, ATTENTION_WEIGHTS, attentionSignalKey, type AttentionSignal } from "./attention/score";
@@ -49,6 +49,15 @@ async function quotesOf(rows: { quoteId: string | null }[]): Promise<Map<string,
 }
 
 /**
+ * A quote's finance only for whoever may see that quote (review of #1150): its number, status, reference and note are
+ * the quote's. `quoteIds` is getAccessibleQuoteIds(user) — null = every quote. A finance on no quote is the deal's.
+ */
+export const financeVisibleTo = (quoteIds: string[] | null) => {
+  const ids = quoteIds === null ? null : new Set(quoteIds);
+  return (row: { quoteId: string | null }) => ids === null || row.quoteId === null || ids.has(row.quoteId);
+};
+
+/**
  * Whether a record still counts: its quote is in play. One from before finance was per quote whose deal had no quote
  * (review of #1150) has none and counts for nothing — not chased, not on the board, holds no delivery or supplier. It
  * is kept and shown on the lead's Finance tab (loadUnattachedFinances); new finance goes on the deal's quote.
@@ -65,9 +74,9 @@ const counts = (row: { quoteId: string | null }, quotes: Map<string, QuoteState>
  * `active`: only those still in play (not paid out or withdrawn, not on a lost deal, not on a cancelled quote).
  */
 export async function loadFinanceDeals(user: PermissionUser, now: Date, { active }: { active: boolean }): Promise<FinanceDeal[]> {
-  const ids = await getAccessibleLeadIds(user);
+  const [ids, quoteIds] = await Promise.all([getAccessibleLeadIds(user), getAccessibleQuoteIds(user)]);
   if (ids !== null && ids.length === 0) return [];
-  const rows = await prisma.dealFinance.findMany({
+  const found = await prisma.dealFinance.findMany({
     where: {
       ...(ids === null ? {} : { leadId: { in: ids } }),
       ...(active ? { status: { notIn: ["paid_out", "withdrawn"] } } : {}),
@@ -77,6 +86,7 @@ export async function loadFinanceDeals(user: PermissionUser, now: Date, { active
     // ponytail: 300 newest-moved per view; paginate if a workspace runs more financed deals than that at once.
     take: 300,
   });
+  const rows = found.filter(financeVisibleTo(quoteIds));
   if (rows.length === 0) return [];
   const [leads, quotes] = await Promise.all([
     prisma.lead.findMany({
@@ -152,9 +162,9 @@ export async function financeToChase(user: PermissionUser, now: Date): Promise<N
  * The finance pill for each financed lead on the board (KanbanFinancePill), keyed by lead. `leadIds`: the board's own,
  * already permission-scoped. Empty with the Finance module off — and for a cash deal, which has no record. A deal with
  * finance on several quotes shows the one that needs it most: a stalled one, else a live one, else the latest moved;
- * a cancelled quote's finance never shows.
+ * a cancelled quote's finance never shows — nor one on a quote this person may not see (`quoteIds`, financeVisibleTo).
  */
-export async function financeOnBoard(leadIds: string[], now: Date): Promise<Map<string, KanbanFinance>> {
+export async function financeOnBoard(leadIds: string[], now: Date, quoteIds: string[] | null): Promise<Map<string, KanbanFinance>> {
   if (leadIds.length === 0 || !(await isModuleEnabled("finance"))) return new Map();
   const rows = await prisma.dealFinance.findMany({
     where: { leadId: { in: leadIds } },
@@ -163,8 +173,9 @@ export async function financeOnBoard(leadIds: string[], now: Date): Promise<Map<
   });
   const quotes = await quotesOf(rows);
   const best = new Map<string, { pill: KanbanFinance; rank: number }>();
+  const visible = financeVisibleTo(quoteIds);
   for (const row of rows) {
-    if (!counts(row, quotes)) continue;
+    if (!visible(row) || !counts(row, quotes)) continue;
     const chase = financeChase({ status: row.status, statusAt: row.statusAt, financeHouse: row.vendor.name, reference: row.reference }, now)?.detail ?? null;
     const rank = chase ? 2 : financeIsClosed(row.status) ? 0 : 1;
     if ((best.get(row.leadId)?.rank ?? -1) >= rank) continue; // newest first, so a tie keeps the latest moved
@@ -192,9 +203,10 @@ export type LeadQuoteFinance = {
 
 /**
  * Each quote on a deal with its finance, for the lead's Finance tab: every quote still in play, and any other that
- * has finance on file (shown, so nothing recorded disappears). Oldest quote first.
+ * has finance on file (shown, so nothing recorded disappears). Oldest quote first. Only the quotes this person may see
+ * (`quoteIds`: getAccessibleQuoteIds, null = all) — a lead-only viewer sees none of a quote's finance.
  */
-export async function loadLeadFinances(tenantId: string, leadId: string): Promise<LeadQuoteFinance[]> {
+export async function loadLeadFinances(tenantId: string, leadId: string, quoteIds: string[] | null): Promise<LeadQuoteFinance[]> {
   const [quotes, finances] = await Promise.all([
     prisma.quote.findMany({ where: { tenantId, leadId, deletedAt: null }, select: QUOTE_STATE, orderBy: { number: "asc" } }),
     prisma.dealFinance.findMany({
@@ -203,7 +215,9 @@ export async function loadLeadFinances(tenantId: string, leadId: string): Promis
     }),
   ]);
   const byQuote = new Map(finances.map(({ quoteId, ...finance }) => [quoteId, finance]));
+  const visible = financeVisibleTo(quoteIds);
   return quotes
+    .filter((quote) => visible({ quoteId: quote.id }))
     .map((quote) => ({ quote: { id: quote.id, number: quote.number, inPlay: quoteInPlay(quote) }, finance: byQuote.get(quote.id) ?? null }))
     .filter(({ quote, finance }) => quote.inPlay || finance);
 }

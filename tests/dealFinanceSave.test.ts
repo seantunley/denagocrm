@@ -35,11 +35,15 @@ const db: Record<string, unknown> = {
     return [{ "?column?": 1 }];
   },
   lead: { findFirst: async () => ({ id: LEAD, contactId: null }) },
-  quote: { findFirst: async ({ where }: { where: { id: string } }) => QUOTES.find((q) => q.id === where.id) ?? null },
+  quote: {
+    findFirst: async ({ where }: { where: { id: string } }) => QUOTES.find((q) => q.id === where.id) ?? null,
+    findMany: async ({ where }: { where: { leadId: string } }) => QUOTES.filter((q) => q.leadId === where.leadId),
+  },
   // WesBank is on this deal's suppliers; any other id is not.
   dealVendor: { findFirst: async ({ where }: { where: { vendorId: string } }) => (where.vendorId === HOUSE ? { vendor: { id: HOUSE, name: "WesBank" } } : null) },
   dealFinance: {
     findFirst: async ({ where }: { where: Record<string, unknown> }) => rows.find((r) => matches(r, where)) ?? null,
+    findMany: async ({ where }: { where: Record<string, unknown> }) => rows.filter((r) => matches(r, where)),
     create: async ({ data }: { data: Omit<Row, "id" | "statusAt" | "updatedAt" | "vendor"> }) => {
       const at = tick();
       const row = { ...data, id: `fin_${rows.length + 1}`, statusAt: at, updatedAt: at, vendor: { name: "WesBank" } } as Row;
@@ -60,7 +64,10 @@ const realLoad = loader._load;
 loader._load = function (this: unknown, request: string, parent, isMain) {
   if (request === "server-only") return {};
   if (request === "next/cache") return { revalidatePath: () => {} };
-  if (request === "@/lib/db") return { prisma: db };
+  if (request === "@/lib/db" || (request === "./db" && parent?.filename?.endsWith("dealFinance.ts"))) return { prisma: db };
+  // dealFinance.ts's own imports — the lead page's loader is read below, not its permission lookups.
+  if (request === "./permissions" && parent?.filename?.endsWith("dealFinance.ts")) return { getAccessibleLeadIds: async () => null, getAccessibleQuoteIds: async () => null };
+  if (request === "./modules/enabled" && parent?.filename?.endsWith("dealFinance.ts")) return { isModuleEnabled: async () => true };
   if (request === "@/lib/actingTenant") return { actingTenantId: async () => T };
   if (request === "@/lib/audit") return { logAudit: async () => {} };
   if (request === "@/lib/permissions") return { requireLeadAccess: async () => ({ id: "user_1" }), requireQuoteAccess: async () => ({ id: "user_1" }) };
@@ -68,6 +75,7 @@ loader._load = function (this: unknown, request: string, parent, isMain) {
   return realLoad.call(this, request, parent, isMain);
 } as Loader;
 const { saveDealFinance } = createRequire(import.meta.url)("../src/app/actions/dealFinance.ts") as typeof import("../src/app/actions/dealFinance");
+const { loadLeadFinances } = createRequire(import.meta.url)("../src/lib/dealFinance.ts") as typeof import("../src/lib/dealFinance");
 
 const form = (fields: Record<string, string>) => {
   const data = new FormData();
@@ -103,6 +111,15 @@ test("FINANCE IS PER QUOTE (Sean: changing Q-1045's changed Q-1044's): each of t
   const q44 = rows.find((r) => r.quoteId === Q44)!;
   assert.equal(q44.status, "submitted", "Q-1044's finance is untouched");
   assert.equal(q44.reference, "APP-44");
+});
+
+test("a quote's finance only for whoever may see that quote: a lead-only viewer sees none of it (review of #1150)", async () => {
+  await saveDealFinance(Q44, form({ reference: "APP-44", note: "spoke to WesBank", version: "" }));
+  await saveDealFinance(Q45, form({ reference: "APP-45", version: "" }));
+  const numbers = async (quoteIds: string[] | null) => (await loadLeadFinances(T, LEAD, quoteIds)).map((q) => q.quote.number);
+  assert.deepEqual(await numbers(null), [1044, 1045], "every quote: both, the cancelled one with no finance left out");
+  assert.deepEqual(await loadLeadFinances(T, LEAD, []), [], "lead access only: no quote, no status, reference or note");
+  assert.deepEqual(await numbers([Q45]), [1045], "only the quote they may see");
 });
 
 test("no new finance on a cancelled quote — finance goes on the quote that's going ahead", async () => {

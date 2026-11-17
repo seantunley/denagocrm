@@ -157,7 +157,18 @@ test("the lead board shows a financed deal's finance status (Sean 2026-11-16); a
   assert.match(board, /if \(leadIds\.length === 0 \|\| !\(await isModuleEnabled\("finance"\)\)\) return new Map\(\);/, "Finance module off: no pills");
   assert.match(board, /where: \{ leadId: \{ in: leadIds \} \}/, "only the board's own, already permission-scoped leads");
   const page = read("src/app/(app)/leads/page.tsx");
-  assert.match(page, /const financeByLead = await financeOnBoard\(leadIds, now\);/);
+  assert.match(page, /const financeByLead = await financeOnBoard\(leadIds, now, await getAccessibleQuoteIds\(currentUser\)\);/, "only quotes this person may see");
+  // The lead page: its header pills and Finance tab both come from the one list, filtered to the quotes this person may
+  // see like its Quotes tab (review of #1150) — a lead-only viewer sees no quote's finance in either place.
+  const leadPage = read("src/app/(app)/leads/[id]/page.tsx");
+  assert.match(leadPage, /loadLeadFinances\(lead\.tenantId, lead\.id, printableQuoteIds\)/);
+  assert.ok(leadPage.indexOf("const printableQuoteIds = await getAccessibleQuoteIds(user);") < leadPage.indexOf("loadLeadFinances("));
+  assert.equal(leadPage.match(/quoteFinances\.map\(/g)?.length, 2, "header pills + Finance tab, nothing else");
+  assert.doesNotMatch(leadPage, /loadDealFinance\(|prisma\.dealFinance/, "no other way to the finance rows");
+  const dax = read("src/lib/assistantFinance.ts");
+  assert.match(dax, /loadLeadFinances\(tenantId, p\.leadId, await getAccessibleQuoteIds\(user\)\)/);
+  assert.match(dax, /if \(!\(await canAccessQuote\(user, card\.quoteId\)\)\) return \{ stale:/);
+  assert.match(read("src/lib/dealFinance.ts"), /const rows = found\.filter\(financeVisibleTo\(quoteIds\)\);/, "the Finance page, brief and DAX lookup");
   assert.match(page, /finance: financeByLead\.get\(lead\.id\) \?\? null,/);
   assert.match(read("src/components/KanbanBoard.tsx"), /<KanbanFinancePill finance=\{lead\.finance\} \/>/);
   // Collapsed, the card's top row carries it (the open card shows it in full below): Sean, "no finance pills".

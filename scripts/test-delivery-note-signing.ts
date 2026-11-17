@@ -482,7 +482,7 @@ async function main() {
   await basePrisma.dealFinance.create({ data: { tenantId, leadId: noQuote.id, quoteId: null, vendorId: house.id, status: "submitted", statusAt: longAgo, createdById: rep.id } });
   const now = new Date();
   check("finance on no quote: not chased", (await inScope(() => financeAttentionSignals([noQuote.id], now))).length === 0);
-  check("finance on no quote: no pill on the board", (await inScope(() => financeOnBoard([noQuote.id], now))).size === 0);
+  check("finance on no quote: no pill on the board", (await inScope(() => financeOnBoard([noQuote.id], now, null))).size === 0);
   check("finance on no quote: kept, shown on the lead", (await inScope(() => loadUnattachedFinances(tenantId, noQuote.id))).length === 1);
   const laterQuote = await quoteReadyToDeliver();
   await basePrisma.quote.update({ where: { id: laterQuote.id }, data: { leadId: noQuote.id } });

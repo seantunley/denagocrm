@@ -1,5 +1,5 @@
 import "server-only";
-import { canAccessLead, hasPermission, type PermissionUser } from "./permissions";
+import { canAccessLead, canAccessQuote, getAccessibleQuoteIds, hasPermission, type PermissionUser } from "./permissions";
 import { isModuleEnabled } from "./modules/enabled";
 import { ownedWriteTenantId } from "./tenantWrite";
 import { dealFinanceHouses, loadDealFinance, loadFinanceDeals, loadLeadFinances, type LeadQuoteFinance } from "./dealFinance";
@@ -74,7 +74,8 @@ export async function financeCard(user: PermissionUser, p: FinanceProposal, lead
   if (!isFinanceStatus(p.status)) return { problem: "Where does the finance stand — submitted, approved, declined, paid out?" };
   const tenantId = ownedWriteTenantId();
   const [quotes, houses] = await Promise.all([
-    loadLeadFinances(tenantId, p.leadId),
+    // Only the quotes this person may see (review of #1150) — never a card about a quote they can't open.
+    loadLeadFinances(tenantId, p.leadId, await getAccessibleQuoteIds(user)),
     // Only the finance houses ON THIS DEAL: a deal is financed because one was added to its suppliers. A cash deal isn't.
     dealFinanceHouses(tenantId, p.leadId),
   ]);
@@ -117,6 +118,7 @@ export async function financeCard(user: PermissionUser, p: FinanceProposal, lead
  */
 export async function confirmFinanceCard(user: PermissionUser, card: FinanceCard): Promise<{ done: true } | { stale: string } | { form: FormData }> {
   if (!(await canAccessLead(user, card.leadId))) return { stale: "You can't open that deal any more." };
+  if (!(await canAccessQuote(user, card.quoteId))) return { stale: "You can't open that quote any more." };
   if (!(await hasPermission(user, "leads.edit"))) return { stale: "Your role can't change a deal's finance." };
   const now = await loadDealFinance(ownedWriteTenantId(), card.quoteId);
   // Done only when EVERYTHING the card sets already stands — a reference- or note-only card is not done by its status.
