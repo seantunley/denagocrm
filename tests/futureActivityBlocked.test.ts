@@ -76,7 +76,8 @@ test("EVERY COMPLETION PATH IS GUARDED, BECAUSE THE GUARD IS AT finishActivity",
   assert.match(body, /isFutureDay\(/, "finishActivity must refuse a future day");
   // Before the write, or it refuses an activity it has already completed.
   assert.ok(
-    body.indexOf("isFutureDay(") < body.indexOf("prisma.activity.update"),
+    // (The write is completePlannedActivity since #1152: the done and its note in one transaction.)
+    body.indexOf("isFutureDay(") > -1 && body.indexOf("isFutureDay(") < body.indexOf("completePlannedActivity("),
     "the guard must run BEFORE the status is written",
   );
   // Both public entry points must still funnel through it.
