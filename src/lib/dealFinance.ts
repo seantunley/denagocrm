@@ -116,14 +116,16 @@ export async function loadFinanceDeals(user: PermissionUser, now: Date, { active
  * on a quote still in play. Keyed by the record and the status's date, so moving it along ends the warning and a
  * later wait is a new one, not a snoozed one.
  */
-export async function financeAttentionSignals(leadIds: string[], now: Date): Promise<{ leadId: string; signal: AttentionSignal }[]> {
+export async function financeAttentionSignals(leadIds: string[], now: Date, quoteIds: string[] | null): Promise<{ leadId: string; signal: AttentionSignal }[]> {
   if (!(await isModuleEnabled("finance"))) return [];
   const waiting = await prisma.dealFinance.findMany({
     where: { leadId: { in: leadIds }, status: { in: ["docs_outstanding", "submitted"] } },
     select: { id: true, leadId: true, quoteId: true, status: true, statusAt: true, reference: true, vendor: { select: { name: true } } },
   });
   const quotes = await quotesOf(waiting);
-  return waiting.filter((row) => counts(row, quotes)).flatMap((row) => {
+  // Only on a quote this viewer may see (financeVisibleTo, review of #1150): the warning names it, its house and reference.
+  const visible = financeVisibleTo(quoteIds);
+  return waiting.filter((row) => visible(row) && counts(row, quotes)).flatMap((row) => {
     const chase = financeChase({ status: row.status, statusAt: row.statusAt, financeHouse: row.vendor.name, reference: row.reference }, now);
     const number = row.quoteId ? quotes.get(row.quoteId)?.number : undefined;
     return chase

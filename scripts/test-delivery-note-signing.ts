@@ -481,7 +481,7 @@ async function main() {
   const longAgo = new Date(Date.now() - 20 * 24 * 3600 * 1000);
   await basePrisma.dealFinance.create({ data: { tenantId, leadId: noQuote.id, quoteId: null, vendorId: house.id, status: "submitted", statusAt: longAgo, createdById: rep.id } });
   const now = new Date();
-  check("finance on no quote: not chased", (await inScope(() => financeAttentionSignals([noQuote.id], now))).length === 0);
+  check("finance on no quote: not chased", (await inScope(() => financeAttentionSignals([noQuote.id], now, null))).length === 0);
   check("finance on no quote: no pill on the board", (await inScope(() => financeOnBoard([noQuote.id], now, null))).size === 0);
   check("finance on no quote: kept, shown on the lead", (await inScope(() => loadUnattachedFinances(tenantId, noQuote.id))).length === 1);
   const laterQuote = await quoteReadyToDeliver();
@@ -489,6 +489,19 @@ async function main() {
   await signedFor(laterQuote.id);
   await deliver(laterQuote.id);
   check("finance on no quote: the deal's later quote is delivered", Boolean((await record(laterQuote.id)).deliveredAt));
+
+  // The Attention Centre's chase names the quote, the finance house and the reference: only for whoever may see that
+  // quote (review of #1150). A lead-only viewer gets no warning at all — nor its weight in the score.
+  const stalled = await basePrisma.lead.create({ data: { tenantId, stageId: stage.id, name: customer, title: "Stalled finance", contactId: contact.id, createdById: rep.id, status: "open" } });
+  const stalledQuote = await quoteReadyToDeliver();
+  await basePrisma.quote.update({ where: { id: stalledQuote.id }, data: { leadId: stalled.id } });
+  await basePrisma.dealFinance.create({ data: { tenantId, leadId: stalled.id, quoteId: stalledQuote.id, vendorId: house.id, status: "submitted", reference: `APP-${SFX}`, statusAt: longAgo, createdById: rep.id } });
+  const chaseFor = (quoteIds: string[] | null) => inScope(() => financeAttentionSignals([stalled.id], now, quoteIds));
+  const seen = await chaseFor([stalledQuote.id]);
+  check("stalled finance: chased for whoever may see the quote", seen.length === 1 && seen[0].signal.kind === "finance_waiting", JSON.stringify(seen.map((s) => s.signal.kind)));
+  check("stalled finance: chased for whoever sees every quote", (await chaseFor(null)).length === 1);
+  check("stalled finance: no warning for a lead-only viewer", (await chaseFor([])).length === 0);
+  check("stalled finance: none for someone who sees only the deal's other quotes", (await chaseFor([laterQuote.id])).length === 0);
 
   __setTenantEnforcingForTests(null);
   console.log(`\n${passed} passed, ${failed} failed`);

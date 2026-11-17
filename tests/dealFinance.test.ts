@@ -169,6 +169,11 @@ test("the lead board shows a financed deal's finance status (Sean 2026-11-16); a
   assert.match(dax, /loadLeadFinances\(tenantId, p\.leadId, await getAccessibleQuoteIds\(user\)\)/);
   assert.match(dax, /if \(!\(await canAccessQuote\(user, card\.quoteId\)\)\) return \{ stale:/);
   assert.match(read("src/lib/dealFinance.ts"), /const rows = found\.filter\(financeVisibleTo\(quoteIds\)\);/, "the Finance page, brief and DAX lookup");
+  // The Attention Centre's finance warning (review of #1150): both callers hand in the viewer's quotes.
+  assert.match(read("src/lib/attention/signals.ts"), /financeAttentionSignals\(batch, now, quoteIds\)/);
+  assert.match(read("src/lib/attention/load.ts"), /quoteIds: await getAccessibleQuoteIds\(user\),/);
+  assert.match(read("src/lib/assistantStuckLookup.ts"), /contactByLead: new Map\(\[\[lead\.id, contactId\]\]\),\s*quoteIds,/);
+  assert.match(read("src/lib/dealFinance.ts"), /waiting\.filter\(\(row\) => visible\(row\) && counts\(row, quotes\)\)/);
   assert.match(page, /finance: financeByLead\.get\(lead\.id\) \?\? null,/);
   assert.match(read("src/components/KanbanBoard.tsx"), /<KanbanFinancePill finance=\{lead\.finance\} \/>/);
   // Collapsed, the card's top row carries it (the open card shows it in full below): Sean, "no finance pills".
@@ -242,7 +247,7 @@ test("the table as first made (one per lead then — per quote since 20261116190
 
 test("the chaser reaches people: the Attention Centre (open deals), the morning brief and the Finance page (signed ones too)", () => {
   assert.match(read("src/app/actions/attention.ts"), /"finance_waiting", "followup_unanswered",\n\]\);/, "it can be snoozed or dismissed");
-  assert.match(read("src/lib/attention/signals.ts"), /for \(const batch of batches\) \{\s*for \(const \{ leadId, signal \} of await financeAttentionSignals\(batch, now\)\)/, "batched");
+  assert.match(read("src/lib/attention/signals.ts"), /for \(const batch of batches\) \{\s*for \(const \{ leadId, signal \} of await financeAttentionSignals\(batch, now, quoteIds\)\)/, "batched");
   assert.match(read("src/lib/dealFinance.ts"), /prisma\.dealFinance\.findMany\(\{\s*where: \{ leadId: \{ in: leadIds \}/, "through the guarded client, only the leads handed in");
   // A quote signed subject to finance WINS its lead, and the attention list reads open deals only: the brief reads
   // loadFinanceDeals, which keeps won deals.
