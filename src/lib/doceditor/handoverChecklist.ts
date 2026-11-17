@@ -89,12 +89,18 @@ function readHandover(ctx: { vars?: Record<string, unknown>; bound?: boolean } |
   return h && Array.isArray(h.runs) ? h : SAMPLE;
 }
 
+/**
+ * The tick as a drawn shape, not a character: the PDF renderer's fonts have no "✓", and DN-1037 printed every
+ * done step as an empty-glyph box (Sean, 2026-11-16).
+ */
+const TICK = `<svg viewBox="0 0 12 12" width="9" height="9" aria-label="done"><path d="M2 6.5 4.8 9.2 10 3" fill="none" stroke="#0f172a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+
 function entryHtml(e: HandoverEntry): string {
-  const mark = e.mark === "done" ? "✓" : e.mark === "skipped" ? "—" : "";
+  const mark = e.mark === "done" ? TICK : e.mark === "skipped" ? "—" : "";
   const photos = (e.photos ?? []).map(safeImage).filter((s): s is string => !!s);
   return `<div style="display:flex;align-items:flex-start;gap:8px;font-size:9pt;color:#334155;break-inside:avoid">
     <span style="flex:none;display:inline-flex;align-items:center;justify-content:center;width:13px;height:13px;margin-top:2px;border:1px solid #94a3b8;border-radius:3px;font-size:7.5pt;line-height:1">${mark}</span>
-    <span style="min-width:0"><span>${esc(e.label)}</span>${e.detail ? `<span style="display:block;font-size:7.5pt;color:#64748b">${esc(e.detail)}</span>` : ""}${photos.length ? `<span style="display:flex;flex-wrap:wrap;gap:4px;margin-top:3px">${photos.map((p) => `<img src="${esc(p)}" alt="" style="height:56px;width:auto;border-radius:3px;border:1px solid #e2e8f0"/>`).join("")}</span>` : ""}</span>
+    <span style="min-width:0"><span>${esc(e.label)}</span>${e.detail ? `<span style="display:block;font-size:7.5pt;color:#64748b">${esc(e.detail)}</span>` : ""}${photos.length ? `<span style="display:flex;flex-wrap:wrap;gap:4px;margin-top:3px">${photos.map((p) => `<img src="${esc(p)}" alt="" style="height:44px;width:auto;border-radius:3px;border:1px solid #e2e8f0"/>`).join("")}</span>` : ""}</span>
   </div>`;
 }
 
@@ -102,7 +108,9 @@ function runHtml(run: HandoverRun): string {
   const head = run.name
     ? `<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:6px"><div style="font-size:9pt;font-weight:600;color:#1e293b">${esc(run.name)}</div>${run.completed ? `<div style="font-size:7.5pt;color:#64748b">Completed ${esc(run.completed)}</div>` : ""}</div>`
     : "";
-  return `<div>${head}<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 24px">${run.entries.map(entryHtml).join("")}</div></div>`;
+  // Three across, photos 44px tall (were two across at 56px): DN-1037's 13 steps took 7 rows and pushed the
+  // sign-off off page 1 (Sean, 2026-11-16: "why all the white space").
+  return `<div>${head}<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px 18px">${run.entries.map(entryHtml).join("")}</div></div>`;
 }
 
 /** Print HTML for the block. `ctx` is the serializer's RenderCtx. */
