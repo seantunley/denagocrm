@@ -56,7 +56,7 @@ import { payableTotalCents } from "@/lib/pricing";
 import { getAccessibleContactIds, getAccessibleQuoteIds } from "@/lib/permissions";
 import { quotePrintLinks } from "@/lib/quotePrintLinks";
 import { isModuleEnabled } from "@/lib/modules/enabled";
-import { dealFinanceHouses, loadDealFinance } from "@/lib/dealFinance";
+import { dealFinanceHouses, loadLeadFinances, loadUnattachedFinances } from "@/lib/dealFinance";
 import { financeStatusShort, financeTone } from "@/lib/dealFinanceRules";
 import DealFinancePanel from "@/components/deals/DealFinancePanel";
 import { UPCOMING_TEST_DRIVE_STATUSES } from "@/lib/testDriveBooking";
@@ -137,12 +137,19 @@ export default async function LeadDetailPage({
   ]);
   const alreadyViewed = !!lead.viewedAt;
   // Finance through an outside finance house (Finance module): only on a deal with a finance house among its suppliers.
-  const [finance, financeHouses] = lead.tenantId && (await isModuleEnabled("finance"))
+  // Per QUOTE: each of the deal's quotes has its own (only one is accepted) — shown only for the quotes this person may
+  // see, like the Quotes tab (review of #1150).
+  // Invoice / agreement links only for quotes the print routes would open:
+  // requireQuoteReadAccess is quote view permission + getAccessibleQuoteIds.
+  const printableQuoteIds = await getAccessibleQuoteIds(user);
+  const [quoteFinances, financeHouses, unattachedFinances] = lead.tenantId && (await isModuleEnabled("finance"))
     ? await Promise.all([
-        loadDealFinance(lead.tenantId, lead.id),
+        loadLeadFinances(lead.tenantId, lead.id, printableQuoteIds),
         dealFinanceHouses(lead.tenantId, lead.id),
+        loadUnattachedFinances(lead.tenantId, lead.id),
       ])
-    : [null, []];
+    : [[], [], []];
+  const financed = quoteFinances.some((q) => q.finance) || unattachedFinances.length > 0;
   // This lead's next test drive whose indemnity is still outstanding — it is
   // signed on a screen from the booking, so the lead points there.
   const testDriveToSign = automotiveOn && canBookTestDrive
@@ -210,9 +217,6 @@ export default async function LeadDetailPage({
   // Marketing attribution the website captured with the enquiry (ad click / UTMs).
   const attribution = leadAttribution(lead.raw);
   const fromAd = isAdClick(attribution);
-  // Invoice / agreement links only for quotes the print routes would open:
-  // requireQuoteReadAccess is quote view permission + getAccessibleQuoteIds.
-  const printableQuoteIds = await getAccessibleQuoteIds(user);
   const canPrintQuote = (quoteId: string) => printableQuoteIds === null || printableQuoteIds.includes(quoteId);
 
   const visibleQuotes = lead.quotes.filter((quote) => canPrintQuote(quote.id));
@@ -271,7 +275,9 @@ export default async function LeadDetailPage({
         title={lead.title}
         status={<>
           <StatusPill tone={lead.status === "won" ? "success" : lead.status === "lost" ? "danger" : "info"}>{lead.status === "open" ? lead.stage.name : lead.status}</StatusPill>
-          {finance && <TabLink tab="finance"><StatusPill tone={financeTone(finance.status)}>Finance: {financeStatusShort(finance.status)}</StatusPill></TabLink>}
+          {quoteFinances.map(({ quote, finance }) => finance && quote.inPlay && (
+            <TabLink key={quote.id} tab="finance"><StatusPill tone={financeTone(finance.status)}>Finance Q-{quote.number}: {financeStatusShort(finance.status)}</StatusPill></TabLink>
+          ))}
           {leadScore && leadScore.score > 0 && (
             <Link href="/today?view=all" className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground" title={leadScore.reasons.join(" · ")}>
               <LeadScoreBadge score={leadScore.score} />
@@ -654,11 +660,29 @@ export default async function LeadDetailPage({
                   </div>
                 ),
               },
-              // Only where finance is relevant: a finance house is set up, or this deal is already financed.
-              ...(finance || financeHouses.length > 0 ? [{
+              // Only where finance is relevant: a finance house is on the deal, or a quote on it is already financed.
+              // One panel per quote — each quote has its own finance.
+              ...(financed || financeHouses.length > 0 ? [{
                 key: "finance",
                 label: "Finance",
-                content: <DealFinancePanel leadId={lead.id} finance={finance} financeHouses={financeHouses} canEdit={canEditLead} now={new Date()} />,
+                content: (
+                  <div className="space-y-4">
+                    {quoteFinances.map(({ quote, finance }) => (
+                      <DealFinancePanel key={quote.id} quote={quote} finance={finance} financeHouses={financeHouses} canEdit={canEditLead} now={new Date()} />
+                    ))}
+                    {quoteFinances.length === 0 && (
+                      <p className="text-sm text-muted-foreground">Finance is kept per quote — make the quote first, then start its finance here.</p>
+                    )}
+                    {/* From before finance was per quote, on a deal with no quote then (review of #1150): kept, counts for nothing. */}
+                    {unattachedFinances.map((f) => (
+                      <div key={f.id} className="rounded-lg border border-dashed p-3 text-sm">
+                        <p className="font-medium">Earlier finance · {f.vendor.name}: {financeStatusShort(f.status)}{f.reference ? ` · ref ${f.reference}` : ""}</p>
+                        {f.note && <p className="mt-1 text-muted-foreground">{f.note}</p>}
+                        <p className="mt-1 text-xs text-muted-foreground">Recorded before finance was kept per quote, so it isn&apos;t on a quote. Kept for the record — it isn&apos;t chased and holds nothing back. Start the finance on the quote that&apos;s going ahead.</p>
+                      </div>
+                    ))}
+                  </div>
+                ),
               }] : []),
               {
                 key: "research",

@@ -1,12 +1,16 @@
-/// A deal financed through an outside finance house (Sean, 2026-11-16). One per lead. Staff move the status along as
+/// A quote financed through an outside finance house (Sean, 2026-11-16). One per QUOTE — a deal (lead) can carry
+/// several quotes and only the accepted one goes ahead, so each has its own. Staff move the status along as
 /// the finance house reports back; `statusAt` is when it last moved — what the Attention Centre's chaser reads. The
 /// finance house is a supplier (Settings → Suppliers, type Finance), so the deal file asks for its papers.
 /// NO applicant documents are kept: ID copies, payslips and bank statements stay with the finance house (Sean: "not
-/// storing that information"). The lead key is a composite tenant FK in the migration SQL.
+/// storing that information"). The lead and quote keys are composite tenant FKs in the migration SQL.
 model DealFinance {
   id          String   @id @default(cuid())
   tenantId    String
+  /// The deal the quote is on — what the Attention Centre, the board and the finance house's emails go by.
   leadId      String
+  /// The quote this finance is for. Null only for a record from before finance was per quote with no quote to give it.
+  quoteId     String?
   vendorId    String
   vendor      Vendor   @relation(fields: [tenantId, vendorId], references: [tenantId, id], onDelete: Restrict)
   /// The finance house's application number.
@@ -21,7 +25,8 @@ model DealFinance {
   updatedAt   DateTime @updatedAt
 
   @@unique([tenantId, id])
-  @@unique([tenantId, leadId])
+  @@unique([tenantId, quoteId])
+  @@index([tenantId, leadId])
   @@index([tenantId, vendorId])
   @@index([tenantId, status, statusAt])
 }

@@ -14,7 +14,7 @@ moduleLoader._load = function (this: unknown, request: string, parent, isMain) {
   if (request === "server-only") return {};
   if ((parent?.filename ?? "").replace(/\\/g, "/").endsWith("src/lib/assistantFinance.ts")) {
     if (request === "./dealFinance") return { loadDealFinance: async () => financeNow, loadFinanceDeals: async () => [], dealFinanceHouses: async () => [] };
-    if (request === "./permissions") return { canAccessLead: async () => true, hasPermission: async () => true };
+    if (request === "./permissions") return { canAccessLead: async () => true, canAccessQuote: async () => true, getAccessibleQuoteIds: async () => null, hasPermission: async () => true };
     if (request === "./tenantWrite") return { ownedWriteTenantId: () => "tenant_a" };
     if (request === "./db") return { prisma: {} };
   }
@@ -58,7 +58,12 @@ test("the card: proposed with a real status, shown before Confirm, and refused a
   assert.match(card, /wasVersion: current\?\.updatedAt\.toISOString\(\) \?\? null/);
   assert.match(card, /Nobody is contacted\./);
   const confirm = read("src/app/actions/assistant.ts");
-  assert.match(confirm, /case "finance": \{[\s\S]*?await saveDealFinance\(card\.leadId, step\.form\)/, "the deal's own Save");
+  assert.match(confirm, /case "finance": \{[\s\S]*?await saveDealFinance\(card\.quoteId, step\.form\)/, "the quote's own Save (finance is per quote)");
+  // Which quote: named, else the one already financed, else the only one in play — never a guess between two.
+  assert.equal(proposedAction.safeParse({ type: "finance", leadId: LEAD, quote: "Q-1045", status: "approved" }).success, true);
+  assert.match(card, /return \{ problem: `Which quote's finance — /);
+  assert.match(card, /quoteId: quote\.id, quoteNumber: quote\.number,/);
+  assert.match(FINANCE_RULE, /"quote":"<Q-number, when the deal has more than one quote — finance is per quote>"/);
   assert.ok(WHATSAPP_CONFIRMABLE.has("finance"), "confirmable on WhatsApp too");
   assert.equal(familyOf("finance").key, "stage");
 });
@@ -68,7 +73,8 @@ test("Confirm (review of #1139): a reference- or note-only card is carried out, 
   const user = { id: "user_1" } as Parameters<typeof confirmFinanceCard>[0];
   financeNow = { status: "submitted", vendorId: "wesbank", reference: "APP-123", note: null, updatedAt: v1, statusAt: v1, vendor: { name: "WesBank" } };
   const card: FinanceCard = {
-    id: "a0-lead", kind: "finance", leadId: "lead_1", leadLabel: "Jody", title: "Jody's finance: Submitted",
+    id: "a0-lead", kind: "finance", leadId: "lead_1", leadLabel: "Jody", title: "Jody's finance on Q-1045: Submitted",
+    quoteId: "quote_1045", quoteNumber: 1045,
     vendorId: "wesbank", status: "submitted", reference: "APP-999", note: null, wasVersion: v1.toISOString(), detail: "",
   };
   // Same status and house, a new reference: NOT done — it goes to the deal's own Save, with the version the card showed.

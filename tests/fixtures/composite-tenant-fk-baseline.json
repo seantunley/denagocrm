@@ -706,6 +706,21 @@
       ]
     }
   },
+  "DealFinance.DealFinance_tenantId_quoteId_fkey": {
+    "table": "DealFinance",
+    "constraint": "DealFinance_tenantId_quoteId_fkey",
+    "columns": [
+      "tenantId",
+      "quoteId"
+    ],
+    "references": {
+      "table": "Quote",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
   "DealFinance.DealFinance_tenantId_vendorId_fkey": {
     "table": "DealFinance",
     "constraint": "DealFinance_tenantId_vendorId_fkey",

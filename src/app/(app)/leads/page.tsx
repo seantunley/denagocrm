@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import {
   getAccessibleContactIds,
   getAccessibleLeadIds,
+  getAccessibleQuoteIds,
   hasPermission,
   requireAnyPermission,
 } from "@/lib/permissions";
@@ -170,8 +171,8 @@ export default async function LeadsPage({
   const nextActivityByLead = new Map(nextActivityRows.map((activity) => [activity.leadId, activity]));
   const nextTestDriveByLead = new Map(nextTestDriveRows.map((activity) => [activity.leadId, activity]));
   const forecast = await getDailyForecast();
-  // Finance status on a financed deal's card (Finance module; a cash deal has none).
-  const financeByLead = await financeOnBoard(leadIds, now);
+  // Finance status on a financed deal's card (Finance module; a cash deal has none) — only on quotes this person may see.
+  const financeByLead = await financeOnBoard(leadIds, now, await getAccessibleQuoteIds(currentUser));
 
   // PINNED notes for the card indicator. Keyed off real TimelinePin rows, not off
   // whether a note exists — nearly every lead carries some note text, so note

@@ -99,9 +99,14 @@ export async function collectAttentionSignals(input: {
   stageEnteredByLead: Map<string, Date>;
   /** Each lead's customer: their messages on no deal are on the deal's timeline too (dealTimelineWhere). */
   contactByLead?: Map<string, string | null>;
+  /**
+   * The quotes this viewer may see (getAccessibleQuoteIds; null = every quote). A quote's finance warning is only for
+   * them (review of #1150) — it names the quote, the finance house and the reference. Required, so no caller forgets.
+   */
+  quoteIds: string[] | null;
 }): Promise<Map<string, AttentionSignal[]>> {
   const signals = new Map<string, AttentionSignal[]>();
-  const { leadIds, now, stages, stageByLead, stageEnteredByLead, contactByLead = new Map() } = input;
+  const { leadIds, now, stages, stageByLead, stageEnteredByLead, contactByLead = new Map(), quoteIds } = input;
   if (leadIds.length === 0) return signals;
 
   const batches = chunk(leadIds, ID_CHUNK);
@@ -314,7 +319,7 @@ export async function collectAttentionSignals(input: {
 
   // ── finance_waiting ── finance stalled on the customer or the finance house (dealFinance.ts).
   for (const batch of batches) {
-    for (const { leadId, signal } of await financeAttentionSignals(batch, now)) add(signals, leadId, signal);
+    for (const { leadId, signal } of await financeAttentionSignals(batch, now, quoteIds)) add(signals, leadId, signal);
   }
 
   return signals;

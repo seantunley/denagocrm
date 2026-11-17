@@ -9,7 +9,8 @@ export const dealFinanceArticles: HelpArticle[] = [
     audience: "everyone",
     keywords: ["finance", "finance house", "bank", "application", "approval", "approved", "declined", "payout", "paid out", "wesbank", "chase"],
     body: [
-      { type: "p", text: "When a customer pays through an outside finance house, the deal keeps one finance record: which finance house, their reference, where it stands, and what they said. Every change is dated and in the audit trail, so you can always see how long it has been waiting and on whom." },
+      { type: "p", text: "When a customer pays through an outside finance house, each QUOTE keeps its own finance record: which finance house, their reference, where it stands, and what they said. A deal with two quotes (two options, only one of which will be accepted) has two — changing one never changes the other. Every change is dated and in the audit trail, so you can always see how long it has been waiting and on whom." },
+      { type: "p", text: "When a quote is cancelled, declined or replaced, its finance stays on file but stops counting: it isn't chased, isn't on the lead board and holds no delivery back. The other quote's finance carries on as it was." },
       { type: "h", text: "Setting it up (once)" },
       { type: "steps", items: [
         "An owner adds the finance house in **Settings → Suppliers** with **What is it?** set to *Finance*, and its email and phone.",
@@ -19,7 +20,7 @@ export const dealFinanceArticles: HelpArticle[] = [
       { type: "p", text: "Only a deal you put on finance has any of this. A cash deal shows no Finance section, is never chased for finance and is never held back from delivery — there is nothing to withdraw." },
       { type: "steps", items: [
         "On the deal page, under **Suppliers**, add the finance house to the deal. That is what makes it a financed deal — the deal file then asks for its papers.",
-        "A **Finance** section appears on the deal page (and a **Finance** tab on the lead). Choose where it stands and their application number. Add what they said if it matters — \"approved subject to a 10% deposit\".",
+        "A **Finance** section appears on the quote's deal page (and the lead's **Finance** tab shows one per quote). Choose where it stands and their application number. Add what they said if it matters — \"approved subject to a 10% deposit\".",
         "Press **Start finance**.",
         "As things move, change **Where it stands** and press **Save**: *Customer documents outstanding* → *Submitted* → *Approved* (or *Declined*) → *Paid out*. Choose *Withdrawn* if the customer stops financing.",
       ] },
@@ -33,7 +34,7 @@ export const dealFinanceArticles: HelpArticle[] = [
       ] },
       { type: "p", text: "Moving the status along clears it. A later wait starts the 3 days again. Public holidays are counted as working days." },
       { type: "h", text: "Delivery waits for approval" },
-      { type: "p", text: "A financed deal can't have its delivery booked until the finance is **Approved** or **Paid out**. While it is outstanding, submitted or declined, **Schedule delivery** — on the Deliveries board or through DAX — says why and books nothing. If the customer pays another way after a decline, set the finance to *Withdrawn*. The deal page's **Ready to deliver?** shows a **Finance approved** line." },
+      { type: "p", text: "A financed quote can't have its delivery booked until its finance is **Approved** or **Paid out** — another quote's finance on the same deal doesn't hold it. While it is outstanding, submitted or declined, **Schedule delivery** — on the Deliveries board or through DAX — says why and books nothing. If the customer pays another way after a decline, set the finance to *Withdrawn*. The deal page's **Ready to deliver?** shows a **Finance approved** line." },
       { type: "callout", tone: "info", text: "Finance is its own module — switched off in **Settings → Modules**, everything above goes with it (the records are kept). It needs the Suppliers module on too, since the finance house is a supplier. Changing it needs permission to edit leads. The Finance page lists only the deals you may open." },
     ],
   },

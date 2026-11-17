@@ -43,6 +43,7 @@ import {
   type HandoverFacts,
 } from "../src/lib/deliveryNoteSigning";
 import { deliverQuote } from "../src/lib/quoteDelivery";
+import { financeAttentionSignals, financeOnBoard, loadUnattachedFinances } from "../src/lib/dealFinance";
 import { completeSubject, lockSubject } from "../src/lib/signing/subjectCompletion";
 import { DELIVERY_NOTE } from "../src/lib/signing/subject";
 import { renderRequestDocHtml } from "../src/lib/signing/render";
@@ -437,7 +438,7 @@ async function main() {
     const lead = await basePrisma.lead.create({ data: { tenantId, stageId: stage.id, name: customer, title: "Nomad XL", contactId: contact.id, createdById: rep.id, status: "won" } });
     const q = await quoteReadyToDeliver();
     await basePrisma.quote.update({ where: { id: q.id }, data: { leadId: lead.id } });
-    const finance = await basePrisma.dealFinance.create({ data: { tenantId, leadId: lead.id, vendorId: house.id, status, createdById: rep.id } });
+    const finance = await basePrisma.dealFinance.create({ data: { tenantId, leadId: lead.id, quoteId: q.id, vendorId: house.id, status, createdById: rep.id } });
     return { quoteId: q.id, financeId: finance.id };
   };
   for (const status of ["docs_outstanding", "submitted", "declined"]) {
@@ -463,6 +464,44 @@ async function main() {
   await basePrisma.dealFinance.update({ where: { id: revoked.financeId }, data: { status: "declined" } });
   const revokedWhy = await refusal(() => deliver(revoked.quoteId));
   check("approved, signed for, then declined: not handed over", /declined the finance/.test(revokedWhy ?? "") && (await record(revoked.quoteId)).deliveredAt === null, String(revokedWhy));
+  // Finance is PER QUOTE (Sean, 2026-11-16): the deal's OTHER quote's declined finance holds nothing back here.
+  const twoQuotes = await basePrisma.lead.create({ data: { tenantId, stageId: stage.id, name: customer, title: "Two quotes", contactId: contact.id, createdById: rep.id, status: "won" } });
+  const otherQuote = await quoteReadyToDeliver();
+  const thisQuote = await quoteReadyToDeliver();
+  await basePrisma.quote.updateMany({ where: { id: { in: [otherQuote.id, thisQuote.id] } }, data: { leadId: twoQuotes.id } });
+  await basePrisma.dealFinance.create({ data: { tenantId, leadId: twoQuotes.id, quoteId: otherQuote.id, vendorId: house.id, status: "declined", createdById: rep.id } });
+  await signedFor(thisQuote.id);
+  await deliver(thisQuote.id);
+  check("another quote's declined finance on the same deal: this one is delivered", Boolean((await record(thisQuote.id)).deliveredAt));
+
+  // A finance from before finance was per quote, on a deal that had NO quote: the per-quote migration leaves it on no
+  // quote (review of #1150). Kept — but it counts for nothing: not chased, not on the board, and the deal's later
+  // quote is delivered without it.
+  const noQuote = await basePrisma.lead.create({ data: { tenantId, stageId: stage.id, name: customer, title: "Financed before quotes", contactId: contact.id, createdById: rep.id, status: "open" } });
+  const longAgo = new Date(Date.now() - 20 * 24 * 3600 * 1000);
+  await basePrisma.dealFinance.create({ data: { tenantId, leadId: noQuote.id, quoteId: null, vendorId: house.id, status: "submitted", statusAt: longAgo, createdById: rep.id } });
+  const now = new Date();
+  check("finance on no quote: not chased", (await inScope(() => financeAttentionSignals([noQuote.id], now, null))).length === 0);
+  check("finance on no quote: no pill on the board", (await inScope(() => financeOnBoard([noQuote.id], now, null))).size === 0);
+  check("finance on no quote: kept, shown on the lead", (await inScope(() => loadUnattachedFinances(tenantId, noQuote.id))).length === 1);
+  const laterQuote = await quoteReadyToDeliver();
+  await basePrisma.quote.update({ where: { id: laterQuote.id }, data: { leadId: noQuote.id } });
+  await signedFor(laterQuote.id);
+  await deliver(laterQuote.id);
+  check("finance on no quote: the deal's later quote is delivered", Boolean((await record(laterQuote.id)).deliveredAt));
+
+  // The Attention Centre's chase names the quote, the finance house and the reference: only for whoever may see that
+  // quote (review of #1150). A lead-only viewer gets no warning at all — nor its weight in the score.
+  const stalled = await basePrisma.lead.create({ data: { tenantId, stageId: stage.id, name: customer, title: "Stalled finance", contactId: contact.id, createdById: rep.id, status: "open" } });
+  const stalledQuote = await quoteReadyToDeliver();
+  await basePrisma.quote.update({ where: { id: stalledQuote.id }, data: { leadId: stalled.id } });
+  await basePrisma.dealFinance.create({ data: { tenantId, leadId: stalled.id, quoteId: stalledQuote.id, vendorId: house.id, status: "submitted", reference: `APP-${SFX}`, statusAt: longAgo, createdById: rep.id } });
+  const chaseFor = (quoteIds: string[] | null) => inScope(() => financeAttentionSignals([stalled.id], now, quoteIds));
+  const seen = await chaseFor([stalledQuote.id]);
+  check("stalled finance: chased for whoever may see the quote", seen.length === 1 && seen[0].signal.kind === "finance_waiting", JSON.stringify(seen.map((s) => s.signal.kind)));
+  check("stalled finance: chased for whoever sees every quote", (await chaseFor(null)).length === 1);
+  check("stalled finance: no warning for a lead-only viewer", (await chaseFor([])).length === 0);
+  check("stalled finance: none for someone who sees only the deal's other quotes", (await chaseFor([laterQuote.id])).length === 0);
 
   __setTenantEnforcingForTests(null);
   console.log(`\n${passed} passed, ${failed} failed`);

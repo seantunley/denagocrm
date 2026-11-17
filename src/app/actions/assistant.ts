@@ -642,7 +642,7 @@ export async function runAssistantAction(
         const done = `${card.leadLabel}: finance ${financeStatusShort(card.status).toLowerCase()}`;
         if ("done" in step) return { ok: true, success: done, href: `/leads/${card.leadId}?tab=finance` };
         if ("stale" in step) return untouched(step.stale);
-        const result = await saveDealFinance(card.leadId, step.form);
+        const result = await saveDealFinance(card.quoteId, step.form);
         if (result?.error) return { ok: false, error: result.error };
         await confirmed("update the finance", card.leadId);
         return { ok: true, success: done, href: `/leads/${card.leadId}?tab=finance` };

@@ -139,7 +139,7 @@ export async function deliverQuote(input: {
     if (!quote.deliveryScheduledFor) refuse("Schedule the delivery on the Deliveries board before marking it delivered.");
     // FINANCE (dealFinance.ts): approval can be declined or reopened after the day was booked, so it is asked again
     // at the handover itself — here, before any paperwork is filed, and once more under the transaction below.
-    const financeHold = await financeDeliveryRefusal(tenantId, quote.leadId);
+    const financeHold = await financeDeliveryRefusal(tenantId, quote.id);
     if (financeHold) refuse(financeHold);
 
     /*
@@ -326,7 +326,7 @@ export async function deliverQuote(input: {
         });
         if (updated.count !== 1) refuse("This delivery was just completed by someone else. Refresh and check it.");
         // Finance again, its row held: a decline saved this instant either landed first (refused here) or waits for this.
-        const financeNow = await financeDeliveryRefusalInTx(tx, tenantId, quote.leadId);
+        const financeNow = await financeDeliveryRefusalInTx(tx, tenantId, quote.id);
         if (financeNow) refuse(financeNow);
         /*
          * THE NOTE IS PROVED AGAIN, UNDER THE QUOTE'S LOCK.

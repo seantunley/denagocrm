@@ -2,7 +2,7 @@ import "server-only";
 import { cache } from "react";
 
 import { prisma } from "../db";
-import { getAccessibleContactIds, getAccessibleLeadIds, hasAnyPermission, hasPermission, type PermissionUser } from "../permissions";
+import { getAccessibleContactIds, getAccessibleLeadIds, getAccessibleQuoteIds, hasAnyPermission, hasPermission, type PermissionUser } from "../permissions";
 import { collectAttentionSignals, type AttentionStage } from "./signals";
 import {
   dispositionAt,
@@ -167,6 +167,8 @@ export const loadAttentionList = cache(async (user: PermissionUser, now: Date = 
     stageEnteredByLead,
     // A deal's customer's own messages count only when this person may open that customer (review of #1014).
     contactByLead: new Map(leads.map((lead) => [lead.id, customerTheyMayOpen(lead.contactId, mayOpenCustomers)])),
+    // A quote's finance warning only for whoever may see that quote (review of #1150).
+    quoteIds: await getAccessibleQuoteIds(user),
   });
 
   const snoozed: SetAsideLead[] = [];
