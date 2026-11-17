@@ -135,7 +135,7 @@ export async function leadBrief(user: User, raw: z.infer<typeof leadBriefArgs>):
       orderBy: { dueDate: "desc" },
       take: 10,
       select: {
-        type: true, summary: true, status: true, dueDate: true, doneAt: true, note: true,
+        id: true, type: true, summary: true, status: true, dueDate: true, doneAt: true, note: true,
         assignedTo: { select: { id: true, name: true } },
         createdBy: { select: { id: true, name: true } },
       },
@@ -221,6 +221,8 @@ export async function leadBrief(user: User, raw: z.infer<typeof leadBriefArgs>):
       activities: activities.map((a) => {
         const scheduledBy = whoLogged(a.createdBy, standInId);
         return {
+          // A planned one's id: what a reschedule, cancel_activity or complete_activity names.
+          ...(a.status === "planned" ? { activityId: a.id } : {}),
           type: a.type,
           summary: a.summary,
           status: a.status,

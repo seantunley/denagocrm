@@ -51,7 +51,8 @@ test("only internal changes can be confirmed from a phone — nothing that reach
   assert.deepEqual(splitForWhatsApp_cards(cards), { confirmable: [{ kind: "note" }, { kind: "stage" }], crmOnly: [{ kind: "draft_message" }, { kind: "quote" }] });
   // Every confirmable kind is one the CRM's own Confirm knows how to run.
   const run = code("src/app/actions/assistant.ts");
-  for (const kind of WHATSAPP_CONFIRMABLE) assert.match(run, new RegExp(`case "${kind}": \\{`), kind);
+  // (A case may share its body with the next: reschedule / cancel_activity / complete_activity.)
+  for (const kind of WHATSAPP_CONFIRMABLE) assert.match(run, new RegExp(`case "${kind}":`), kind);
   // …and a customer note is audited on the CUSTOMER it changed.
   assert.match(code("src/lib/assistantWhatsAppConfirm.ts"), /\.\.\.\(card\.kind === "customer_note" \|\| card\.kind === "update_customer" \? \{ contactId: card\.contactId \} : \{\}\),/);
 });
@@ -542,7 +543,8 @@ test("A PINNED NOTE WHOSE PIN FAILS IS NOT WRITTEN TWICE: the note was saved, so
   // (2026-11-15, one more of nurture's — a card from before its steps had a key — before reopenLead, its first write.)
   // (2026-11-16, one of finance's — not theirs any more, a role that can't, or changed since (confirmFinanceCard) —
   // before saveDealFinance, its one write.)
-  assert.equal((run.match(/return untouched\(/g) ?? []).length, 79);
+  // (2026-11-17: reschedule and cancel_activity share one door with complete_activity — one check, before any write.)
+  assert.equal((run.match(/return untouched\(/g) ?? []).length, 78);
   const financeCase = run.slice(run.indexOf('case "finance": {'), run.indexOf('case "reopen": {'));
   assert.ok(financeCase.indexOf("return untouched(step.stale)") < financeCase.indexOf("await saveDealFinance("));
   const logCall = run.slice(run.indexOf('case "log_call": {'), run.indexOf('case "note": {'));

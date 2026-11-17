@@ -69,6 +69,8 @@ import { actingTenantId } from "./actingTenant";
 import { getDefaultPipeline, listPipelineStages } from "./pipelines";
 import { ACTION_INSTRUCTIONS, CHECK_BACK_RULE, CHOICE_INSTRUCTIONS, JOB_CARD_RULE, LEAD_QUOTES_MAX, MAX_ACTIONS, logCallDetail, unlinkedOpenQuotesWhere, newCustomerDetail, type NewCustomer, CUSTOMER_FIELDS, customerChangesText, type CustomerChange, type CustomerField, type FileTarget, matchQuoteRow, quoteAddText, quoteBuildText, quoteChangeText, settledAnswer, withoutSetUpClaims, type ActionCard, type ProposedAction, type QuoteBuildLine, type QuoteChange } from "./assistantActions";
 import { resolveCatalogueProduct } from "./catalogueLookup";
+import { completeActivityText } from "./assistantCompleteActivity";
+import { futureActivityRefusal, isFutureDay } from "./activityDay";
 import { TASK_INSTRUCTIONS, keepIds, taskBlock, type TaskView } from "./assistantTaskRules";
 import { listedBlock, listedRecords, type ListedSlot } from "./assistantListedRules";
 import { listedNow } from "./assistantListed";
@@ -1220,7 +1222,7 @@ export async function resolveActions(
       cards.push({ id: `a${index}-watch`, kind: "watch", title: describeWatch(parsed.data, { customer, lead: customer, quote }), watch: parsed.data, ...(p.reason ? { reason: p.reason } : {}) });
       continue;
     }
-    if (p.type === "reschedule" || p.type === "cancel_activity") {
+    if (p.type === "reschedule" || p.type === "cancel_activity" || p.type === "complete_activity") {
       // Only an activity the calendar would show this person, and still planned.
       const visible = await getAccessibleActivityIds(user);
       if (visible !== null && !visible.includes(p.activityId)) { problems.push(ITEM_GONE); continue; }
@@ -1230,7 +1232,10 @@ export async function resolveActions(
       });
       if (!activity) { problems.push(ITEM_GONE); continue; }
       const leadLabel = activity.lead ? `${activity.lead.name} — ${activity.lead.title}` : activity.type;
-      if (p.type === "cancel_activity") {
+      if (p.type === "complete_activity") {
+        if (isFutureDay(activity.dueDate)) { problems.push(futureActivityRefusal(activity.dueDate)); continue; }
+        cards.push({ id: `a${index}-${p.activityId}`, kind: "complete_activity", activityId: p.activityId, leadId: activity.leadId, leadLabel, fromDue: activity.dueDate.toISOString(), note: p.note, text: completeActivityText(p.note), title: `Mark “${activity.summary}” (${when(activity.dueDate)}) done`, ...(p.reason ? { reason: p.reason } : {}) });
+      } else if (p.type === "cancel_activity") {
         cards.push({ id: `a${index}-${p.activityId}`, kind: "cancel_activity", activityId: p.activityId, leadId: activity.leadId, leadLabel, fromDue: activity.dueDate.toISOString(), title: `Cancel “${activity.summary}” (${when(activity.dueDate)})`, ...(p.reason ? { reason: p.reason } : {}) });
       } else {
         const target = p.when.includes("T") ? p.when : `${p.when}T${saLocal(activity.dueDate).slice(11)}`;

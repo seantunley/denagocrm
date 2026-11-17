@@ -33,7 +33,8 @@ import { withCurrency } from "@/lib/currencyRules";
 /** How long a Confirm in the CRM waits for a built quote's PDF to go to WhatsApp before leaving it to the sweep. */
 const QUOTE_PDF_SEND_WAIT_MS = 4_000;
 import { prisma } from "@/lib/db";
-import { cancelActivity, logVoiceDebrief, rescheduleActivity, scheduleActivity, scheduleFollowUp } from "@/app/actions/activities";
+import { logVoiceDebrief, scheduleActivity, scheduleFollowUp } from "@/app/actions/activities";
+import { runActivityCard } from "@/lib/assistantActivityConfirm";
 import { addCommunication } from "@/app/actions/communications";
 import { assignLead, convertLeadToContact, createLead, markLost, moveLead, reactivateNurturedLead, reopenLead } from "@/app/actions/leads";
 import { saveLeadNurture } from "@/app/actions/nurture";
@@ -591,19 +592,15 @@ export async function runAssistantAction(
         await logAudit({ action: "assistant.action_confirmed", summary: "Confirmed the assistant's proposal: block time on their own calendar", user, metadata: { kind: card.kind, ...cardRecords(card) } });
         return { ok: true, success: "Time blocked on your calendar", href: "/calendar" };
       }
-      case "reschedule": {
+      case "reschedule":
+      case "cancel_activity":
+      case "complete_activity": {
         if (!(await stillAsProposed(card))) return untouched(STALE_CARD);
-        const result = await rescheduleActivity(card.activityId, card.when);
-        if (!result.ok) return { ok: false, error: result.error ?? "Couldn't move it." };
-        if (card.leadId) await confirmed("reschedule an activity", card.leadId);
-        return { ok: true, success: "Moved" };
-      }
-      case "cancel_activity": {
-        if (!(await stillAsProposed(card))) return untouched(STALE_CARD);
-        const result = await cancelActivity(card.activityId, "/assistant");
+        const result = await runActivityCard(card);
         if (result.error) return { ok: false, error: result.error };
-        if (card.leadId) await confirmed("cancel an activity", card.leadId);
-        return { ok: true, success: "Cancelled" };
+        const moved = card.kind === "reschedule", done = card.kind === "complete_activity";
+        if (card.leadId) await confirmed(moved ? "reschedule an activity" : done ? "mark an activity done" : "cancel an activity", card.leadId);
+        return { ok: true, success: result.success };
       }
       case "schedule_delivery": {
         // THE DELIVERIES BOARD'S OWN DOORS: scheduleDelivery (a first day) or rescheduleDelivery (a new one) — Automotive,
@@ -1160,7 +1157,8 @@ async function stillAsProposed(card: ActionCard): Promise<boolean> {
       return true;
     }
     case "reschedule":
-    case "cancel_activity": {
+    case "cancel_activity":
+    case "complete_activity": {
       const activity = await prisma.activity.findUnique({ where: { id: card.activityId }, select: { status: true, dueDate: true } });
       return Boolean(activity && activity.status === "planned" && activity.dueDate.toISOString() === card.fromDue);
     }
