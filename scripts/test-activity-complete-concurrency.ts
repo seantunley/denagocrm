@@ -70,7 +70,7 @@ async function done(id: string, body: string, failNote = false) {
         const communication = failNote
           ? { create: (args: { data: object }) => tx.communication.create({ data: { ...args.data, dedupeKey: TAKEN_KEY } as never }) }
           : tx.communication;
-        return completePlannedActivity({ activity: tx.activity, communication }, { id, now: new Date(), tenantId: ids.tenant, note: note(body) });
+        return completePlannedActivity({ activity: tx.activity, communication }, { id, activityTenantId: ids.tenant, now: new Date(), tenantId: ids.tenant, note: note(body) });
       }),
     };
   } catch (error) {

@@ -3,7 +3,7 @@ export type DoneNote = { type: string; direction: string; subject: string; body:
 
 /** Only what a Done touches — so the workspace-scoped client's transaction and the base one both fit. */
 type DoneTx = {
-  activity: { updateMany(args: { where: { id: string; status: string }; data: { status: string; doneAt: Date } }): PromiseLike<{ count: number }> };
+  activity: { updateMany(args: { where: { id: string; tenantId: string | null; status: string }; data: { status: string; doneAt: Date } }): PromiseLike<{ count: number }> };
   communication: { create(args: { data: DoneNote & { tenantId: string | null } }): PromiseLike<unknown> };
 };
 
@@ -17,9 +17,10 @@ type DoneTx = {
  */
 export async function completePlannedActivity(
   tx: DoneTx,
-  input: { id: string; now: Date; tenantId: string | null; note: DoneNote | null },
+  // activityTenantId: the activity's own workspace, named in the write. tenantId: the note's (customerRecordTenantId).
+  input: { id: string; activityTenantId: string | null; now: Date; tenantId: string | null; note: DoneNote | null },
 ): Promise<boolean> {
-  const moved = await tx.activity.updateMany({ where: { id: input.id, status: "planned" }, data: { status: "done", doneAt: input.now } });
+  const moved = await tx.activity.updateMany({ where: { id: input.id, tenantId: input.activityTenantId, status: "planned" }, data: { status: "done", doneAt: input.now } });
   if (moved.count !== 1) return false;
   if (input.note) await tx.communication.create({ data: { ...input.note, tenantId: input.tenantId } });
   return true;

@@ -325,7 +325,7 @@ async function finishActivity(id: string, note: string) {
       }
     : null;
   const tenantId = noteRow ? await customerRecordTenantId({ contactId: scheduled.contactId, leadId: scheduled.leadId }) : null;
-  const moved = await prisma.$transaction((tx) => completePlannedActivity(tx, { id, now: new Date(), tenantId, note: noteRow }));
+  const moved = await prisma.$transaction((tx) => completePlannedActivity(tx, { id, activityTenantId: scheduled.tenantId, now: new Date(), tenantId, note: noteRow }));
   if (!moved) refuse("That activity is already done or was cancelled — refresh the page.");
   const activity = await prisma.activity.findUnique({ where: { id }, include: { lead: true } });
   if (!activity) refuse("That activity is no longer there — refresh the page.");
