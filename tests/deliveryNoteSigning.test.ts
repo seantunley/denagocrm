@@ -25,7 +25,9 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { deliveryNoteSigning } from "../src/components/signing/deliveryNoteSigning";
-import { deliveryTemplateForScreen, standardTemplateFor } from "../src/lib/doceditor/standardTemplates";
+import { DELIVERY_SIGN_OFF_ROOM, deliveryTemplateForScreen, standardTemplateFor } from "../src/lib/doceditor/standardTemplates";
+import { PAGE_SIZES } from "../src/lib/doceditor/model";
+import { fitDeliveryNote, pdfPageCount } from "../src/lib/deliveryNoteLayout";
 import { DELIVERY_NOTE, TEST_DRIVE_INDEMNITY } from "../src/lib/signing/subject";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -49,21 +51,51 @@ test("the standard delivery note for a screen drops only the lines that need a p
   assert.match(printed, /Driver & date/);
   assert.doesNotMatch(screen, /_{10,}/, "a ruled line nobody can sign on would sit above the real signature box");
   assert.doesNotMatch(screen, /Driver & date/, "the driver does not sign here: they are named on the note and are its witness");
-  assert.match(screen, /Received in good order\./, "what the customer is signing for is still said");
+  assert.match(screen, /Received in good order/, "what the customer is signing for is still said");
   // Everything else is the same note: who, what, and how it was handed over.
   for (const part of ["{{delivery.number}}", "{{delivery.meta}}", "{{customer.name}}", "{{delivery.deliverTo}}", "{{delivery.details}}", '"type":"lineItems"', '"type":"handoverChecklist"']) {
     assert.ok(printed.includes(part) && screen.includes(part), `${part} is on both`);
   }
 });
 
-test("it draws no signature box of its own: a packing list and photos end at no fixed place", () => {
-  // The engine adds a page for the customer's signature and date. A box at fixed
-  // coordinates would land on top of a long checklist, or far below a short one.
-  const doc = deliveryTemplateForScreen();
-  assert.equal(doc.recipients.length, 0);
-  assert.equal(doc.pages.flatMap((page) => page.overlayFields).length, 0);
+test("the customer signs at the foot of page 1 only when the note fits above it, else on a page 2 of its own (DN-1037)", async () => {
+  // Fields sit at fixed coordinates while a packing list and photos flow, so the band goes at the foot of page 1
+  // only inside room the flow keeps free — and the note is only signed that way when its PDF is one page.
+  const bottom = deliveryTemplateForScreen("bottom");
+  assert.equal(bottom.pages.length, 1);
+  assert.deepEqual(bottom.recipients.map((r) => r.party), ["customer"]);
+  const lastRow = bottom.pages[0].rows.at(-1)?.columns[0].blocks[0];
+  assert.equal(lastRow?.type === "spacer" ? lastRow.height : null, DELIVERY_SIGN_OFF_ROOM, "the room is kept at the end of the flow");
+  const zoneTop = PAGE_SIZES.A4.h - 40 - DELIVERY_SIGN_OFF_ROOM;
+  for (const f of bottom.pages[0].overlayFields) {
+    assert.ok(f.anchor.y >= zoneTop && f.anchor.y + f.height <= PAGE_SIZES.A4.h - 40, `${f.kind} inside the kept room`);
+  }
+  for (const fb of bottom.pages[0].floatingBlocks) assert.ok(fb.y >= zoneTop, "the label and footer too");
+  assert.deepEqual(bottom.pages[0].overlayFields.map((f) => f.kind).sort(), ["date", "signature"]);
+
+  const next = deliveryTemplateForScreen("next-page");
+  assert.equal(next.pages.length, 2);
+  assert.equal(next.pages[0].overlayFields.length, 0, "nothing at fixed places on the page the note flows on");
+  assert.deepEqual(next.pages[1].overlayFields.map((f) => f.kind).sort(), ["date", "signature"]);
+  assert.equal(next.pages[1].rows.length, 0);
+  assert.ok(JSON.stringify(next.pages[1]).includes('"type":"footer"'), "the footer goes with the sign-off: no page holding only a footer");
+
+  // Which one: the rendered PDF's page count. Anything but exactly one page is "didn't fit".
+  const pdf = (pages: number) => Buffer.from(`%PDF /Type /Pages /Count ${pages} ${"<< /Type /Page >> ".repeat(pages)}`, "latin1");
+  assert.equal(pdfPageCount(pdf(1)), 1);
+  assert.equal(pdfPageCount(pdf(3)), 3);
+  const asked: string[] = [];
+  const build = (signOff: "bottom" | "next-page") => { asked.push(signOff); return deliveryTemplateForScreen(signOff); };
+  assert.equal((await fitDeliveryNote(build, async () => pdf(1))).doc.pages.length, 1);
+  assert.deepEqual(asked, ["bottom"], "fits: one render");
+  asked.length = 0;
+  assert.equal((await fitDeliveryNote(build, async (doc) => pdf(doc.pages.length === 1 ? 2 : 2))).doc.pages.length, 2);
+  assert.deepEqual(asked, ["bottom", "next-page"]);
+  assert.equal((await fitDeliveryNote(build, async () => Buffer.from("not a pdf"))).doc.pages.length, 2, "can't tell: the safe layout");
+
   const prepare = fnBody(code("src/lib/deliveryNoteSigning.ts"), "prepareDeliveryNote");
-  assert.match(prepare, /const signable = signedByCustomerOnly\(layout, \{ staff: \{ name: user\.name, email: user\.email \?\? null \}, customer \}\);/);
+  assert.match(prepare, /const out = signedByCustomerOnly\(layout, \{ staff: \{ name: user\.name, email: user\.email \?\? null \}, customer \}\);/);
+  assert.match(prepare, /: await fitDeliveryNote\(\(signOff\) => signable\(deliveryTemplateForScreen\(signOff\)\), render\);/, "only the standard note is fitted; a published one is signed as drawn");
   assert.match(code("src/lib/signing/subjectRequests.ts"), /return \{ doc: ensureSignable\(layout, people\.customer\) \};/);
 });
 
@@ -106,7 +138,8 @@ test("the note shows exactly the runs that were reviewed — the same ones, not 
   const prepare = fnBody(code("src/lib/deliveryNoteSigning.ts"), "prepareDeliveryNote");
   assert.match(prepare, /const shown = new Set\(guidedRunsForNote\.map\(\(run\) => run\.id\)\);/);
   assert.match(prepare, /if \(facts\.runIds\.length > 0 && \(shown\.size !== facts\.runIds\.length \|\| !facts\.runIds\.every\(\(id\) => shown\.has\(id\)\)\)\) \{\s*throw new ActionRefusal\(/);
-  assert.ok(prepare.indexOf("const shown = new Set(") < prepare.indexOf("await toPdf("), "refused before anything is rendered or stored");
+  // Nothing renders before `render` exists (the standard note is fitted through it; a published one renders through it).
+  assert.ok(prepare.indexOf("const shown = new Set(") < prepare.indexOf("const render = "), "refused before anything is rendered or stored");
 });
 
 // ── Signing it is not delivering ────────────────────────────────────────────
@@ -151,8 +184,11 @@ test("a note can be signed for again until the delivery is completed, and only w
   assert.match(prepare, /holdRecord: async \(tx\) => \{\s*await tx\.\$executeRaw`SELECT id FROM "Quote" WHERE id = \$\{quoteId\} AND "tenantId" = \$\{tenantId\} FOR UPDATE`;/);
   assert.match(prepare, /return Boolean\(live && live\.status === "accepted" && !live\.deliveredAt && !live\.supersededAt && live\.deliveryScheduledFor\);/);
   // Only the customer signs it.
-  assert.match(prepare, /if \("alsoAsks" in signable\) \{\s*throw new ActionRefusal\(/);
-  assert.ok(prepare.indexOf('if ("alsoAsks" in signable)') < prepare.indexOf("await toPdf("), "refused before anything is rendered or stored");
+  assert.match(prepare, /if \("alsoAsks" in out\) \{\s*throw new ActionRefusal\(/);
+  // A published layout asking a second signer is refused before anything is rendered or stored.
+  assert.ok(prepare.indexOf("const publishedDoc = published ? signable(published) : null;") > 0);
+  assert.ok(prepare.indexOf("const publishedDoc = ") < prepare.indexOf("const render = "), "refused before anything is rendered or stored");
+  assert.equal(prepare.match(/toPdf\(/g)?.length, 1, "one way to render: through render()");
 });
 
 test("a note left open and never signed goes with the delivery it was for", () => {

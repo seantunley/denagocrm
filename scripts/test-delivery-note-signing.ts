@@ -188,7 +188,7 @@ async function main() {
   check(
     "the note lists what is being handed over, by whom, and the checklist as ticked",
     note.includes(`DN-${quote.number}`) && note.includes(`Nomad XL ${SFX}`) && note.includes("Rain enclosure") &&
-      note.includes("Delivered by: Sipho Mahlangu") && note.includes("Battery fully charged") && note.includes("Received in good order."),
+      note.includes("Delivered by: Sipho Mahlangu") && note.includes("Battery fully charged") && note.includes("Received in good order"),
     note.slice(0, 500),
   );
   check("nothing is left as a placeholder, and there are no ruled lines to sign on", !/\{\{[\w.]+\}\}/.test(note) && !/_{10,}/.test(note), note.match(/\{\{[\w.]+\}\}/)?.[0]);

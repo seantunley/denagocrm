@@ -11,6 +11,7 @@ import { deliveryNoteContext } from "@/lib/docbuilder/deliveryServiceContext";
 import { buildQuoteContext, type MergeContext } from "@/lib/docbuilder/merge";
 import type { DocumentModel } from "@/lib/doceditor/model";
 import { deliveryTemplateForScreen } from "@/lib/doceditor/standardTemplates";
+import { fitDeliveryNote } from "@/lib/deliveryNoteLayout";
 import { builderLayoutFor, handoverRuns, loadDeliveryEvidence } from "@/lib/deliveryServicePrint";
 import { renderEnvelopePdf } from "@/lib/signing/render";
 import { staffActor } from "@/lib/signing/events";
@@ -249,16 +250,21 @@ export async function prepareDeliveryNote(
 
   // The workspace's own delivery note once it has PUBLISHED one (the same switch
   // as the printed note), otherwise the standard one.
-  const layout = (await builderLayoutFor("delivery")) ?? deliveryTemplateForScreen();
+  const published = await builderLayoutFor("delivery");
   const title = `Delivery note DN-${quote.number}`;
-  layout.title = title;
-  const signable = signedByCustomerOnly(layout, { staff: { name: user.name, email: user.email ?? null }, customer });
-  if ("alsoAsks" in signable) {
-    throw new ActionRefusal(
-      `Your delivery note layout also asks for a signature from “${signable.alsoAsks}”. Signing on this device collects the customer's only — ` +
-        "remove that signature block in Document Studio. Who handed the vehicle over is recorded on the note and on its certificate.",
-    );
-  }
+  const signable = (layout: DocumentModel): DocumentModel => {
+    layout.title = title;
+    const out = signedByCustomerOnly(layout, { staff: { name: user.name, email: user.email ?? null }, customer });
+    if ("alsoAsks" in out) {
+      throw new ActionRefusal(
+        `Your delivery note layout also asks for a signature from “${out.alsoAsks}”. Signing on this device collects the customer's only — ` +
+          "remove that signature block in Document Studio. Who handed the vehicle over is recorded on the note and on its certificate.",
+      );
+    }
+    return out.doc;
+  };
+  // A published layout is signed as drawn — and one asking a second signer is refused before anything is read.
+  const publishedDoc = published ? signable(published) : null;
 
   // The note's values, as they are NOW, to be frozen with the request. The
   // quote's own tokens only: the company's are frozen separately as the brand.
@@ -293,6 +299,11 @@ export async function prepareDeliveryNote(
     // What completing the delivery will read back: who, and against which runs.
     vars: { ...ctx.vars, delivery: { ...(ctx.vars.delivery as object), runIds: facts.runIds, checklist: facts.checklist } },
   };
+  // The standard note is signed at the foot of page 1 when it fits there, else on page 2 (deliveryNoteLayout.ts).
+  const render = (doc: DocumentModel) => toPdf(doc, context, tenantId);
+  const { doc, pdf } = publishedDoc
+    ? { doc: publishedDoc, pdf: null }
+    : await fitDeliveryNote((signOff) => signable(deliveryTemplateForScreen(signOff)), render);
 
   const outcome = await openSubjectRequest({
     subject: noteOf(quoteId),
@@ -307,12 +318,12 @@ export async function prepareDeliveryNote(
       });
       return Boolean(live && live.status === "accepted" && !live.deliveredAt && !live.supersededAt && live.deliveryScheduledFor);
     },
-    doc: signable.doc,
+    doc,
     title,
     context,
     contactId: person?.id ?? null,
     createdById: user.id,
-    pdf: await toPdf(signable.doc, context, tenantId),
+    pdf: pdf ?? (await render(doc)),
     // A note the customer signed earlier does not stop a new one: until the
     // delivery is completed the handover can still change (a checklist redone,
     // another added), and the delivery is recorded against the newest note they

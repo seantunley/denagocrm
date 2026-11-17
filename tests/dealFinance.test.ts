@@ -159,6 +159,8 @@ test("the lead board shows a financed deal's finance status (Sean 2026-11-16); a
   assert.match(page, /const financeByLead = await financeOnBoard\(leadIds, now\);/);
   assert.match(page, /finance: financeByLead\.get\(lead\.id\) \?\? null,/);
   assert.match(read("src/components/KanbanBoard.tsx"), /<KanbanFinancePill finance=\{lead\.finance\} \/>/);
+  // Collapsed, the card's top row carries it (the open card shows it in full below): Sean, "no finance pills".
+  assert.match(read("src/components/KanbanBoard.tsx"), /\{!open && <KanbanFinancePill finance=\{lead\.finance\} compact \/>\}/);
   const pill = read("src/components/deals/KanbanFinancePill.tsx");
   assert.match(pill, /if \(!finance\) return null;/, "nothing on a cash deal");
   assert.doesNotMatch(pill, /dealFinanceRules|@\/lib\/db/, "worked out on the server; the browser gets text");
