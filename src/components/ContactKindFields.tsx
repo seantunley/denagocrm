@@ -66,6 +66,7 @@ export default function ContactKindFields({
   defaultCompany,
   defaultFleetId,
   defaultVatNumber,
+  defaultRegistrationNumber,
   children,
 }: {
   picker: FleetPicker;
@@ -73,6 +74,7 @@ export default function ContactKindFields({
   defaultCompany?: string | null;
   defaultFleetId?: string | null;
   defaultVatNumber?: string | null;
+  defaultRegistrationNumber?: string | null;
   children?: ReactNode;
 }) {
   const [kind, setKind] = useState<ContactKind>(defaultKind);
@@ -174,17 +176,30 @@ export default function ContactKindFields({
       )}
 
       {capturesVatNumber(kind) && (
-        <Field
-          label="VAT number"
-          hint="Shown on quotes and invoices addressed to this business."
-        >
-          <input
-            name="vatNumber"
-            className="input"
-            defaultValue={defaultVatNumber ?? ""}
-            placeholder="e.g. 4123456789"
-          />
-        </Field>
+        <>
+          <Field
+            label="Company registration number"
+            hint="Shown on quotes and invoices addressed to this business."
+          >
+            <input
+              name="registrationNumber"
+              className="input"
+              defaultValue={defaultRegistrationNumber ?? ""}
+              placeholder="e.g. 2019/123456/07"
+            />
+          </Field>
+          <Field
+            label="VAT number"
+            hint="Shown on quotes and invoices addressed to this business."
+          >
+            <input
+              name="vatNumber"
+              className="input"
+              defaultValue={defaultVatNumber ?? ""}
+              placeholder="e.g. 4123456789"
+            />
+          </Field>
+        </>
       )}
 
       {kind === "fleet" && (

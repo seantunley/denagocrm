@@ -9,7 +9,7 @@
  */
 export const VARIABLES: { group: string; fields: string[] }[] = [
   { group: "Company", fields: ["company.name", "company.address", "company.phone", "company.email", "company.website", "company.tagline"] },
-  { group: "Customer", fields: ["customer.name", "customer.firstName", "customer.phone", "customer.email", "customer.address"] },
+  { group: "Customer", fields: ["customer.name", "customer.firstName", "customer.phone", "customer.email", "customer.address", "customer.regLine", "customer.vatLine"] },
   { group: "Lead (quotes)", fields: ["lead.name", "lead.title", "lead.source", "lead.product", "lead.value"] },
   { group: "Quotation", fields: ["quote.number", "quote.date", "quote.validUntil", "quote.validDays", "quote.subtotal", "quote.vat", "quote.vatRate", "quote.total", "vehicle", "preparedBy"] },
   { group: "Job card", fields: ["jobcard.number", "jobcard.status", "jobcard.total", "vehicle.reg", "technician"] },

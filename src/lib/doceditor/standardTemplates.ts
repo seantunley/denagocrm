@@ -581,7 +581,7 @@ export function showcaseQuoteTemplate(): DocumentModel {
   if (header.type === "showcaseHeader") header.bgImage = SHOWCASE_HEADER_IMAGE;
   const footerBand = newBlock("footerBand");
   if (footerBand.type === "footerBand") footerBand.bgImage = SHOWCASE_FOOTER_IMAGE;
-  const preparedFor = infoCard("PREPARED FOR", "{{customer.name}}", "{{customer.phone}}\n{{customer.email}}");
+  const preparedFor = infoCard("PREPARED FOR", "{{customer.name}}", "{{customer.phone}}\n{{customer.email}}\n{{customer.regLine}}\n{{customer.vatLine}}");
   if (preparedFor.type === "infoCard") preparedFor.look = "showcase";
   const items = newBlock("lineItems");
   if (items.type === "lineItems") {

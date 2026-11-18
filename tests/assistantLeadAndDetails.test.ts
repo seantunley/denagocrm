@@ -41,7 +41,7 @@ test("an update card shows each field before and after", () => {
 });
 
 const RECORD: ContactRecord = {
-  isCompany: false, fleetId: null, firstName: "Anna", lastName: "Jacobs", company: "Jacobs Farms", vatNumber: null,
+  isCompany: false, fleetId: null, firstName: "Anna", lastName: "Jacobs", company: "Jacobs Farms", vatNumber: null, registrationNumber: null,
   email: "anna@example.invalid", phone: "082 111 2222", whatsapp: "082 111 2222", address: "1 Main Rd", suburb: "Gardens",
   city: "Cape Town", province: "Western Cape", postalCode: "8001", source: "website", notes: "Prefers mornings",
   ownerId: "cmowner000000000000000001", marketingOptOut: true, tags: [{ name: "VIP" }, { name: "Fleet prospect" }],
@@ -73,7 +73,7 @@ test("EVERY field the contact form saves is posted — a field added to the form
   assert.match(contacts, /resolveAssignableUser\(formData\.get\("ownerId"\), "owner"\)/);
   read.add("ownerId");
   assert.ok(read.size >= 18, `found ${read.size}`);
-  const form = contactFormFor({ ...RECORD, vatNumber: "4123456789", fleetId: "cmfleet00000000000000001" }, {});
+  const form = contactFormFor({ ...RECORD, vatNumber: "4123456789", registrationNumber: "2019/123456/07", fleetId: "cmfleet00000000000000001" }, {});
   for (const name of read) {
     if (name === "isCompany") continue; // the old two-way selector: contactKind is posted instead
     assert.ok(form.has(name), `the contact form saves "${name}" — contactFormFor must post it`);

@@ -217,10 +217,10 @@ export function standardQuoteTemplate({ automotive = false }: { automotive?: boo
       newRow(
         automotive
           ? [
-              newColumn(50, [infoCard("PREPARED FOR", "{{customer.name}}", "{{customer.phone}}\n{{customer.email}}", "#ea580c")]),
+              newColumn(50, [infoCard("PREPARED FOR", "{{customer.name}}", "{{customer.phone}}\n{{customer.email}}\n{{customer.regLine}}\n{{customer.vatLine}}", "#ea580c")]),
               newColumn(50, [infoCard("VEHICLE OF INTEREST", "{{vehicle}}", "Demo drives available at your estate or our showroom.", "#020617")]),
             ]
-          : [newColumn(100, [infoCard("PREPARED FOR", "{{customer.name}}", "{{customer.phone}}\n{{customer.email}}", "#ea580c")])],
+          : [newColumn(100, [infoCard("PREPARED FOR", "{{customer.name}}", "{{customer.phone}}\n{{customer.email}}\n{{customer.regLine}}\n{{customer.vatLine}}", "#ea580c")])],
       ),
       newRow([newColumn(100, [newBlock("lineItems")])]),
       newRow([newColumn(100, [total])]),
