@@ -103,6 +103,10 @@ export function buildQuoteContext(quote: QuoteForPrint, fleet: BillToFleet | nul
     "customer.attention": billTo.attention ?? "",
     "customer.vatNumber": billTo.vatNumber,
     "customer.registrationNumber": billTo.registrationNumber,
+    // The same two numbers as ready-made lines, empty when the number is — an
+    // empty line drops out of a card, so "PREPARED FOR" shows them only if present.
+    "customer.regLine": billTo.registrationNumber ? `Reg. no: ${billTo.registrationNumber}` : "",
+    "customer.vatLine": billTo.vatNumber ? `VAT no: ${billTo.vatNumber}` : "",
     // The PERSON's first name, for "Dear …" — not the bill-to name, which for a
     // fleet quote is the business. A customerless lead falls back to its name.
     "customer.firstName": quote.contact?.firstName ?? firstWord(quote.lead?.name),

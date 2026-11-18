@@ -16,6 +16,7 @@ export type ContactRecord = {
   lastName: string | null;
   company: string | null;
   vatNumber: string | null;
+  registrationNumber: string | null;
   email: string | null;
   phone: string | null;
   whatsapp: string | null;
@@ -36,7 +37,7 @@ export type ContactRecord = {
 
 /** Posted as text, as the form posts them. */
 export const POSTED_TEXT_FIELDS = [
-  "firstName", "lastName", "company", "vatNumber", "email", "phone", "whatsapp",
+  "firstName", "lastName", "company", "vatNumber", "registrationNumber", "email", "phone", "whatsapp",
   "address", "suburb", "city", "province", "postalCode", "source", "notes",
 ] as const;
 

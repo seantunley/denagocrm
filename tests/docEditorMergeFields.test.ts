@@ -66,6 +66,16 @@ test("a customerless lead's quote still has a first name; a leadless quote has b
   }
 });
 
+test("a quote's Reg. no / VAT no lines print only when the number is there (Sean, 2026-11-18)", () => {
+  const business = { ...contact, isCompany: true, company: "Kloof Lodge (Pty) Ltd", vatNumber: "4123456789", registrationNumber: "2019/123456/07" };
+  const filled = merge.buildQuoteContext(quote({ contact: business }), null, R).tokens;
+  assert.equal(filled["customer.vatLine"], "VAT no: 4123456789");
+  assert.equal(filled["customer.regLine"], "Reg. no: 2019/123456/07");
+  const blank = merge.buildQuoteContext(quote(), null, R).tokens;
+  assert.equal(blank["customer.vatLine"], "");
+  assert.equal(blank["customer.regLine"], "");
+});
+
 test("a job card fills customer.firstName", () => {
   assert.equal(merge.buildJobCardContext(jobCard, null, R).tokens["customer.firstName"], "Pieter");
 });

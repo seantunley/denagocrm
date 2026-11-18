@@ -67,6 +67,7 @@ type BillToContact = {
   phone?: string | null;
   email?: string | null;
   vatNumber?: string | null;
+  registrationNumber?: string | null;
   address?: string | null;
   suburb?: string | null;
   city?: string | null;
@@ -163,7 +164,7 @@ export function quoteBillTo(quote: BillToQuote, fleet: BillToFleet | null): Quot
       address: joinAddress([contact.address, contact.suburb, contact.city, contact.province, contact.postalCode]),
       addressLines: addressLines(contact.address, contact.suburb, contact.city, contact.province, contact.postalCode),
       vatNumber: contact.vatNumber ?? "",
-      registrationNumber: "",
+      registrationNumber: contact.registrationNumber ?? "",
       isFleet: false,
     };
   }

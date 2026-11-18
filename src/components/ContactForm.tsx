@@ -52,6 +52,7 @@ type ContactDefaults = {
   isCompany?: boolean;
   fleetId?: string | null;
   vatNumber?: string | null;
+  registrationNumber?: string | null;
   firstName?: string;
   lastName?: string | null;
   company?: string | null;
@@ -137,6 +138,7 @@ export default function ContactForm({
           defaultCompany={defaults.company}
           defaultFleetId={defaults.fleetId}
           defaultVatNumber={defaults.vatNumber}
+          defaultRegistrationNumber={defaults.registrationNumber}
         >
           <Field label="First name / account name *">
             <input

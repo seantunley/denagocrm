@@ -130,6 +130,8 @@ function contactData(
     // kinds that do not capture it stops a stale number surviving a change of
     // type on a record where the field is no longer even shown.
     vatNumber: capturesVatNumber(kind) ? str("vatNumber") : null,
+    // Same rule as VAT: a business's own number; a fleet's lives on the Fleet.
+    registrationNumber: capturesVatNumber(kind) ? str("registrationNumber") : null,
     email: str("email"),
     phone: str("phone"),
     whatsapp: str("whatsapp"),

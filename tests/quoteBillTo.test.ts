@@ -115,6 +115,13 @@ test("precedence is fleet → contact → lead, and an unlinked quote still has 
   });
 });
 
+test("a business customer's own registration and VAT numbers reach the quote (Sean, 2026-11-18)", async () => {
+  const business = { ...MANAGER, isCompany: true, company: "Sandton Golf Carts (Pty) Ltd", registrationNumber: "2015/654321/07" };
+  const billTo = quoteBillTo({ contact: business, lead: null }, null);
+  assert.equal(billTo.registrationNumber, "2015/654321/07");
+  assert.equal(billTo.vatNumber, MANAGER.vatNumber);
+});
+
 test("a company CONTACT prints as the company, with its person as the Attention line (Sean, 2026-10-07)", async () => {
   // "Tekili Farm" printed with no contact name. The company is the addressee;
   // the person on the record is who it's for — as on a fleet invoice.
