@@ -4,7 +4,7 @@ import { logError } from "./errorLog";
 import { recordAiUsage } from "./systemHealth";
 import { inheritedTenantId } from "./tenantWrite";
 import { codexRespond } from "./codex";
-import { aiProvider, aiText } from "./aiText";
+import { aiProvider, aiText, claudeModel } from "./aiText";
 import { aiFailureText } from "./aiProviderRules";
 import {
   CHATGPT_RESEARCH_FORMAT_NOTE,
@@ -305,7 +305,7 @@ export async function aiResearch(
 
   try {
     const requestBody = {
-        model: options.model ?? "claude-opus-5",
+        model: await claudeModel(options.model ?? "claude-opus-5"),
         // MAX_TOKENS IS SHARED WITH THE SEARCH, WHICH IS WHY 700 PRODUCED STUBS.
         //
         // The model's `server_tool_use` blocks — one per web search, up to

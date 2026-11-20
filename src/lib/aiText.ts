@@ -5,7 +5,12 @@ import { CODEX_QUICK_MODEL } from "./codexProtocol";
 import { safeCodexError } from "./codexErrors";
 import { recordAiUsage } from "./systemHealth";
 import { logError } from "./errorLog";
-import { AI_PROVIDER_KEY, chatTranscript, isOutOfCredit, pickAiProvider, type AiProvider } from "./aiProviderRules";
+import { AI_CLAUDE_MODEL_KEY, AI_PROVIDER_KEY, chatTranscript, claudeModelFor, isOutOfCredit, pickAiProvider, type AiProvider } from "./aiProviderRules";
+
+/** The Claude model a job runs on: the one chosen in Settings → Integrations, or the job's own when none is. */
+export async function claudeModel(jobModel: string): Promise<string> {
+  return claudeModelFor(await getSetting(AI_CLAUDE_MODEL_KEY), jobModel);
+}
 
 /** This workspace's AI: its choice (ChatGPT unless set to Claude) when set up, else the other, else null. */
 export async function aiProvider(): Promise<AiProvider | null> {
@@ -64,6 +69,7 @@ export async function aiText(input: AiTextInput, chosen?: AiProvider | null): Pr
       return await askChatGpt(input, model);
     }
     model = input.claudeModel ?? "claude-haiku-4-5";
+    model = await claudeModel(model);
     return await askClaude(input, model);
   } catch (error) {
     const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");

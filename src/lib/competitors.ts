@@ -8,7 +8,7 @@ import { recordAiUsage } from "./systemHealth";
 import { safeFetchText } from "./safeFetch";
 import { inheritedTenantId } from "./tenantWrite";
 import { codexModel, codexRespond } from "./codex";
-import { aiProvider } from "./aiText";
+import { aiProvider, claudeModel } from "./aiText";
 
 /** ChatGPT unless the workspace chose Claude (Settings → Integrations) or has only a Claude key. */
 const usesChatGpt = async () => (await aiProvider()) === "chatgpt";
@@ -155,7 +155,7 @@ async function aiClassifyChange(input: {
         signal: AbortSignal.timeout(25000),
         headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
         body: JSON.stringify({
-          model: "claude-haiku-4-5",
+          model: await claudeModel("claude-haiku-4-5"),
           max_tokens: 600,
           system,
           messages: [{ role: "user", content: user }],
@@ -438,12 +438,13 @@ async function callWithWebSearch(opts: {
   const apiKey = await getProviderKey("ANTHROPIC_API_KEY");
   if (!apiKey) return { error: "AI Assist is not configured (Settings → Integrations)." };
   try {
+    const model = await claudeModel(RESEARCH_MODEL);
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       signal: AbortSignal.timeout(opts.timeoutMs ?? 60000),
       headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
       body: JSON.stringify({
-        model: RESEARCH_MODEL,
+        model,
         max_tokens: opts.maxTokens ?? 1500,
         tools: [{ type: "web_search_20250305", name: "web_search", max_uses: opts.maxUses ?? 6 }],
         system: opts.system,
@@ -474,7 +475,7 @@ async function callWithWebSearch(opts: {
         for (const c of cites) if (c.url) citations.set(c.url, { title: c.title ?? c.url, url: c.url });
       }
     }
-    return { text, citations: [...citations.values()].slice(0, 20), model: RESEARCH_MODEL, inlineCitations: false };
+    return { text, citations: [...citations.values()].slice(0, 20), model, inlineCitations: false };
   } catch (err) {
     await logError("competitor-ai", err);
     return { error: "AI request failed — logged in the System Log." };
