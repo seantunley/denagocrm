@@ -13,8 +13,10 @@ import {
   saveWorkshopSettings,
   saveNotificationPrefs,
 } from "@/app/actions/settings";
-import { signatureCompanyFrom, buildSignature, parseSignatureDesign, SIGNATURE_DESIGN_KEY } from "@/lib/signature";
+import { signatureCompanyFrom, buildSignature, parseSignatureDesign, signatureAssetOrigin, SIGNATURE_DESIGN_KEY } from "@/lib/signature";
 import SignatureDesignEditor from "@/components/SignatureDesignEditor";
+import CopySignature from "@/components/CopySignature";
+import { absolutise, plainSignature } from "@/lib/signatureCopy";
 import SendingDomainCheck from "@/components/settings/SendingDomainCheck";
 import { getSetting, resolveIntegrationBundle } from "@/lib/settings";
 import { imapUsable, mailSetupLabel, smtpUsable } from "@/lib/integrationsCatalogue";
@@ -357,6 +359,12 @@ export default async function SettingsPage({
                     <Link href="/settings/signature-banners" className="text-primary hover:underline">Signature banners</Link>.
                   </p>
                 )}
+                {/* The signature as the send path builds it, for use outside the CRM (lib/signatureCopy.ts). */}
+                <CopySignature
+                  html={absolutise(buildSignature(currentUser, signatureCompany), signatureAssetOrigin(signatureCompany))}
+                  text={plainSignature(currentUser, signatureCompany)}
+                  usesOwnHtml={Boolean(currentUser.signatureHtml?.trim())}
+                />
                 <details className="rounded-lg border border-border">
                   <summary className="px-4 py-2.5 cursor-pointer text-sm text-muted-foreground">
                     Advanced: use your own HTML instead{currentUser.signatureHtml?.trim() ? " (in use on your emails)" : ""}
