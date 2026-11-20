@@ -53,7 +53,8 @@ test("the model picker: only a model on offer is saved; the chosen Claude model 
   assert.match(rows, /<optgroup key=\{provider\.id\} label=\{provider\.label\}>/);
   assert.match(rows, /chatGpt\.state === "connected" && aiChosen === "claude" && \(/);
   const action = readFileSync("src/app/actions/aiModel.ts", "utf8");
-  assert.match(action, /const user = await requireTenantOwner\(\);[\s\S]*parseAiModelChoice\([\s\S]*if \(!choice\) refuse\(/);
+  assert.match(action, /const user = await requireTenantOwner\(\);[\s\S]*parseAiModelChoice\([\s\S]*if \(!choice\) refuse\([\s\S]*await saveAiChoice\(choice\);/);
+  assert.doesNotMatch(action, /putSetting\(/, "every write goes through saveAiChoice's one transaction");
   // Jobs someone asks for take the chosen model; quick and automatic jobs keep their cheap one (aiResearchCost.test).
   assert.match(aiText, /model = input\.quick \? jobModel : await claudeModel\(jobModel\);\s+return await askClaude\(input, model, jobModel\);/);
   // The page and the save read the same lists: the providers' own, the built-in ones when a provider can't be asked.

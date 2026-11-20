@@ -4,10 +4,11 @@ import { revalidatePath } from "next/cache";
 import { requireTenantOwner } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { asActionResult, refuse } from "@/lib/actionResult";
-import { getSetting, putSetting } from "@/lib/settings";
-import { CODEX_MODEL_KEY, codexModel } from "@/lib/codex";
+import { getSetting } from "@/lib/settings";
+import { codexModel } from "@/lib/codex";
 import { modelChoices } from "@/lib/codexProtocol";
-import { AI_CLAUDE_MODEL_KEY, AI_PROVIDER_KEY, CLAUDE_MODEL_CHOICES, parseAiModelChoice } from "@/lib/aiProviderRules";
+import { AI_CLAUDE_MODEL_KEY, CLAUDE_MODEL_CHOICES, parseAiModelChoice } from "@/lib/aiProviderRules";
+import { saveAiChoice } from "@/lib/aiModelSave";
 import { aiModelCatalog } from "@/lib/aiModelCatalog";
 
 /**
@@ -29,8 +30,7 @@ export async function saveAiModel(formData: FormData) {
       [...ids(catalog.claude), ...ids(CLAUDE_MODEL_CHOICES)],
     );
     if (!choice) refuse("That model isn't on the list any more — reload the page and choose again.");
-    await putSetting(AI_PROVIDER_KEY, choice.provider);
-    await putSetting(choice.provider === "chatgpt" ? CODEX_MODEL_KEY : AI_CLAUDE_MODEL_KEY, choice.model);
+    await saveAiChoice(choice); // provider and model together, or neither (lib/aiModelSave)
     await logAudit({
       action: "integration.ai_model_changed",
       summary: `AI set to ${choice.provider === "chatgpt" ? "ChatGPT" : "Claude"} · ${choice.model || "automatic"}`,
