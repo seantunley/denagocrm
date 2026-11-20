@@ -71,6 +71,7 @@ export async function prepareTriage(user: PermissionUser): Promise<{ ok: true; i
       .map((m) => ({ when: johannesburgDateKey(m.occurredAt), channel: m.type, direction: m.direction ?? "", text: clip(m.body.replace(/\s+/g, " "), 400) })),
   }));
   const reply = await codexRespond({
+    job: "DAX triage",
     instructions: TRIAGE_INSTRUCTIONS,
     prompt: [
       `Today is ${johannesburgDateKey(new Date())} (South Africa). The person asking is ${user.name}.`,

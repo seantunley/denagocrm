@@ -9,6 +9,7 @@ import { codexModel } from "@/lib/codex";
 import { modelChoices } from "@/lib/codexProtocol";
 import { AI_CLAUDE_MODEL_KEY, CLAUDE_MODEL_CHOICES, parseAiModelChoice } from "@/lib/aiProviderRules";
 import { saveAiChoice } from "@/lib/aiModelSave";
+import { hasListedPrice } from "@/lib/usageMeters";
 import { aiModelCatalog } from "@/lib/aiModelCatalog";
 
 /**
@@ -23,12 +24,18 @@ export async function saveAiModel(formData: FormData) {
     // even if a provider can't be asked again this second.
     const current = { chatgpt: await codexModel(), claude: (await getSetting(AI_CLAUDE_MODEL_KEY)) ?? "" };
     const catalog = await aiModelCatalog(current);
-    const ids = (list: { id: string }[]) => list.map((item) => item.id);
+    // A disabled ("price pending") choice is never on offer; parseAiModelChoice also refuses any Claude model with no
+    // listed price, whatever the page sent (review of #1154).
+    const ids = (list: { id: string; disabled?: true }[]) => list.filter((item) => !item.disabled).map((item) => item.id);
+    const value = String(formData.get("value") ?? "");
     const choice = parseAiModelChoice(
-      String(formData.get("value") ?? ""),
+      value,
       [...ids(catalog.chatgpt), ...ids(modelChoices(current.chatgpt))],
       [...ids(catalog.claude), ...ids(CLAUDE_MODEL_CHOICES)],
     );
+    if (!choice && value.startsWith("claude:") && !hasListedPrice(value.slice("claude:".length))) {
+      refuse("That Claude model has no listed price yet, so it can't be switched on — choose another, or wait for the weekly price update.");
+    }
     if (!choice) refuse("That model isn't on the list any more — reload the page and choose again.");
     await saveAiChoice(choice); // provider and model together, or neither (lib/aiModelSave)
     await logAudit({

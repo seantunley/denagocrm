@@ -2,6 +2,8 @@
  * Which AI a workspace's chatbot and AI helpers run on (Sean, 2026-11-10: ChatGPT is the default; Claude is a choice
  * to make once Anthropic credit is loaded). Pure, so it can be tested without a database.
  */
+import { hasListedPrice } from "./usageMeters";
+
 export type AiProvider = "chatgpt" | "claude";
 
 /** Settings → Integrations → "Which AI the CRM uses". Unset = ChatGPT. */
@@ -32,11 +34,12 @@ export const CLAUDE_MODEL_CHOICES: { id: string; label: string }[] = [
 export const CLAUDE_MODEL_ID = /^claude-[a-z0-9-]+$/;
 
 /**
- * The chosen Claude model, or the job's own when none is chosen. A chosen model Anthropic has since withdrawn is caught
- * where it is sent (isModelGone): the job then runs on its own model.
+ * The chosen Claude model, or the job's own when none is chosen — or when the chosen one has NO LISTED PRICE (review of
+ * #1154: it would spend Anthropic credit the billing meter can't price). A chosen model Anthropic has since withdrawn is
+ * caught where it is sent (isModelGone): the job then runs on its own model.
  */
 export function claudeModelFor(chosen: string | null | undefined, jobModel: string): string {
-  return chosen && CLAUDE_MODEL_ID.test(chosen) ? chosen : jobModel;
+  return chosen && CLAUDE_MODEL_ID.test(chosen) && hasListedPrice(chosen) ? chosen : jobModel;
 }
 
 /** Anthropic's answer for a model it doesn't (or no longer) offer: 404 not_found_error naming the model. */
@@ -54,7 +57,8 @@ export function parseAiModelChoice(value: string, chatgptModels: string[], claud
   const model = value.slice(at + 1);
   if (at < 0) return null;
   if (provider === "chatgpt" && chatgptModels.includes(model)) return { provider, model };
-  if (provider === "claude" && (model === "" || (CLAUDE_MODEL_ID.test(model) && claudeModels.includes(model)))) return { provider, model };
+  // A Claude model must also have a listed price — the server's own check, whatever the page offered (review of #1154).
+  if (provider === "claude" && (model === "" || (CLAUDE_MODEL_ID.test(model) && claudeModels.includes(model) && hasListedPrice(model)))) return { provider, model };
   return null;
 }
 

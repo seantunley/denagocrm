@@ -2,13 +2,19 @@
  * What the platform meters per workspace per month, and how a month's usage becomes an invoice.
  * Pure: no database, so the sums are tested directly (tests/usageBilling.test.ts).
  */
+import { GENERATED_MODEL_PRICES } from "./modelPrices.generated";
 
-export type MeterId = "ai_usd_micros" | "ai_calls" | "voice_chars" | "transcriptions" | "whatsapp_sent" | "sms_sent";
+export type MeterId =
+  | "ai_usd_micros" | "ai_calls" | "chatgpt_tokens" | "chatgpt_calls" | "voice_chars" | "transcriptions" | "whatsapp_sent" | "sms_sent";
 
 /** `unit` raw counts make one billing unit; plan allowances and overage prices are per billing unit. */
 export const METERS: Record<MeterId, { label: string; unit: number; unitLabel: string; billable: boolean }> = {
   ai_usd_micros: { label: "AI usage", unit: 1_000_000, unitLabel: "US$ of AI", billable: true },
-  ai_calls: { label: "AI requests", unit: 1, unitLabel: "request", billable: false },
+  ai_calls: { label: "Claude requests", unit: 1, unitLabel: "request", billable: false },
+  // The workspace's own ChatGPT subscription: counted so the owner can see what uses the plan's allowance before
+  // ChatGPT says it is over its limit (Sean, 2026-11-20, from Scarlet). NEVER billable: these calls cost nothing per call.
+  chatgpt_tokens: { label: "ChatGPT tokens (your subscription)", unit: 1_000, unitLabel: "1,000 tokens", billable: false },
+  chatgpt_calls: { label: "ChatGPT requests (your subscription)", unit: 1, unitLabel: "request", billable: false },
   voice_chars: { label: "Voice replies", unit: 1_000, unitLabel: "1,000 characters spoken", billable: true },
   transcriptions: { label: "Voice notes transcribed", unit: 1, unitLabel: "voice note", billable: true },
   whatsapp_sent: { label: "WhatsApp messages sent", unit: 1, unitLabel: "message", billable: true },
@@ -16,6 +22,24 @@ export const METERS: Record<MeterId, { label: string; unit: number; unitLabel: s
 };
 
 export const METER_IDS = Object.keys(METERS) as MeterId[];
+
+/** The per-job split of ChatGPT tokens: a counter row "chatgpt_tokens:DAX". Not a MeterId, so billing never reads it. */
+export const CHATGPT_JOB_PREFIX = "chatgpt_tokens:";
+/** An AI helper's ErrorLog scope (lib/aiText) → the job it is, as the Plan page names it. */
+export function chatGptJobForScope(scope: string): string {
+  if (/^(bot-|flow-|chatbot-)/.test(scope)) return "Chatbot";
+  if (scope.startsWith("crm-assistant")) return "DAX";
+  if (scope === "inbound-screening") return "Spam screening";
+  if (scope === "ai-check") return "Message check";
+  if (scope === "ai-voice-note") return "Voice-note replies";
+  if (scope === "knowledge-gap") return "Chatbot answer drafts";
+  if (scope.includes("invoice")) return "Invoice reading";
+  return "Other AI helpers";
+}
+
+export function chatGptJobMeter(job: string): string {
+  return `${CHATGPT_JOB_PREFIX}${job.replace(/[^\p{L}\p{N} &/-]/gu, "").trim().slice(0, 40) || "Other"}`;
+}
 
 /** "2026-11": the calendar month in Johannesburg, so a send at 01:00 on the 1st counts in the new month. */
 export function usageMonth(at: Date = new Date()): string {
@@ -39,19 +63,28 @@ export function termsInForce<T extends { month: string }>(history: T[], period: 
   return best;
 }
 
-/** US$ per million tokens [input, output]. Cache writes cost 1.25× input, cache reads 0.1×. */
-// ponytail: hand-kept price list (Anthropic list prices, 2026-11); add a row when the app starts using a new model.
-// An unknown model is priced as Opus (the last row).
-const MODEL_PRICES: Array<[prefix: string, input: number, output: number]> = [
-  ["claude-fable", 10, 50],
-  ["claude-haiku-4-5", 1, 5],
-  ["claude-haiku-5-5", 0.1, 0.5],
-  ["claude-sonnet-5", 2, 10],
-  ["claude-sonnet-4", 3, 15],
-  ["claude-opus-5-5", 4, 20],
-  ["claude-opus", 5, 25],
-];
 const WEB_SEARCH_USD = 0.01;
+
+/**
+ * US$ per million tokens [input, output, cache write, cache read] for a model, from the list generated from LiteLLM's
+ * public prices (scripts/update-model-prices.mjs — Sean, 2026-11-20: the hand-kept list priced every new model as
+ * Opus). A dated id ("claude-haiku-4-5-20251001") takes the longest listed id it extends.
+ *
+ * NULL when the model has no listed price — NEVER a guess (review of #1155: a guessed Opus rate overcharged a cheap new
+ * model on a billable meter). Its tokens are then not billed (aiCostMicros) and the gap is logged (recordAiUsage) until
+ * the weekly price PR lists it; the model picker (#1154) offers only models with a listed price.
+ */
+export function modelPrice(model: string | null | undefined): readonly [number, number, number, number] | null {
+  const id = model ?? "";
+  const exact = GENERATED_MODEL_PRICES[id];
+  if (exact) return exact;
+  const base = Object.keys(GENERATED_MODEL_PRICES)
+    .filter((listed) => id.startsWith(`${listed}-`))
+    .sort((a, b) => b.length - a.length)[0];
+  return base ? GENERATED_MODEL_PRICES[base] : null;
+}
+
+export const hasListedPrice = (model: string | null | undefined): boolean => modelPrice(model) !== null;
 
 export type AiUsage = {
   input_tokens?: number;
@@ -63,12 +96,13 @@ export type AiUsage = {
 
 /** One response's cost in micro-dollars (US$ × 1,000,000), rounded up. */
 export function aiCostMicros(usage: AiUsage, model: string | null | undefined): number {
-  const [, input, output] = MODEL_PRICES.find(([prefix]) => (model ?? "").startsWith(prefix)) ?? MODEL_PRICES[MODEL_PRICES.length - 1];
+  // No listed price: its tokens are not billed (never a guessed rate); web search has one price whatever the model.
+  const [input, output, cacheWrite, cacheRead] = modelPrice(model) ?? [0, 0, 0, 0];
   // Per-million price × tokens = micro-dollars.
   const micros =
     (usage.input_tokens ?? 0) * input +
-    (usage.cache_creation_input_tokens ?? 0) * input * 1.25 +
-    (usage.cache_read_input_tokens ?? 0) * input * 0.1 +
+    (usage.cache_creation_input_tokens ?? 0) * cacheWrite +
+    (usage.cache_read_input_tokens ?? 0) * cacheRead +
     (usage.output_tokens ?? 0) * output +
     (usage.server_tool_use?.web_search_requests ?? 0) * WEB_SEARCH_USD * 1_000_000;
   return Math.ceil(micros);

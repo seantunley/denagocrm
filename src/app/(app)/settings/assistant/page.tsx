@@ -175,8 +175,6 @@ export default async function AssistantSettingsPage() {
     expired: isExpired(n.validUntil),
     conflictsWith: n.conflictsWithId ? contentOf.get(n.conflictsWithId) ?? null : null,
   }));
-  const unreviewed = learned.filter((n) => n.status !== "approved").length;
-  const expired = learned.filter((n) => n.expired).length;
 
   return (
     <SettingsWorkspace
@@ -185,6 +183,10 @@ export default async function AssistantSettingsPage() {
       description="Give the CRM's assistant a name and a personality. It answers your team's questions from your own records, in this voice."
       groups={SETTINGS_NAV_GROUPS}
     >
+      {/* FIRST on the page (Sean, 2026-11-20: "ours gets buried") — it was folded at the bottom under Advanced. */}
+      <div id="learned" className="card mb-6 max-w-3xl p-5">
+        <AssistantLearnedReview notes={learned} />
+      </div>
       <SaveForm action={saveAssistantProfile} resetOnSuccess={false} className="card max-w-2xl space-y-5 p-5">
         <label className="block space-y-1">
           <span className="text-xs font-medium text-muted-foreground">Name</span>
@@ -515,19 +517,9 @@ export default async function AssistantSettingsPage() {
 
       {/* Advanced: its soul, and everything it has learned — all editable. Open
           by default whenever there's something for the owner to look at. */}
-      <details className="card mt-6 max-w-3xl p-5" open={Boolean(profile.soul) || unreviewed > 0 || expired > 0}>
+      <details className="card mt-6 max-w-3xl p-5" open={Boolean(profile.soul)}>
         <summary className="cursor-pointer text-base font-semibold">
-          Advanced — its soul and what it has learned
-          {unreviewed > 0 && (
-            <span className="ml-2 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-300">
-              {unreviewed} to review
-            </span>
-          )}
-          {expired > 0 && (
-            <span className="ml-2 rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-              {expired} expired
-            </span>
-          )}
+          Advanced — its soul, and how it learns
         </summary>
         <div className="mt-5 space-y-8">
           <SaveForm action={saveAssistantProfile} resetOnSuccess={false} className="space-y-2">
@@ -545,9 +537,10 @@ export default async function AssistantSettingsPage() {
           </SaveForm>
           <p className="text-xs text-muted-foreground">
             Every night it tidies what it has learned — merging duplicates, dropping what&apos;s stale, flagging
-            contradictions and improving playbooks from the day&apos;s corrections. Anything it changes shows up here as
-            unreviewed; it never changes what you&apos;ve approved. If something it learns in a conversation contradicts
-            what you&apos;ve approved, it holds the new entry back and asks you here which to keep. A rule for a while
+            contradictions and improving playbooks from the day&apos;s corrections. Anything it changes shows up at the top of this page as
+            unreviewed — and in your morning brief, to keep or drop from WhatsApp; it never changes what you&apos;ve
+            approved. If something it learns in a conversation contradicts what you&apos;ve approved, it holds the new
+            entry back and asks you at the top of this page which to keep. A rule for a while
             (&ldquo;for October…&rdquo;) stops being used after its last day and shows as expired.{" "}
             {tidiedAt ? `Last tidy-up ${formatDateTime(new Date(tidiedAt))}: ${tidySummary ?? "in progress"}.` : "It hasn't tidied yet."}
           </p>
@@ -576,7 +569,6 @@ export default async function AssistantSettingsPage() {
               </SaveForm>
             )}
           </div>
-          <AssistantLearnedReview notes={learned} />
         </div>
       </details>
     </SettingsWorkspace>

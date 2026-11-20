@@ -73,11 +73,14 @@ export default async function platformIntegrationRows({ xAccountId }: { xAccount
   // The one model picker: the models each provider lists for this workspace (lib/aiModelCatalog), the built-in lists
   // when it can't be asked. ChatGPT's model is read through the same scoped read as the status, connected or not.
   const chatGptModel = chatGpt.state === "connected" ? chatGpt.model : await codexModel().catch(() => CODEX_DEFAULT_MODEL);
-  const claudeChosen = claudeModelFor(setting(AI_CLAUDE_MODEL_KEY), "");
-  const catalog = await aiModelCatalog({ chatgpt: chatGptModel, claude: claudeChosen });
+  // What runs (claudeModelFor: a saved model with no listed price is not used) vs what was saved — shown, disabled.
+  const claudeSaved = setting(AI_CLAUDE_MODEL_KEY);
+  const claudeChosen = claudeModelFor(claudeSaved, "");
+  const claudeSavedUnpriced = Boolean(claudeSaved) && !claudeChosen;
+  const catalog = await aiModelCatalog({ chatgpt: chatGptModel, claude: claudeSaved });
   const modelGroups = {
-    chatgpt: catalog.chatgpt.map((choice) => ({ value: `chatgpt:${choice.id}`, label: choice.label })),
-    claude: catalog.claude.map((choice) => ({ value: `claude:${choice.id}`, label: choice.label })),
+    chatgpt: catalog.chatgpt.map((choice) => ({ value: `chatgpt:${choice.id}`, label: choice.label, disabled: false })),
+    claude: catalog.claude.map((choice) => ({ value: `claude:${choice.id}`, label: choice.label, disabled: Boolean(choice.disabled) })),
   };
   // Nothing hidden: say which lists came from the provider and which are the built-in fallback.
   const listSource = [
@@ -247,7 +250,7 @@ export default async function platformIntegrationRows({ xAccountId }: { xAccount
               {AI_PROVIDER_CHOICES.map((provider) => (
                 <optgroup key={provider.id} label={provider.label}>
                   {modelGroups[provider.id].map((choice) => (
-                    <option key={choice.value} value={choice.value}>{choice.label}</option>
+                    <option key={choice.value} value={choice.value} disabled={choice.disabled}>{choice.label}</option>
                   ))}
                 </optgroup>
               ))}
@@ -256,6 +259,12 @@ export default async function platformIntegrationRows({ xAccountId }: { xAccount
           <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
         </SaveForm>
         {listSource && <p className="mt-2 text-xs text-muted-foreground">{listSource}.</p>}
+        {claudeSavedUnpriced && (
+          <p className="mt-2 text-xs text-amber-300" role="status">
+            The Claude model saved here ({claudeSaved}) has no listed price yet, so it isn&apos;t used: Claude jobs run on their
+            own models until the weekly price update lists it. Choose another model to change that.
+          </p>
+        )}
         {aiInUse && aiInUse !== aiChosen && (
           <p className="mt-2 text-xs text-amber-300" role="status">
             There&apos;s no Anthropic key, so ChatGPT is being used.

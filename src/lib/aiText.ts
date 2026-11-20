@@ -5,6 +5,7 @@ import { CODEX_QUICK_MODEL } from "./codexProtocol";
 import { safeCodexError } from "./codexErrors";
 import { recordAiUsage } from "./systemHealth";
 import { logError } from "./errorLog";
+import { chatGptJobForScope } from "./usageMeters";
 import { AI_CLAUDE_MODEL_KEY, AI_PROVIDER_KEY, chatTranscript, claudeModelFor, isModelGone, isOutOfCredit, pickAiProvider, type AiProvider } from "./aiProviderRules";
 
 /** The Claude model a job runs on: the one chosen in Settings → Integrations, or the job's own when none is. */
@@ -81,6 +82,7 @@ export async function aiText(input: AiTextInput, chosen?: AiProvider | null): Pr
 
 async function askChatGpt(input: AiTextInput, asked: string): Promise<AiTextResult> {
   const reply = await codexRespond({
+    job: chatGptJobForScope(input.scope),
     instructions: input.system,
     prompt: input.history ? chatTranscript(input.history) : input.prompt ?? "",
     images: input.images?.map((image) => `data:${image.mediaType};base64,${image.base64}`),

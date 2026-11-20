@@ -27,7 +27,7 @@ test("daily change classification uses ChatGPT too", () => {
   const branch = classify.indexOf('if (provider === "chatgpt")');
   assert.ok(branch > -1 && branch < classify.indexOf("api.anthropic.com"));
   assert.match(classify, /const provider = await competitorAi\(\);\s+if \(!provider\) return null;/);
-  assert.match(classify, /codexRespond\(\{ instructions: system, prompt: user, reasoningEffort: "low"/);
+  assert.match(classify, /codexRespond\(\{ job: "Competitor watch", instructions: system, prompt: user, reasoningEffort: "low"/);
 });
 
 test("briefs record the model that wrote them and drop ChatGPT's inline links", () => {

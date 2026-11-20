@@ -9,6 +9,7 @@ import { inlineImages, workspaceLogoLoader } from "./emailInlineLogo";
 import { DEFAULT_REGIONAL, formatZAR, type Regional } from "./format";
 import { withCurrency } from "./currencyRules";
 import { recordOutboundFailure, recordOutboundMessage, type OutboundRecord } from "./outboundMessageLog";
+import { smtpUsable } from "./integrationsCatalogue";
 
 export type SmtpConfig = {
   /**
@@ -32,7 +33,8 @@ export async function getSmtpConfig(): Promise<SmtpConfig | null> {
   if (!bundle) return null;
   const host = bundle.values.SMTP_HOST;
   const from = bundle.values.SMTP_FROM;
-  if (!host || !from) return null;
+  // The same test the Email tab shows (integrationsCatalogue smtpUsable) — one rule for "can send".
+  if (!smtpUsable(bundle.values) || !host || !from) return null;
   return {
     tenantId: bundle.tenantId,
     host,

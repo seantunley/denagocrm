@@ -24,6 +24,7 @@ import { WEB_INSTRUCTIONS, webResult } from "./crmAssistantWebRules";
  */
 export async function webLookup(question: string): Promise<{ data: unknown[] }> {
   const reply = await codexRespond({
+    job: "DAX",
     instructions: WEB_INSTRUCTIONS,
     prompt: `Question: ${stripInvisible(question).slice(0, 500)}`,
     webSearch: true,

@@ -80,7 +80,7 @@ export const TENANT_CREDENTIAL_INTEGRATIONS: readonly TenantCredentialIntegratio
     id: "whatsapp",
     label: "WhatsApp Business (Cloud API)",
     description:
-      "Send and receive WhatsApp messages through this tenant's own WhatsApp number instead of the platform's shared one.",
+      "Send and receive WhatsApp messages through this workspace's own WhatsApp number.",
     fields: [
       { key: "WA_PHONE_NUMBER_ID", label: "Phone number ID", placeholder: "From WhatsApp → API Setup" },
       { key: "WA_ACCESS_TOKEN", label: "Access token (permanent, System User)", placeholder: "EAAG…" },
@@ -90,7 +90,7 @@ export const TENANT_CREDENTIAL_INTEGRATIONS: readonly TenantCredentialIntegratio
     id: "meta",
     label: "Meta (Messenger & Instagram)",
     description:
-      "Route Messenger and Instagram DMs through this tenant's own Meta page instead of the platform's shared page.",
+      "Route Messenger and Instagram DMs through this workspace's own Meta page.",
     fields: [
       { key: "META_PAGE_ACCESS_TOKEN", label: "Page access token (System User)", placeholder: "EAAG…" },
     ],
@@ -116,7 +116,7 @@ export const TENANT_CREDENTIAL_INTEGRATIONS: readonly TenantCredentialIntegratio
     id: "smtp",
     label: "Outbound email (SMTP)",
     description:
-      "Send emails from this tenant's own mail server instead of the platform's shared one.",
+      "Send emails from this workspace's own mail server.",
     fields: [
       { key: "SMTP_HOST", label: "Host", placeholder: "mail.example.com" },
       { key: "SMTP_PORT", label: "Port", placeholder: "587" },
@@ -130,7 +130,7 @@ export const TENANT_CREDENTIAL_INTEGRATIONS: readonly TenantCredentialIntegratio
     id: "imap",
     label: "Inbound email (IMAP)",
     description:
-      "Read incoming email from this tenant's own mailbox instead of the platform's shared one.",
+      "Read incoming email from this workspace's own mailbox.",
     fields: [
       { key: "IMAP_HOST", label: "Host", placeholder: "mail.example.com" },
       { key: "IMAP_PORT", label: "Port", placeholder: "993" },
@@ -143,7 +143,7 @@ export const TENANT_CREDENTIAL_INTEGRATIONS: readonly TenantCredentialIntegratio
     id: "sms",
     label: "SMS one-time codes (BulkSMS)",
     description:
-      "Send OTP codes through this tenant's own BulkSMS account instead of the platform's shared one.",
+      "Send OTP codes through this workspace's own BulkSMS account.",
     fields: [
       { key: "BULKSMS_TOKEN_ID", label: "Token ID", placeholder: "From BulkSMS → API Tokens" },
       { key: "BULKSMS_TOKEN_SECRET", label: "Token secret", placeholder: "Shown once when the token is created" },
@@ -153,7 +153,7 @@ export const TENANT_CREDENTIAL_INTEGRATIONS: readonly TenantCredentialIntegratio
     id: "google-reviews",
     label: "Google reviews",
     description:
-      "Pull reviews for this tenant's own Google Business listing instead of the platform's shared one.",
+      "Pull reviews for this workspace's own Google Business listing.",
     fields: [
       { key: "GOOGLE_PLACES_API_KEY", label: "Places API key", placeholder: "AIza…" },
       { key: "GOOGLE_PLACE_ID", label: "Place ID", placeholder: "ChIJ…" },

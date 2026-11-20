@@ -358,6 +358,7 @@ export async function aiResearch(
       // at 50 to 80 seconds a call, which is why the timeout is generous and
       // automatic research has its own cron route.
       const reply = await codexRespond({
+        job: "Lead research",
         instructions: instructions + CHATGPT_RESEARCH_FORMAT_NOTE,
         prompt: String(messages[0].content),
         webSearch: true,

@@ -3,6 +3,7 @@ import { getProviderKey } from "./settings";
 import { codexModelList } from "./codex";
 import { modelChoices } from "./codexProtocol";
 import { CLAUDE_MODEL_CHOICES } from "./aiProviderRules";
+import { hasListedPrice } from "./usageMeters";
 import { chatGptChoicesFrom, claudeChoicesFrom, type ModelChoice } from "./aiModelLists";
 
 /**
@@ -16,8 +17,11 @@ export async function aiModelCatalog(current: { chatgpt: string; claude: string 
     codexModelList().then((models) => chatGptChoicesFrom(models, current.chatgpt)).catch(() => null),
     anthropicModels().then((data) => claudeChoicesFrom(data, current.claude)).catch(() => null),
   ]);
-  const builtInClaude = CLAUDE_MODEL_CHOICES.slice(1);
-  if (current.claude && !builtInClaude.some((choice) => choice.id === current.claude)) builtInClaude.push({ id: current.claude, label: current.claude });
+  const builtInClaude: ModelChoice[] = CLAUDE_MODEL_CHOICES.slice(1);
+  if (current.claude && !builtInClaude.some((choice) => choice.id === current.claude)) {
+    // The saved model, always shown — disabled when it has no listed price (it isn't used: claudeModelFor).
+    builtInClaude.push(hasListedPrice(current.claude) ? { id: current.claude, label: current.claude } : { id: current.claude, label: `${current.claude} — price pending`, disabled: true });
+  }
   return {
     chatgpt: chatgpt ?? modelChoices(current.chatgpt),
     claude: [CLAUDE_MODEL_CHOICES[0], ...(claude ?? builtInClaude)],
