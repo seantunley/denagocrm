@@ -120,6 +120,9 @@ async function main() {
 
     // Deleting a previous owner (the second) leaves the vehicle and its whole history.
     const historyBefore = await basePrisma.vehicleOwnership.count({ where: { vehicleId: vehicle.id } });
+    // AuditLog(tenantId, contactId) → Contact has no delete rule, so a contact with audit entries can't be hard-deleted
+    // at all; this test's own audit entries are detached first. What is under test is the vehicle side.
+    await basePrisma.auditLog.updateMany({ where: { contactId: second.id }, data: { contactId: null } });
     await basePrisma.contact.delete({ where: { id: second.id } });
     const still = await basePrisma.vehicle.findUnique({ where: { id: vehicle.id }, select: { contactId: true } });
     check("deleting a previous owner leaves the vehicle with its owner", still?.contactId === third.id);
