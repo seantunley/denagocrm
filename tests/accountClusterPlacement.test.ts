@@ -191,26 +191,42 @@ test("the password section opens when it is linked to", () => {
  * not to.
  */
 
-const REM = 16;
-const SIDE_COLUMN_REM = 7.5;
-const NARROWEST_PHONE = 320; // smaller than the 375 the report used
+/**
+ * The cluster outgrew a fixed column (2026-11-20). The right column was 7.5rem
+ * (120px) for a cluster that was once ~115px; Search joined it on phones and a
+ * notification or birthday count widens it more, so it spilled left over the
+ * logo. The contract now: no outer column has a fixed width. Both share the
+ * spare room equally, and only the cluster's column has its content as a floor.
+ */
+const mobileBarOf = (shell: string) => shell.slice(shell.indexOf("{/* Mobile top bar"), shell.indexOf("{/* Desktop top bar"));
 
-test("the mobile header columns fit the narrowest phone with the centre still positive", () => {
-  const side = SIDE_COLUMN_REM * REM;            // 120px
-  const padding = 2 * (0.5 * REM);               // px-2 either side
-  const gaps = 2 * (0.5 * REM);                  // gap-2 between three columns
-  const centre = NARROWEST_PHONE - side * 2 - padding - gaps;
+test("the cluster's column fits the cluster — no fixed width for it to outgrow", () => {
+  const mobileBar = mobileBarOf(src("src/components/AppShell.tsx")).replace(/\{\/\*[\s\S]*?\*\/\}/g, "");
+  assert.doesNotMatch(mobileBar, /w-\[[\d.]+rem\]/, "a fixed-width column is a guess about a group that keeps changing");
+  // The cluster's column: grows with the spare room, and never below its content
+  // (no min-w-0, and the cluster itself does not shrink).
+  assert.match(mobileBar, /<div className="flex flex-1 basis-0 justify-end">\s*<div className="shrink-0">\s*<AccountCluster /);
+  // The empty mirror column takes the same share, and may give all of it away.
+  assert.match(mobileBar, /<div className="min-w-0 flex-1 basis-0" aria-hidden \/>/);
+});
 
-  assert.ok(centre > 0, `centre column collapses at ${NARROWEST_PHONE}px (got ${centre}px)`);
-  // The cluster is ~115px of controls; its column must actually hold them.
-  assert.ok(side >= 115, `cluster column ${side}px cannot hold ~115px of controls`);
+test("the cluster as it is today fits beside a logo on the narrowest phone", () => {
+  // Search, bell, help: 28px each. Divider 1px + 2px margins. Avatar 28px + 2px padding each side.
+  // Five 2px gaps between six items, 4px padding and a 1px border each side.
+  const cluster = 3 * 28 + (1 + 4) + (28 + 4) + 5 * 2 + 2 * 4 + 2 * 1;
+  assert.equal(cluster, 141);
+  const NARROWEST_PHONE = 320;
+  const padding = 2 * 8; // px-2
+  const gaps = 2 * 8;    // gap-2 between three columns
+  // With three-digit unread and birthday counts as well (~30px each), the logo still has room.
+  const centre = NARROWEST_PHONE - padding - gaps - cluster - 2 * 30;
+  assert.ok(centre >= 80, `only ${centre}px left for the logo at ${NARROWEST_PHONE}px`);
 });
 
 test("the cluster occupies a column instead of floating over the logo", () => {
-  const shell = src("src/components/AppShell.tsx");
-  const mobileBar = shell.slice(shell.indexOf("{/* Mobile top bar"), shell.indexOf("{/* Desktop top bar"));
+  const mobileBar = mobileBarOf(src("src/components/AppShell.tsx"));
 
-  // The defect: absolute positioning reserves no space.
+  // The first defect: absolute positioning reserves no space.
   assert.doesNotMatch(mobileBar, /absolute right-2/, "an absolutely-positioned cluster cannot reserve space");
   // The HEADER element itself must lay columns out, not centre one child. The
   // centre column still uses justify-center — to centre the logo inside itself.
@@ -218,10 +234,8 @@ test("the cluster occupies a column instead of floating over the logo", () => {
   assert.doesNotMatch(headerTag, /justify-center/, "the header must not centre a single child");
   assert.match(headerTag, /flex h-12 items-center gap-2/);
 
-  // Two equal, non-shrinking outer columns keep the logo optically centred.
-  assert.equal((mobileBar.match(/w-\[7\.5rem\] shrink-0/g) ?? []).length, 2, "matched side columns");
-  // And the centre must be able to shrink AND clip, or a long wordmark still wins.
-  assert.match(mobileBar, /flex min-w-0 flex-1 justify-center overflow-hidden/);
+  // The centre must be able to shrink AND clip, or a long wordmark still wins.
+  assert.match(mobileBar, /flex min-w-0 shrink justify-center overflow-hidden/);
   assert.match(mobileBar, /className="h-6 w-auto max-w-full object-contain"/);
 });
 
