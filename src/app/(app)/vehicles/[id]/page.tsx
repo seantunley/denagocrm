@@ -30,7 +30,8 @@ import CustomFieldsCard from "@/components/custom-fields/CustomFieldsCard";
 import ChecklistCard from "@/components/checklists/ChecklistCard";
 import { runsForHost, templatesForHostRecord } from "@/lib/checklists/store";
 import VehicleOwnershipSection from "@/components/VehicleOwnershipSection";
-import { currentOwnershipWarranty } from "@/lib/vehicleOwnership";
+import { currentOwnershipWarranty, ownershipHistory } from "@/lib/vehicleOwnership";
+import { ownerAt } from "@/lib/vehicleOwnershipPrivacy";
 
 export default async function VehicleDetailPage({
   params,
@@ -71,6 +72,9 @@ export default async function VehicleDetailPage({
   const path = `/vehicles/${vehicle.id}`;
   // Whether the warranty covers the CURRENT owner (a transfer under a "no" or "needs approval" rule may not).
   const ownerWarranty = checklistTenantId ? await currentOwnershipWarranty(checklistTenantId, vehicle.id) : "carried";
+  // Staff see every record, each with the owner at the time — once the vehicle has had more than one (PR 2 of the brief).
+  const owners = checklistTenantId ? await ownershipHistory(checklistTenantId, vehicle.id) : [];
+  const ownerOn = (date: Date) => (owners.filter((o) => !o.reversedAt).length > 1 ? ownerAt(owners, date) : null);
 
   return (
     <EntityDetailShell
@@ -211,6 +215,7 @@ export default async function VehicleDetailPage({
                         {formatDate(s.serviceDate)}
                         {s.km != null ? ` · ${s.km.toLocaleString()} km` : ""}
                         {s.performedBy ? ` · ${s.performedBy.name}` : ""}
+                        {ownerOn(s.serviceDate) ? ` · owner: ${ownerOn(s.serviceDate)}` : ""}
                       </span>
                     </div>
                     {s.details && (
@@ -250,7 +255,10 @@ export default async function VehicleDetailPage({
                     >
                       #{j.number}
                     </Link>
-                    <span className="text-sm text-slate-400 flex-1 truncate">{j.description}</span>
+                    <span className="text-sm text-slate-400 flex-1 truncate">
+                      {j.description}
+                      {ownerOn(j.openedAt) ? <span className="text-xs text-slate-500"> · owner: {ownerOn(j.openedAt)}</span> : null}
+                    </span>
                     <span
                       className={`badge ${
                         j.status === "completed"
@@ -449,7 +457,10 @@ export default async function VehicleDetailPage({
                         <div className="flex items-center gap-2">
                           <span className={`badge ${claimColors[c.status]}`}>{c.status}</span>
                           <span className="flex-1">{c.description}</span>
-                          <span className="text-xs text-slate-400">{formatDate(c.claimedAt)}</span>
+                          <span className="text-xs text-slate-400">
+                            {formatDate(c.claimedAt)}
+                            {ownerOn(c.claimedAt) ? ` · ${ownerOn(c.claimedAt)}` : ""}
+                          </span>
                           <Link href={`/warranty/${c.id}`} className="text-xs text-orange-400 hover:underline">Open</Link>
                         </div>
                         {c.resolution && (
@@ -496,7 +507,11 @@ export default async function VehicleDetailPage({
             );
           })()}
 
-          <DocumentsPanel documents={vehicle.documents} vehicleId={vehicle.id} revalidate={path} />
+          <DocumentsPanel
+            documents={vehicle.documents.map((d) => ({ ...d, ownerLabel: ownerOn(d.createdAt) ? `owner: ${ownerOn(d.createdAt)}` : null }))}
+            vehicleId={vehicle.id}
+            revalidate={path}
+          />
 
           {vehicle.notes && (
             <div className="card">

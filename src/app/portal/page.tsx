@@ -4,7 +4,8 @@ import { redirect } from "next/navigation";
 import { Bell, CarFront, FileCheck2, Headphones, LogOut } from "lucide-react";
 import { basePrisma, prisma } from "@/lib/db";
 import { getPortalContact } from "@/lib/portal";
-import { requirePortalScope } from "@/lib/portalAccess";
+import { portalOwnershipStarts, requirePortalScope } from "@/lib/portalAccess";
+import { claimsSince, historyFrom, splitServices } from "@/lib/vehicleOwnershipPrivacy";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { markPortalNotificationRead, portalLogout } from "@/app/actions/portal";
 import ServiceRequestForm from "@/components/ServiceRequestForm";
@@ -78,7 +79,8 @@ export default async function PortalHome() {
         fleet: true,
         serviceRecords: { orderBy: { serviceDate: "desc" } },
         mileageLogs: { orderBy: { recordedAt: "desc" }, take: 1 },
-        warrantyClaims: { orderBy: { claimedAt: "desc" }, take: 3 },
+        // Cut to the current owner's own claims below (lib/vehicleOwnershipPrivacy.ts), then the latest three.
+        warrantyClaims: { orderBy: { claimedAt: "desc" }, take: 50 },
       },
       orderBy: { createdAt: "desc" },
     }),
@@ -102,6 +104,9 @@ export default async function PortalHome() {
          OR (v."fleetId" IS NOT NULL AND v."fleetId" = ANY(${scope.fleetIds}::text[]))
     `,
   ]);
+
+  // A vehicle that changed hands: the current owner's own history from their ownership onward (warranty-transfer-brief.md).
+  const ownershipStarts = automotiveOn ? await portalOwnershipStarts(vehicles.map((v) => v.id)) : new Map();
 
   // Signing is driven by the SignatureRequest system (the legacy quote.signToken +
   // /sign/quote/[token] route are gone). For each of the customer's quotes with a
@@ -236,6 +241,10 @@ export default async function PortalHome() {
         ) : vehicles.map((vehicle) => {
           const due = computeDue(vehicle);
           const warranty = computeWarranty(vehicle);
+          // Before this owner: a summary only (date, what was done, odometer) — no previous owner's claims, notes or names.
+          const from = historyFrom(ownershipStarts.get(vehicle.id));
+          const services = splitServices(vehicle.serviceRecords, from);
+          const claims = claimsSince(vehicle.warrantyClaims, from).slice(0, 3);
           return (
             <div key={vehicle.id} className="card space-y-4">
               <div className="flex items-start justify-between gap-3 flex-wrap">
@@ -249,21 +258,34 @@ export default async function PortalHome() {
                   <span className={`badge ${warrantyColors[warranty.status]}`}>{warrantyLabels[warranty.status]}{warranty.expiryDate ? ` · ${formatDate(warranty.expiryDate, regional)}` : ""}</span>
                 </div>
               </div>
-              {vehicle.serviceRecords.length > 0 && (
+              {services.own.length > 0 && (
                 <div className="border-t border-slate-800 pt-3">
                   <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Recent service history</p>
                   <ul className="space-y-1.5">
-                    {vehicle.serviceRecords.slice(0, 5).map((record) => (
+                    {services.own.slice(0, 5).map((record) => (
                       <li key={record.id} className="text-sm flex justify-between gap-3"><span>{record.summary}</span><span className="text-slate-400 shrink-0">{formatDate(record.serviceDate, regional)}</span></li>
                     ))}
                   </ul>
                 </div>
               )}
-              {vehicle.warrantyClaims.length > 0 && (
+              {services.earlier.length > 0 && (
+                <div className="border-t border-slate-800 pt-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Services before you owned it</p>
+                  <ul className="space-y-1.5">
+                    {services.earlier.slice(0, 10).map((record) => (
+                      <li key={record.id} className="text-sm flex justify-between gap-3 text-slate-400">
+                        <span>{record.summary}</span>
+                        <span className="shrink-0">{record.km != null ? `${record.km.toLocaleString()} km · ` : ""}{formatDate(record.serviceDate, regional)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {claims.length > 0 && (
                 <div className="border-t border-slate-800 pt-3">
                   <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Warranty requests</p>
                   <ul className="space-y-1.5">
-                    {vehicle.warrantyClaims.map((claim) => <li key={claim.id} className="text-sm flex justify-between gap-3"><span>{claim.description}</span><span className="text-slate-400">{claim.status}</span></li>)}
+                    {claims.map((claim) => <li key={claim.id} className="text-sm flex justify-between gap-3"><span>{claim.description}</span><span className="text-slate-400">{claim.status}</span></li>)}
                   </ul>
                 </div>
               )}

@@ -125,20 +125,64 @@ export async function portalCanAccessCase(caseId: string): Promise<boolean> {
 export async function portalCanAccessDocument(documentId: string): Promise<boolean> {
   const scope = await getPortalScope();
   if (!scope) return false;
-  const rows = await basePrisma.$queryRaw<Array<{ allowed: boolean }>>`
-    SELECT EXISTS (
-      SELECT 1
-      FROM "Document" d
-      LEFT JOIN "Vehicle" v ON v."id" = d."vehicleId"
-      LEFT JOIN "Quote" q ON q."id" = d."quoteId"
-      WHERE d."id" = ${documentId} AND d."deletedAt" IS NULL
-        AND (
-          d."contactId" = ANY(${scope.contactIds}::text[])
-          OR v."contactId" = ANY(${scope.contactIds}::text[])
-          OR (v."fleetId" IS NOT NULL AND v."fleetId" = ANY(${scope.fleetIds}::text[]))
-          OR q."contactId" = ANY(${scope.contactIds}::text[])
+  return (await portalAllowedDocumentIds(scope, [documentId])).has(documentId);
+}
+
+/**
+ * Which of these documents the portal viewer may see — THE rule, for the download and the Documents list alike.
+ *
+ * A document filed on the person (or on their quote) is theirs. A document on a VEHICLE belongs to whoever owned the
+ * vehicle when it was added (warranty-transfer-brief.md, PR 2): an owner — current or previous — sees the ones added
+ * during their own ownership; the current owner (and a fleet viewing the vehicle) also sees those staff marked "stays
+ * with the vehicle". The first owner's ownership has no start, so a vehicle that never changed hands shows exactly
+ * what it always did.
+ */
+export async function portalAllowedDocumentIds(
+  scope: Pick<PortalScope, "contactIds" | "fleetIds">,
+  documentIds: string[],
+): Promise<Set<string>> {
+  if (documentIds.length === 0) return new Set();
+  const rows = await basePrisma.$queryRaw<Array<{ id: string }>>`
+    SELECT d."id"
+    FROM "Document" d
+    LEFT JOIN "Vehicle" v ON v."id" = d."vehicleId"
+    LEFT JOIN "Quote" q ON q."id" = d."quoteId"
+    WHERE d."id" = ANY(${documentIds}::text[]) AND d."deletedAt" IS NULL
+      AND (
+        d."contactId" = ANY(${scope.contactIds}::text[])
+        OR q."contactId" = ANY(${scope.contactIds}::text[])
+        OR (v."id" IS NOT NULL AND EXISTS (
+          SELECT 1 FROM "VehicleOwnership" o
+          WHERE o."vehicleId" = v."id" AND o."reversedAt" IS NULL
+            AND o."contactId" = ANY(${scope.contactIds}::text[])
+            AND (o."reason" = 'registered' OR d."createdAt" >= o."ownedFrom")
+            AND (o."ownedUntil" IS NULL OR d."createdAt" < o."ownedUntil")
+        ))
+        OR (
+          (v."contactId" = ANY(${scope.contactIds}::text[]) OR (v."fleetId" IS NOT NULL AND v."fleetId" = ANY(${scope.fleetIds}::text[])))
+          AND (
+            d."staysWithVehicle"
+            OR EXISTS (
+              SELECT 1 FROM "VehicleOwnership" o
+              WHERE o."vehicleId" = v."id" AND o."ownedUntil" IS NULL
+                AND (o."reason" = 'registered' OR d."createdAt" >= o."ownedFrom")
+            )
+          )
         )
-    ) AS "allowed"
+      )
   `;
-  return Boolean(rows[0]?.allowed);
+  return new Set(rows.map((row) => row.id));
+}
+
+/**
+ * When the current owner's own history begins, per vehicle (lib/vehicleOwnershipPrivacy.ts historyFrom). Absent = the
+ * vehicle never changed hands: all of its history is the owner's.
+ */
+export async function portalOwnershipStarts(vehicleIds: string[]): Promise<Map<string, { ownedFrom: Date; reason: string }>> {
+  if (vehicleIds.length === 0) return new Map();
+  const rows = await basePrisma.$queryRaw<Array<{ vehicleId: string; ownedFrom: Date; reason: string }>>`
+    SELECT "vehicleId", "ownedFrom", "reason" FROM "VehicleOwnership"
+    WHERE "vehicleId" = ANY(${vehicleIds}::text[]) AND "ownedUntil" IS NULL
+  `;
+  return new Map(rows.map((row) => [row.vehicleId, { ownedFrom: row.ownedFrom, reason: row.reason }]));
 }
