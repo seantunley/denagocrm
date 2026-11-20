@@ -15,6 +15,8 @@ import {
 import { signatureCompanyFrom, parseSignatureDesign, SIGNATURE_DESIGN_KEY } from "@/lib/signature";
 import { signatureAccent, signatureDesignInUse } from "@/lib/signatureSender";
 import EmailSignatureSection from "@/components/EmailSignatureSection";
+import CopySignature from "@/components/CopySignature";
+import { copyableSignature } from "@/lib/signatureCopy";
 import SendingDomainCheck from "@/components/settings/SendingDomainCheck";
 import { getSetting, resolveIntegrationBundle } from "@/lib/settings";
 import { imapUsable, mailSetupLabel, smtpUsable } from "@/lib/integrationsCatalogue";
@@ -354,7 +356,11 @@ export default async function SettingsPage({
                     <Link href="/email-signatures" className="text-primary hover:underline">Email signatures</Link>.
                   </p>
                 ) : (
-                  <EmailSignatureSection user={currentUser} company={signatureCompany} design={signatureDesign} canEditDesign={isAdmin} bannersHref={null} />
+                  <>
+                    <EmailSignatureSection user={currentUser} company={signatureCompany} design={signatureDesign} canEditDesign={isAdmin} bannersHref={null} />
+                    {/* Copy my signature (#1161), pack off: the automatic signature, exactly as the send path builds it. */}
+                    <CopySignature {...copyableSignature(currentUser, signatureCompany)} usesOwnHtml={Boolean(currentUser.signatureHtml?.trim())} />
+                  </>
                 )}
               </div>
             </details>

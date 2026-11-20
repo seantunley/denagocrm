@@ -24,6 +24,7 @@ export const emailSignatureArticles: HelpArticle[] = [
         ],
       },
       { type: "p", text: "Above the preview, switch between **Computer**, **Phone** and **Dark mode** to see how it looks in each. **Send myself a test** sends a real email with your saved signature to your own address, so you can check it in Outlook, Gmail or on your phone." },
+      { type: "p", text: "To use the same signature in Gmail, Outlook or on your phone, open **Use this signature in Gmail, Outlook or on your phone** under it. **Copy my signature** copies it with the design and your details; **Copy as plain text** is for phone mail apps. Your photo is left out, because it only shows on emails sent from the CRM. If your details or the design change, copy it again." },
       { type: "p", text: "Your name, job title and mobile come from **Settings → My account**. A detail with a padlock is **set by the workspace owner**: you can see it but not change it." },
       { type: "h", text: "For the workspace owner" },
       {

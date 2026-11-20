@@ -36,6 +36,8 @@ import { accentOf, brandSignature, DEFAULT_ACCENT, isBrandStyle, type BrandStyle
  * the send path. An omitted argument is the platform origin, exactly as before.
  */
 const SITE = (process.env.NEXT_PUBLIC_APP_URL || "https://crm.denagocpt.co.za").replace(/\/$/, "");
+/** The origin a signature's own pictures are linked from — the workspace's domain, else the platform's. */
+export const signatureAssetOrigin = (company: Pick<SignatureCompany, "assetBase">): string => company.assetBase.trim().replace(/\/$/, "") || SITE;
 
 
 /**
