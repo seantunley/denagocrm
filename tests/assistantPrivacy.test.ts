@@ -287,8 +287,9 @@ test("a linked phone's sign-in check fails closed on a database error", () => {
 
 test("no provider failure text in the ChatGPT wrapper's own log, or competitor logs", () => {
   const codex = code("src/lib/codex.ts");
-  assert.match(codex, /await logError\("codex-research", "ChatGPT response failed"\);/);
-  assert.doesNotMatch(codex, /logError\([^)]*parsed\.failed/);
+  // The failure's CODE only (an identifier, filtered in parseCodexStream) — never its text.
+  assert.match(codex, /await logError\("codex-research", `ChatGPT response failed \(\$\{parsed\.failedCode \?\? "no code"\}\)`\);/);
+  assert.doesNotMatch(codex, /logError\([^)]*parsed\.failed\b/);
   const comp = code("src/lib/competitors.ts");
   assert.doesNotMatch(comp, /logError\("competitor-ai", "[^"]+", reply\.error\)/);
 });

@@ -14,6 +14,7 @@ import {
   needsRefresh,
   parseCodexStream,
   renewedByAnotherHolder,
+  streamFailureKind,
 } from "../src/lib/codexProtocol";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -241,6 +242,23 @@ test("A FAILED RESPONSE CARRIES ITS REASON", () => {
   );
   assert.equal(parseCodexStream(sse({ type: "error", message: "usage limit reached" })).failed, "usage limit reached");
   assert.equal(parseCodexStream("data: [DONE]\n\ndata: {not json}\n").text, "", "noise is ignored, not thrown");
+});
+
+test("A FAILURE PARTWAY THROUGH A REPLY: its code is kept, and a passing fault is retried (2026-11-20)", () => {
+  const failed = (error: Record<string, unknown>) => parseCodexStream(sse({ type: "response.failed", response: { error } }));
+  assert.equal(failed({ code: "server_error", message: "An error occurred about Ann Smith" }).failedCode, "server_error");
+  assert.equal(failed({ message: "no code" }).failedCode, null);
+  assert.equal(failed({ code: "has spaces: Ann Smith" }).failedCode, null, "an identifier or nothing — never text");
+  assert.equal(parseCodexStream(sse({ type: "error", code: "rate_limit_exceeded", message: "x" })).failedCode, "rate_limit_exceeded");
+  assert.equal(streamFailureKind("server_error"), "passing");
+  assert.equal(streamFailureKind(null), "passing", "no code: one retry costs little");
+  assert.equal(streamFailureKind("rate_limit_exceeded"), "limit");
+  assert.equal(streamFailureKind("usage_limit_reached"), "limit");
+  assert.equal(streamFailureKind("context_length_exceeded"), "permanent");
+  assert.equal(streamFailureKind("invalid_prompt"), "permanent");
+  const codex = src("src/lib/codex.ts");
+  assert.match(codex, /if \(kind === "limit"\) return \{ error: "ChatGPT is unavailable or over its usage limit \(429\)\.", transient: true \};/, "not retried: the breaker skips (429)");
+  assert.match(codex, /\.\.\.\(kind === "passing" \? \{ transient: true as const \} : \{\}\)/, "transient → withRetry tries once more");
 });
 
 /* ── the wiring ────────────────────────────────────────────────────── */
