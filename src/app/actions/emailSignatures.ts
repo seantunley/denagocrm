@@ -7,6 +7,8 @@ import { logAudit } from "@/lib/audit";
 import { asActionResult, refuse } from "@/lib/actionResult";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { listActingTenantTeams } from "@/lib/tenantActor";
+import { putWorkspaceSetting } from "@/lib/settings";
+import { LEGAL_LINE_KEY, cleanLegalLine } from "@/lib/emailLegalLine";
 import { parseSignatureDesign, SIGNATURE_DESIGN_KEY } from "@/lib/signature";
 import { SIGNATURE_FIELDS, cleanDetail, mayEdit, parseTeamLines, type SignatureField } from "@/lib/signaturePeople";
 
@@ -102,15 +104,15 @@ export async function saveSignatureRules(formData: FormData) {
       locked: SIGNATURE_FIELDS.filter((field) => formData.get(`lock_${field}`) === "on"),
       teams: teamLines,
       shortReplies: formData.get("shortReplies") === "on",
-      legal: {
-        companyLine: String(formData.get("legalCompanyLine") ?? ""),
-        notice: String(formData.get("legalNotice") ?? ""),
-        privacyUrl: String(formData.get("legalPrivacyUrl") ?? ""),
-      },
+      legal: { privacyUrl: String(formData.get("legalPrivacyUrl") ?? "") },
     }));
     // A privacy link that isn't a full https address would be dropped quietly by the parser: say so instead.
     const privacyTyped = String(formData.get("legalPrivacyUrl") ?? "").trim();
     if (privacyTyped && !next.legal?.privacyUrl) refuse("Privacy policy link: a full https:// address.");
+    // The company details / confidentiality notice: the workspace's one email legal line, also set on Signature banners.
+    if (formData.has("legalLine")) {
+      await putWorkspaceSetting(tenantId, LEGAL_LINE_KEY, cleanLegalLine(String(formData.get("legalLine") ?? "")));
+    }
     const value = JSON.stringify(next);
     await basePrisma.appSetting.upsert({
       where: { tenantId_key: { tenantId, key: SIGNATURE_DESIGN_KEY } },

@@ -129,33 +129,23 @@ export function qualificationsHtml(extras: SignatureExtras | undefined): string 
   return q ? `<div style="padding-top:2px;font-size:12px;color:#64748b;">${escapeHtml(q)}</div>` : "";
 }
 
-/** The owner's legal lines (item 6), set once for everyone. Each is optional. */
-export type SignatureLegal = { companyLine: string; notice: string; privacyUrl: string };
-export const LEGAL_LINE_MAX = 200;
-export const LEGAL_NOTICE_MAX = 800;
+/**
+ * The owner's small print under every signature (item 6). The company details and confidentiality notice are the
+ * workspace's existing email legal line (lib/emailLegalLine.ts — already at the foot of every email), so only the
+ * privacy policy link lives here.
+ */
+export type SignatureLegal = { privacyUrl: string };
 
-/** The stored legal lines, cleaned: plain text, short; the privacy link a full https address or nothing. */
+/** The stored link, cleaned: a full https address or nothing. */
 export function parseLegal(value: unknown): SignatureLegal {
-  const v = (value ?? {}) as Record<string, unknown>;
-  const text = (s: unknown, max: number) => (typeof s === "string" ? s.replace(/[\r\n]+/g, " ").trim().slice(0, max) : "");
-  const url = text(v.privacyUrl, 300);
-  return {
-    companyLine: text(v.companyLine, LEGAL_LINE_MAX),
-    notice: text(v.notice, LEGAL_NOTICE_MAX),
-    privacyUrl: /^https:\/\/[^\s"'<>]+$/i.test(url) ? url : "",
-  };
+  const url = typeof (value as { privacyUrl?: unknown })?.privacyUrl === "string" ? (value as { privacyUrl: string }).privacyUrl.trim().slice(0, 300) : "";
+  return { privacyUrl: /^https:\/\/[^\s"'<>]+$/i.test(url) ? url : "" };
 }
 
-/** Small grey print under every signature: the company line, the privacy link, then the notice. "" when none is set. */
+/** The privacy policy link, small, under the signature. "" when none is set. */
 export function legalHtml(legal: SignatureLegal | undefined, accent: string): string {
-  if (!legal) return "";
-  const first = [
-    legal.companyLine ? escapeHtml(legal.companyLine) : "",
-    legal.privacyUrl ? `<a href="${escapeHtml(legal.privacyUrl)}" style="color:${accent};text-decoration:none;">Privacy policy</a>` : "",
-  ].filter(Boolean).join("&nbsp;&nbsp;·&nbsp;&nbsp;");
-  const parts = [first, legal.notice ? escapeHtml(legal.notice) : ""].filter(Boolean);
-  return parts.length
-    ? `<div style="margin-top:12px;max-width:600px;font-family:Arial,Helvetica,sans-serif;font-size:10.5px;line-height:15px;color:#94a3b8;">${parts.join("<br />")}</div>`
+  return legal?.privacyUrl
+    ? `<div style="margin-top:10px;font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:15px;"><a href="${escapeHtml(legal.privacyUrl)}" style="color:${accent};text-decoration:none;">Privacy policy</a></div>`
     : "";
 }
 

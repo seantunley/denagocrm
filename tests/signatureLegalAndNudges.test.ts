@@ -12,37 +12,35 @@ const company: SignatureCompany = {
   name: "Acme", tagline: "", address: "", website: "", switchboard: "", assetBase: "", logoUrl: "", facebook: "", instagram: "",
 };
 const person = { name: "Ann", email: "ann@example.com", mobile: "082 111 2222", jobTitle: "Sales" };
-const legal = { companyLine: "Acme (Pty) Ltd · Reg. 2015/1 · VAT 41 <x>", notice: "Confidential.", privacyUrl: "https://acme.example/privacy" };
+const legal = { privacyUrl: "https://acme.example/privacy?a=1&b=2" };
 
-test("small print: cleaned, https-only link, escaped; nothing set adds nothing", () => {
-  assert.deepEqual(parseLegal({ companyLine: " a\nb ", notice: "n", privacyUrl: "javascript:alert(1)" }), { companyLine: "a b", notice: "n", privacyUrl: "" });
-  assert.deepEqual(parseLegal(undefined), { companyLine: "", notice: "", privacyUrl: "" });
-  assert.equal(parseLegal({ notice: "x".repeat(2000) }).notice.length, 800);
+test("the privacy link: https only, escaped; none set adds nothing", () => {
+  assert.deepEqual(parseLegal({ privacyUrl: "javascript:alert(1)" }), { privacyUrl: "" });
+  assert.deepEqual(parseLegal(undefined), { privacyUrl: "" });
   assert.equal(legalHtml(parseLegal({}), "#f00"), "");
-  const html = legalHtml(legal, "#f00");
-  assert.match(html, /VAT 41 &lt;x&gt;/);
-  assert.match(html, /<a href="https:\/\/acme\.example\/privacy"[^>]*>Privacy policy<\/a>/);
-  assert.match(html, /Confidential\./);
+  assert.match(legalHtml(legal, "#f00"), /<a href="https:\/\/acme\.example\/privacy\?a=1&amp;b=2"[^>]*>Privacy policy<\/a>/);
 });
 
-test("small print goes under every signature built — every design, and short replies — never under someone's own HTML", () => {
+test("the privacy link goes under every signature built — every design, and short replies — never under someone's own HTML", () => {
   for (const style of ["card", "classic", "modern", "compact", "minimal"] as const) {
     const design = { ...DEFAULT_SIGNATURE_DESIGN, style, legal };
-    assert.match(buildSignature(person, { ...company, design }), /Confidential\./, style);
+    assert.match(buildSignature(person, { ...company, design }), /Privacy policy/, style);
     assert.doesNotMatch(buildSignature(person, { ...company, design: { ...design, legal: parseLegal({}) } }), /Privacy policy/, `${style}: none set`);
   }
   const short = buildSignature({ ...person, reply: true }, { ...company, design: { ...DEFAULT_SIGNATURE_DESIGN, shortReplies: true, legal } });
-  assert.match(short, /Confidential\./);
-  assert.doesNotMatch(buildSignature({ ...person, signatureHtml: "<b>mine</b>" }, { ...company, design: { ...DEFAULT_SIGNATURE_DESIGN, legal } }), /Confidential/);
+  assert.match(short, /Privacy policy/);
+  assert.doesNotMatch(buildSignature({ ...person, signatureHtml: "<b>mine</b>" }, { ...company, design: { ...DEFAULT_SIGNATURE_DESIGN, legal } }), /Privacy policy/);
   assert.deepEqual(parseSignatureDesign(JSON.stringify({ legal })).legal, legal, "stored on the design");
 });
 
-test("the owner sets the small print with the rules; a bad privacy link is refused, not dropped quietly", () => {
+test("the owner sets the small print with the rules: the existing email legal line (one setting) and the privacy link", () => {
   const actions = src("src/app/actions/emailSignatures.ts");
   const rules = actions.slice(actions.indexOf("export async function saveSignatureRules"));
   assert.match(rules, /requireTenantOwner\(\)/);
-  assert.match(rules, /legal: \{\s*companyLine: String\(formData\.get\("legalCompanyLine"\)/);
+  assert.match(rules, /legal: \{ privacyUrl: String\(formData\.get\("legalPrivacyUrl"\) \?\? ""\) \}/);
   assert.match(rules, /if \(privacyTyped && !next\.legal\?\.privacyUrl\) refuse\(/);
+  assert.match(rules, /putWorkspaceSetting\(tenantId, LEGAL_LINE_KEY, cleanLegalLine\(/, "the same line Signature banners edits, named by workspace");
+  assert.match(src("src/app/(app)/email-signatures/page.tsx"), /getWorkspaceSetting\(tenantId, LEGAL_LINE_KEY\)/);
 });
 
 test("a line of their own: one more detail, lockable like the rest, shown in the colour", () => {

@@ -1,7 +1,8 @@
 import { getActiveTenantId, isTenantOwner, requireUser } from "@/lib/auth";
 import { basePrisma } from "@/lib/db";
 import { getCompanyProfile } from "@/lib/companyProfile";
-import { getSetting } from "@/lib/settings";
+import { getSetting, getWorkspaceSetting } from "@/lib/settings";
+import { LEGAL_LINE_KEY, cleanLegalLine } from "@/lib/emailLegalLine";
 import { tenantOrigin } from "@/lib/tenantOrigin";
 import { listActingTenantStaff, listActingTenantTeams } from "@/lib/tenantActor";
 import { parseSignatureDesign, signatureCompanyFrom, SIGNATURE_DESIGN_KEY } from "@/lib/signature";
@@ -85,7 +86,8 @@ export default async function EmailSignaturesPage() {
         teams={teams}
         teamLines={design.teams ?? []}
         shortReplies={design.shortReplies === true}
-        legal={design.legal ?? { companyLine: "", notice: "", privacyUrl: "" }}
+        legalLine={isOwner ? cleanLegalLine(await getWorkspaceSetting(tenantId, LEGAL_LINE_KEY)) : ""}
+        privacyUrl={design.legal?.privacyUrl ?? ""}
         staff={others.map(asPerson)}
       />
       {/* The design is the owner's; anyone else sees this only to clear an old HTML signature of their own. */}

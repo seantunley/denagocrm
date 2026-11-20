@@ -94,7 +94,7 @@ export type SignatureDesign = {
   teams?: TeamLine[];
   /** Replies carry the two-line short signature instead of the full one. */
   shortReplies?: boolean;
-  /** Small print under every signature, set once by the owner: company details line, notice, privacy link. */
+  /** The privacy policy link under every signature, set once by the owner (the rest of the small print is the email legal line). */
   legal?: SignatureLegal;
 };
 
@@ -103,7 +103,7 @@ export const SIGNATURE_LINE_MAX = 160;
 /** What every workspace gets until its owner changes it. */
 export const DEFAULT_SIGNATURE_DESIGN: SignatureDesign = {
   style: "card", companyLine: "", footerLine: "", bannerUrl: "", locked: [], teams: [], shortReplies: false,
-  legal: { companyLine: "", notice: "", privacyUrl: "" },
+  legal: { privacyUrl: "" },
 };
 
 /** The stored setting, tolerant of anything: a bad value is the default design, never a broken signature. */
@@ -195,7 +195,7 @@ type SignatureUser = {
 
 export function buildSignature(user: SignatureUser, company: SignatureCompany = DEFAULT_SIGNATURE_COMPANY): string {
   if (user.signatureHtml?.trim()) return user.signatureHtml;
-  // The owner's small print (item 6) goes under every signature built here, full or short.
+  // The owner's privacy link (item 6) goes under every signature built here, full or short.
   const legal = legalHtml(company.design?.legal, accentOf(company, company.design?.style === "card" ? CARD_ORANGE : DEFAULT_ACCENT));
   return designedSignature(user, company) + legal;
 }

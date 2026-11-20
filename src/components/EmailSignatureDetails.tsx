@@ -4,9 +4,9 @@ import SignatureVisualEditor, { type PersonDetails } from "@/components/Signatur
 import type { ActionResult } from "@/lib/actionResultTypes";
 import type { SignatureCompany } from "@/lib/signature";
 import Link from "next/link";
+import { LEGAL_LINE_MAX } from "@/lib/emailLegalLine";
 import {
-  LEGAL_LINE_MAX, LEGAL_NOTICE_MAX, SIGNATURE_FIELDS, SIGNATURE_FIELD_LABELS, TEAM_LINE_MAX, missingBasics,
-  type SignatureField, type SignatureLegal, type TeamLine,
+  SIGNATURE_FIELDS, SIGNATURE_FIELD_LABELS, TEAM_LINE_MAX, missingBasics, type SignatureField, type TeamLine,
 } from "@/lib/signaturePeople";
 
 export type { PersonDetails };
@@ -33,7 +33,8 @@ export default function EmailSignatureDetails({
   teams,
   teamLines,
   shortReplies,
-  legal,
+  legalLine,
+  privacyUrl,
   staff,
 }: {
   me: SignaturePerson;
@@ -43,7 +44,9 @@ export default function EmailSignatureDetails({
   teams: { id: string; name: string }[];
   teamLines: readonly TeamLine[];
   shortReplies: boolean;
-  legal: SignatureLegal;
+  /** The workspace's email legal line (lib/emailLegalLine.ts). */
+  legalLine: string;
+  privacyUrl: string;
   staff: SignaturePerson[];
 }) {
   const lineFor = (teamId: string) => teamLines.find((row) => row.teamId === teamId)?.line ?? "";
@@ -120,20 +123,25 @@ export default function EmailSignatureDetails({
             </fieldset>
             <fieldset className="space-y-2">
               <legend className="text-sm font-medium">Small print under every signature</legend>
-              <p className="text-xs text-muted-foreground">Optional. Shown small and grey under everyone&apos;s signature, on new emails and replies.</p>
-              <div className="grid gap-3 lg:grid-cols-2">
-                <label className="block space-y-1">
-                  <span className="text-sm">Company details</span>
-                  <input name="legalCompanyLine" defaultValue={legal.companyLine} maxLength={LEGAL_LINE_MAX} placeholder="e.g. Acme (Pty) Ltd · Reg. 2015/123456/07 · VAT 4123456789" className="input" />
-                </label>
-                <label className="block space-y-1">
-                  <span className="text-sm">Privacy policy link</span>
-                  <input name="legalPrivacyUrl" type="url" defaultValue={legal.privacyUrl} maxLength={300} placeholder="https://…" className="input" />
-                </label>
-              </div>
+              <p className="text-xs text-muted-foreground">Optional. Both are small and grey.</p>
               <label className="block space-y-1">
-                <span className="text-sm">Confidentiality notice</span>
-                <textarea name="legalNotice" defaultValue={legal.notice} maxLength={LEGAL_NOTICE_MAX} rows={3} placeholder="e.g. This email and its attachments are confidential and meant only for the person it is addressed to." className="input" />
+                <span className="text-sm">Line at the foot of every email</span>
+                <textarea
+                  name="legalLine"
+                  defaultValue={legalLine}
+                  maxLength={LEGAL_LINE_MAX}
+                  rows={2}
+                  placeholder="e.g. Acme (Pty) Ltd · Reg. 2015/123456/07 · VAT 4123456789. This email is confidential and meant only for the person it is addressed to."
+                  className="input"
+                />
+                <span className="block text-xs text-muted-foreground">
+                  Company details or a confidentiality notice. It goes on every email the CRM sends, not only signed ones. It is the same line as on Signature banners.
+                </span>
+              </label>
+              <label className="block space-y-1">
+                <span className="text-sm">Privacy policy link</span>
+                <input name="legalPrivacyUrl" type="url" defaultValue={privacyUrl} maxLength={300} placeholder="https://…" className="input" />
+                <span className="block text-xs text-muted-foreground">Shown as “Privacy policy” under everyone&apos;s signature.</span>
               </label>
             </fieldset>
             <SaveButton className="btn-primary btn-sm">Save rules</SaveButton>
