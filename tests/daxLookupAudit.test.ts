@@ -2,7 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fitObservation, lookupFailedNote } from "../src/lib/assistant/observationFit";
-import { briefQuestion } from "../src/lib/proactiveRules";
+import { briefQuestion, briefSinceDay } from "../src/lib/proactiveRules";
+import { catchUpSince } from "../src/lib/assistantCatchUp";
 
 // Sean, 2026-11-20: "fix the audit findings" (docs/dax-tools-and-learning-audit-2026-11-20.md, Part 2, gaps 1–3),
 // DAX's lookups measured against Scarlet's tool rules.
@@ -39,7 +40,21 @@ test("gap 1: a failed lookup says which one, what kind of failure, and what to d
 
 test("gap 3: the morning brief starts from daily_brief and catch_up together, and looks closer at three deals at most", () => {
   const q = briefQuestion(new Date("2026-11-19T05:30:00Z"), []);
-  assert.match(q, /Start with daily_brief and catch_up together, in one step/);
+  assert.match(q, /Start with daily_brief and catch_up \{"since":"2026-11-18"\} together, in one step/);
+  assert.match(q, /Give catch_up exactly that since date\./);
   assert.match(q, /2\. What my customers did since yesterday[^\n]*\(from catch_up\)/);
   assert.match(q, /Look closer \(lead_brief\) only at those three/);
+});
+
+// Review of #1157: catch_up's own default is "since their last question to DAX" — a question at 06:30 would leave a 07:30
+// brief with an hour. The brief names the window instead, and catch_up takes it over the last question.
+test("the brief's catch_up window is the previous working day, whatever the person asked earlier that morning", () => {
+  assert.equal(briefSinceDay(new Date("2026-11-19T05:30:00Z")), "2026-11-18", "Thursday → Wednesday");
+  assert.equal(briefSinceDay(new Date("2026-11-23T05:30:00Z")), "2026-11-20", "Monday → Friday, so the weekend is in it");
+  assert.equal(briefSinceDay(new Date("2026-11-19T22:30:00Z")), "2026-11-19", "00:30 Friday in Johannesburg → Thursday");
+  const now = new Date("2026-11-19T05:30:00Z");
+  const askedAt0630 = new Date("2026-11-19T04:30:00Z");
+  const window = catchUpSince(now, askedAt0630, briefSinceDay(now));
+  assert.match(window.basis, /the start of 2026-11-18, as they asked/, "the brief's date wins over the 06:30 question");
+  assert.ok(window.since.getTime() < askedAt0630.getTime());
 });
