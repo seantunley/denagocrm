@@ -119,7 +119,7 @@ test("the quote action: the person in the workspace's signature style, never a s
   assert.match(sign, /getSetting\(SIGNATURE_DESIGN_KEY\)\.then\(parseSignatureDesign\)/);
   // Inside the card the header has the logo and the footer the company's details: the signature leaves
   // them out — which also keeps it within the card's width (the logo panel alone is wider).
-  assert.match(sign, /signatureCompanyFrom\(\s*\{ \.\.\.profile, tagline: "", address: "", phone: "", logoUrl: "" \},\s*origin,\s*\{ \.\.\.design, bannerUrl: "" \},\s*\)/);
+  assert.match(sign, /signatureCompanyFrom\(\s*\{ \.\.\.profile, tagline: "", address: "", phone: "", logoUrl: "" \},\s*origin,\s*\{ \.\.\.design, bannerUrl: "" \},\s*await signatureAccent\(tenantId\),\s*\)/);
   assert.match(sign, /placeSignatureInEmail\(email\.html, buildSignature\(\{ \.\.\.person, \.\.\.details \}, company\), SENDER_SIGNATURE_SLOT\)/);
   assert.match(sign, /catch \(err\) \{[\s\S]*return email;/, "a signature that cannot be built costs the signature, not the email");
   const send = action.slice(action.indexOf("export async function sendQuoteEmail"));

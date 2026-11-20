@@ -6,7 +6,7 @@ import { tenantOrigin } from "@/lib/tenantOrigin";
 import { listActingTenantStaff, listActingTenantTeams } from "@/lib/tenantActor";
 import { parseSignatureDesign, signatureCompanyFrom, SIGNATURE_DESIGN_KEY } from "@/lib/signature";
 import { teamLineFor } from "@/lib/signaturePeople";
-import { senderSignatureDetails } from "@/lib/signatureSender";
+import { senderSignatureDetails, signatureAccent } from "@/lib/signatureSender";
 import { PageHeader } from "@/components/page-header";
 import EmailSignatureSection from "@/components/EmailSignatureSection";
 import EmailSignatureDetails, { type SignaturePerson } from "@/components/EmailSignatureDetails";
@@ -36,7 +36,7 @@ export default async function EmailSignaturesPage() {
   const tenantId = await getActiveTenantId();
   // The previews render what the send path renders: the same design, company and glyph URLs.
   const design = parseSignatureDesign(await getSetting(SIGNATURE_DESIGN_KEY));
-  const company = signatureCompanyFrom(await getCompanyProfile(), await tenantOrigin(tenantId), design);
+  const company = signatureCompanyFrom(await getCompanyProfile(), await tenantOrigin(tenantId), design, await signatureAccent(tenantId));
   const [details, me, teams, staffIds] = await Promise.all([
     senderSignatureDetails(tenantId, user.id, design, company.assetBase).catch(() => ({})),
     basePrisma.user.findUnique({ where: { id: user.id }, select: PERSON_SELECT }),
@@ -97,6 +97,7 @@ export default async function EmailSignaturesPage() {
             bannersHref={isOwner ? "/settings/signature-banners" : null}
             details={details}
             designPreview={isOwner}
+            moreDesigns
           />
         </section>
       )}

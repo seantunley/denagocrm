@@ -13,6 +13,7 @@ import {
   saveNotificationPrefs,
 } from "@/app/actions/settings";
 import { signatureCompanyFrom, parseSignatureDesign, SIGNATURE_DESIGN_KEY } from "@/lib/signature";
+import { signatureAccent } from "@/lib/signatureSender";
 import EmailSignatureSection from "@/components/EmailSignatureSection";
 import SendingDomainCheck from "@/components/settings/SendingDomainCheck";
 import { getSetting, resolveIntegrationBundle } from "@/lib/settings";
@@ -84,7 +85,8 @@ export default async function SettingsPage({
   const profile = await getCompanyProfile();
   // The preview must render what the send path renders, glyph URLs included.
   const signatureDesign = parseSignatureDesign(await getSetting(SIGNATURE_DESIGN_KEY));
-  const signatureCompany = signatureCompanyFrom(profile, await tenantOrigin(await getActiveTenantId()), signatureDesign);
+  const signatureTenantId = await getActiveTenantId();
+  const signatureCompany = signatureCompanyFrom(profile, await tenantOrigin(signatureTenantId), signatureDesign, await signatureAccent(signatureTenantId));
   const enabled = await getEnabledModuleIds();
   const automotiveOn = enabled.has("automotive");
   const commerceOn = enabled.has("commerce");

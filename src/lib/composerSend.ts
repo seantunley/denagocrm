@@ -39,7 +39,7 @@ import { tenantOrigin } from "@/lib/tenantOrigin";
 import { bannerClickUrl, bannerHtml, bannerPosition } from "@/lib/signatureBanners";
 import { LEGAL_LINE_KEY, htmlWithLegalLine } from "@/lib/emailLegalLine";
 import { bannerForEmail, recordBannerSent } from "@/lib/signatureBannerStore";
-import { senderSignatureDetails } from "@/lib/signatureSender";
+import { senderSignatureDetails, signatureAccent } from "@/lib/signatureSender";
 import { threadableMessageId } from "@/lib/emailReply";
 
 /** Each attached quote is a PDF rendered during the send; a handful is plenty for one email. */
@@ -90,7 +90,7 @@ export async function composerHtml(
   // The workspace's signature design (Settings → My account → Email signature), same as the settings preview.
   const design = parseSignatureDesign(await getSetting(SIGNATURE_DESIGN_KEY));
   const tenantId = await tenantIdFor(user.id);
-  const company = signatureCompanyFrom(profile, await tenantOrigin(tenantId), design);
+  const company = signatureCompanyFrom(profile, await tenantOrigin(tenantId), design, await signatureAccent(tenantId));
   // The banner's link is on the same origin as the signature's own images: the workspace's.
   const origin = company.assetBase;
   // Never a reason to lose the email: a banner that can't be worked out is an email without one.

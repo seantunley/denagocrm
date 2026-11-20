@@ -15,6 +15,7 @@ import {
   type SignatureField,
   type TeamLine,
 } from "./signaturePeople";
+import { accentOf, brandSignature, DEFAULT_ACCENT, isBrandStyle, type BrandStyle } from "./signatureDesigns";
 
 /**
  * Where the signature's static assets (the social glyphs) are served from.
@@ -59,6 +60,8 @@ export type SignatureCompany = {
   instagram: string;
   /** The workspace's signature design (Settings → Email → Email signature). Absent = classic. */
   design?: SignatureDesign;
+  /** The workspace's colour (Tenant.brandPrimary) for the pack's designs. Empty = the default orange. */
+  accent?: string;
 };
 
 /**
@@ -70,7 +73,8 @@ export type SignatureCompany = {
  * Company profile's", so a profile edit flows through without a second edit here.
  */
 export type SignatureDesign = {
-  style: "card" | "classic";
+  /** card / classic: every workspace. The rest (lib/signatureDesigns.ts) come with the Email signatures pack. */
+  style: "card" | "classic" | BrandStyle;
   /** Under the name, letterspaced. Empty = the company name. */
   companyLine: string;
   /** Under the rule, beside the pin. Empty = tagline — address. */
@@ -101,7 +105,7 @@ export function parseSignatureDesign(raw: string | null | undefined): SignatureD
     const line = (s: unknown) => (typeof s === "string" ? s.trim().slice(0, SIGNATURE_LINE_MAX) : "");
     const banner = typeof v?.bannerUrl === "string" ? v.bannerUrl.trim() : "";
     return {
-      style: v?.style === "classic" ? "classic" : "card",
+      style: v?.style === "classic" || isBrandStyle(v?.style) ? v.style : "card",
       companyLine: line(v?.companyLine),
       footerLine: line(v?.footerLine),
       // Only a plain public https address reaches an <img src>.
@@ -150,9 +154,12 @@ export function signatureCompanyFrom(
   profile: CompanyProfile,
   assetBase?: string | null,
   design: SignatureDesign = DEFAULT_SIGNATURE_DESIGN,
+  /** The workspace's colour (brandForTenant(...).primary): the pack's designs are drawn in it. */
+  accent?: string | null,
 ): SignatureCompany {
   return {
     design,
+    ...(accent ? { accent } : {}),
     name: profile.name,
     tagline: profile.tagline,
     address: profile.address,
@@ -178,8 +185,12 @@ export function buildSignature(user: {
 }, company: SignatureCompany = DEFAULT_SIGNATURE_COMPANY): string {
   if (user.signatureHtml?.trim()) return user.signatureHtml;
   // A reply, when the owner chose short replies: two plain lines instead of the full signature.
-  if (user.reply && company.design?.shortReplies) return shortSignature(user, company, company.design.style === "card" ? CARD_ORANGE : "#ea580c");
+  if (user.reply && company.design?.shortReplies) {
+    const style = company.design.style;
+    return shortSignature(user, company, accentOf(company, style === "card" ? CARD_ORANGE : DEFAULT_ACCENT));
+  }
   if (company.design?.style === "card") return cardSignature(user, company, company.design);
+  if (company.design && isBrandStyle(company.design.style)) return brandSignature(company.design.style, user, company, company.design);
 
   const waDigits = (user.mobile ?? "").replace(/\D/g, "").replace(/^0/, "27");
   const safeMobile = user.mobile ? escapeHtml(user.mobile) : null;
@@ -188,6 +199,8 @@ export function buildSignature(user: {
   const safeJobTitle = user.jobTitle ? escapeHtml(user.jobTitle) : null;
   const assets = company.assetBase.trim().replace(/\/$/, "") || SITE;
   const switchboard = company.switchboard.trim();
+  // The workspace's colour while the Email signatures pack is on; the classic orange otherwise.
+  const accent = accentOf(company);
   const contactBits = [
     safeMobile
       ? `<a href="tel:${waDigits}" style="color:#475569;text-decoration:none;">${safeMobile}</a>`
@@ -197,7 +210,7 @@ export function buildSignature(user: {
     switchboard
       ? `<a href="tel:${switchboard.replace(/[^\d+]/g, "")}" style="color:#475569;text-decoration:none;">${escapeHtml(switchboard)}</a>`
       : null,
-    `<a href="mailto:${encodeURIComponent(user.email)}" style="color:#ea580c;text-decoration:none;">${safeEmail}</a>`,
+    `<a href="mailto:${encodeURIComponent(user.email)}" style="color:${accent};text-decoration:none;">${safeEmail}</a>`,
   ]
     .filter(Boolean)
     .join(`<span style="color:#cbd5e1;">&nbsp;&nbsp;|&nbsp;&nbsp;</span>`);
@@ -237,7 +250,7 @@ export function buildSignature(user: {
     instagram ? glyph(instagram, "instagram", "Instagram") : "",
     waIcon ? `<td style="padding-right:8px;">${waIcon}</td>` : "",
     website
-      ? `<td style="vertical-align:middle;"><a href="${websiteHref}" style="color:#ea580c;font-size:13px;font-weight:bold;text-decoration:none;">${escapeHtml(website)}</a></td>`
+      ? `<td style="vertical-align:middle;"><a href="${websiteHref}" style="color:${accent};font-size:13px;font-weight:bold;text-decoration:none;">${escapeHtml(website)}</a></td>`
       : "",
   ].join("");
   const socialRow = !socialCells
@@ -271,7 +284,7 @@ ${logoRow}  <tr>
     </td>
   </tr>
   <tr>
-    <td style="padding:2px 2px;color:#475569;font-size:13px;">${contactBits}${extrasHtml(user.extras, user.teamLine ?? "", "#ea580c")}</td>
+    <td style="padding:2px 2px;color:#475569;font-size:13px;">${contactBits}${extrasHtml(user.extras, user.teamLine ?? "", accent)}</td>
   </tr>
 ${socialRow}${footerRow}</table>`;
 }
@@ -302,6 +315,8 @@ function cardSignature(
   design: SignatureDesign,
 ): string {
   const assets = `${company.assetBase.trim().replace(/\/$/, "") || SITE}/branding/signature`;
+  // The workspace's colour while the Email signatures pack is on; Denago's orange otherwise (and for Denago).
+  const accent = accentOf(company, CARD_ORANGE);
   const website = company.website.trim();
   const websiteHref = `https://${escapeHtml(website.replace(/^https?:\/\//, ""))}`;
   const logoUrl = company.logoUrl.trim();
@@ -325,7 +340,7 @@ function cardSignature(
   const contacts = [
     phone ? row("phone", "Phone", `tel:${phone.replace(/[^\d+]/g, "")}`, escapeHtml(phone), "#0f172a") : "",
     user.email.trim() ? row("mail", "Email", `mailto:${encodeURIComponent(user.email)}`, escapeHtml(user.email), "#0f172a") : "",
-    website ? row("web", "Website", websiteHref, escapeHtml(website), CARD_ORANGE) : "",
+    website ? row("web", "Website", websiteHref, escapeHtml(website), accent) : "",
   ].join("");
 
   const linked = (img: string) => (website ? `<a href="${websiteHref}" style="text-decoration:none;">${img}</a>` : img);
@@ -339,9 +354,15 @@ function cardSignature(
       ? `<td class="sig-panel" width="240" height="170" style="width:240px;height:170px;background-color:${CARD_DARK};padding:0 6px 0 24px;vertical-align:middle;">${linked(
           `<img class="sig-banner" src="${escapeHtml(logoUrl)}" alt="${escapeHtml(company.name)}" width="230" style="display:block;border:0;" />`,
         )}</td>
-    <td width="57" style="width:57px;padding-right:20px;vertical-align:top;font-size:0;line-height:0;"><img src="${assets}/slant.png" alt="" width="57" height="170" style="display:block;border:0;" /></td>`
+    ${
+      // The slanted stripe is a picture, in Denago's orange; in another colour it is a straight bar of that colour.
+      accent === CARD_ORANGE
+        ? `<td width="57" style="width:57px;padding-right:20px;vertical-align:top;font-size:0;line-height:0;"><img src="${assets}/slant.png" alt="" width="57" height="170" style="display:block;border:0;" /></td>`
+        : `<td width="6" style="width:6px;background-color:${accent};font-size:0;line-height:0;">&nbsp;</td><td width="20" style="width:20px;font-size:0;line-height:0;">&nbsp;</td>`
+    }`
       : "";
-  const columns = !panel ? 1 : design.bannerUrl ? 2 : 3;
+  // The logo panel is two cells beside the details (logo + stripe), or three when the stripe is a bar and a gap.
+  const columns = !panel ? 1 : design.bannerUrl ? 2 : accent === CARD_ORANGE ? 3 : 4;
   const divider = panel ? "border-left:1px solid #e2e8f0;padding-left:24px;" : "";
 
   const footerRow = !footer
@@ -365,7 +386,7 @@ function cardSignature(
       ${photoHtml(user.extras, user.name)}<div style="font-size:28px;font-weight:800;color:#0b1220;line-height:1.1;letter-spacing:-0.3px;">${escapeHtml(user.name)}</div>
       ${titleLine ? `<div style="padding-top:6px;font-size:13px;line-height:18px;letter-spacing:3.5px;color:#64748b;">${titleLine}</div>` : ""}${qualificationsHtml(user.extras)}
       <table cellpadding="0" cellspacing="0" border="0" role="presentation" style="margin-top:10px;border-collapse:collapse;">${contacts}
-      </table>${extrasHtml(user.extras, user.teamLine ?? "", CARD_ORANGE)}
+      </table>${extrasHtml(user.extras, user.teamLine ?? "", accent)}
     </td>
   </tr>
 ${footerRow}</table>`;

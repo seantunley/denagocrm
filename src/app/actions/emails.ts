@@ -33,6 +33,8 @@ import {
   SIGNATURE_DESIGN_KEY,
   type SignatureDesign,
 } from "@/lib/signature";
+import { isBrandStyle } from "@/lib/signatureDesigns";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import { getCompanyProfile } from "@/lib/companyProfile";
 import { savePublicAsset, storesPrivately } from "@/lib/storage";
 
@@ -421,22 +423,29 @@ export async function saveSignatureDesign(formData: FormData) {
     const user = await requireTenantOwner();
     const tenantId = await getActiveTenantId();
     if (!tenantId) refuse("No workspace attached to this sign-in — sign out and back in.");
+    const stored = await storedSignatureDesign(tenantId);
+    // The pack's own designs are chosen only while it is on. One already chosen stays when it is switched off (the
+    // pack-off promise is that saved signatures don't change), so only a CHANGE to one is refused.
+    const style = formData.get("style");
+    if (isBrandStyle(style) && style !== stored.style && !(await isModuleEnabled("signatures"))) {
+      refuse("That design comes with the Email signatures pack, which is switched off for this workspace.");
+    }
     const design = parseSignatureDesign(
       JSON.stringify({
         // Everything this form doesn't set is kept: the Email signatures pack's locks, team lines and short replies
         // (saved by their own form, app/actions/emailSignatures.ts) must survive a design Save.
-        ...(await storedSignatureDesign(tenantId)),
-        style: formData.get("style"),
+        ...stored,
+        style,
         companyLine: String(formData.get("companyLine") ?? "").replace(/[\r\n]+/g, " "),
         footerLine: String(formData.get("footerLine") ?? "").replace(/[\r\n]+/g, " "),
         // The banner is set by its own buttons (saveSignatureBanner); a Save keeps it.
-        bannerUrl: (await storedSignatureDesign(tenantId)).bannerUrl,
+        bannerUrl: stored.bannerUrl,
       }),
     );
     await storeSignatureDesign(tenantId, design);
     await logAudit({
       action: "settings.email_signature.saved",
-      summary: `Set the email signature to the ${design.style === "card" ? "card" : "classic"} design`,
+      summary: `Set the email signature to the ${design.style} design`,
       user,
     });
     revalidatePath("/settings");

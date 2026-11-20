@@ -18,7 +18,7 @@ import { tenantEmailContent } from "@/lib/signing/signingEmail";
 import { deliverQuoteEmail, quotePdfFileName } from "@/lib/quoteEmail";
 import { emitQuoteJourneyEvent } from "@/lib/leadJourneyEvents";
 import { emailWithBanner, recordBannerSent } from "@/lib/signatureBannerStore";
-import { senderSignatureDetails } from "@/lib/signatureSender";
+import { senderSignatureDetails, signatureAccent } from "@/lib/signatureSender";
 import { tenantOrigin } from "@/lib/tenantOrigin";
 import { getSetting, getRegionalSettings } from "@/lib/settings";
 import { withCurrency } from "@/lib/currencyRules";
@@ -118,6 +118,7 @@ async function signQuoteEmail(
       { ...profile, tagline: "", address: "", phone: "", logoUrl: "" },
       origin,
       { ...design, bannerUrl: "" },
+      await signatureAccent(tenantId),
     );
     // The sender's own details, team line and photo (the Email signatures pack; {} while it is off). A quote email is
     // never a reply, so it always carries the full signature.

@@ -18,6 +18,7 @@ export default function EmailSignatureSection({
   bannersHref,
   details,
   designPreview = true,
+  moreDesigns = false,
 }: {
   user: { name: string; email: string; mobile: string | null; jobTitle: string | null; signatureHtml: string | null };
   company: SignatureCompany;
@@ -29,6 +30,8 @@ export default function EmailSignatureSection({
   details?: { extras?: SignatureExtras; teamLine?: string };
   /** The design and its preview. Off on the pack's page for staff: their visual editor already shows the signature. */
   designPreview?: boolean;
+  /** The pack's extra designs; only its own page offers them (the pack is on there). */
+  moreDesigns?: boolean;
 }) {
   return (
     <div className="space-y-4">
@@ -38,6 +41,7 @@ export default function EmailSignatureSection({
           company={company}
           initial={design}
           canEdit={canEditDesign}
+          moreDesigns={moreDesigns}
         />
       )}
       {canEditDesign && bannersHref && (

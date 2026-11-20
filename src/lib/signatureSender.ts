@@ -2,6 +2,7 @@ import "server-only";
 import { basePrisma } from "./db";
 import { readFile } from "./storage";
 import { isModuleEnabled } from "./modules/enabled";
+import { brandForTenant } from "./tenantBrand";
 import { senderTeamIds } from "./signatureBannerStore";
 import { teamLineFor, type SignatureExtras } from "./signaturePeople";
 import type { SignatureDesign } from "./signature";
@@ -11,6 +12,15 @@ import type { SignatureDesign } from "./signature";
  * own extra details, their team's line and their photo. Read only while the pack is on — off, every signature is
  * exactly the automatic one it was before the pack existed.
  */
+
+/**
+ * The workspace's colour for its signatures (item 5): its accent colour while the pack is on; null otherwise — or when
+ * it has none — so the signature keeps the orange it always had. The one rule for every signature caller.
+ */
+export async function signatureAccent(tenantId: string | null): Promise<string | null> {
+  if (!tenantId || !(await isModuleEnabled("signatures"))) return null;
+  return (await brandForTenant(tenantId)).primary;
+}
 
 /** The address of a person's signature photo. Never fetched by recipients: the email carries the bytes (below). */
 export const signaturePhotoPath = (userId: string) => `/api/signature-photo/${userId}`;
