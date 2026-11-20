@@ -41,7 +41,7 @@ test("AI cost follows the model's price, with cache and web search", () => {
   assert.equal(aiCostMicros({ cache_read_input_tokens: 1_000_000 }, "claude-sonnet-5"), 200_000, "cache reads at 0.1×");
   assert.equal(aiCostMicros({ cache_creation_input_tokens: 1_000_000 }, "claude-sonnet-5"), 2_500_000, "cache writes at 1.25×");
   assert.equal(aiCostMicros({ server_tool_use: { web_search_requests: 3 } }, "claude-opus-5"), 30_000, "1c a search");
-  assert.equal(aiCostMicros({ output_tokens: 1_000 }, "some-new-model"), 25_000, "unknown model priced as Opus");
+  assert.equal(aiCostMicros({ output_tokens: 1_000 }, "some-new-model"), 0, "no listed price: not billed — never a guessed rate (review of #1155)");
 });
 
 test("the usage month is Johannesburg's", () => {
