@@ -50,7 +50,8 @@ test("the script: Anthropic's own ids only, both prices required, and a reshaped
   assert.match(render(rows), /"claude-x-1": \[2, 10, 2\.5, 0\.1\],/);
   const script = readFileSync("scripts/update-model-prices.mjs", "utf8");
   assert.match(script, /if \(rows\.length < 5\) throw new Error/);
-  assert.equal(readFileSync("src/lib/modelPrices.generated.ts", "utf8"), render(Object.entries(GENERATED_MODEL_PRICES).map(([id, p]) => [id, ...p])), "the file is exactly what the script writes");
+  // Line endings ignored: a Windows checkout (core.autocrlf) has CRLF; the script and CI write LF.
+  assert.equal(readFileSync("src/lib/modelPrices.generated.ts", "utf8").replace(/\r\n/g, "\n"), render(Object.entries(GENERATED_MODEL_PRICES).map(([id, p]) => [id, ...p])), "the file is exactly what the script writes");
 });
 
 // ChatGPT (subscription) use is counted per job, never billed.

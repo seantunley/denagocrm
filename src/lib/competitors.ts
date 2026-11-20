@@ -10,8 +10,11 @@ import { inheritedTenantId } from "./tenantWrite";
 import { codexModel, codexRespond } from "./codex";
 import { aiProvider } from "./aiText";
 
-/** ChatGPT unless the workspace chose Claude (Settings → Integrations) or has only a Claude key. */
-const usesChatGpt = async () => (await aiProvider()) === "chatgpt";
+/**
+ * The workspace's AI for these jobs (lib/aiProviderRules pickAiProvider). null = none: the job does not run. It must
+ * never be read as "not ChatGPT, so Claude" — that would spend Anthropic credit nobody chose (Sean, 2026-11-20).
+ */
+const competitorAi = () => aiProvider();
 import { safeCodexError } from "./codexErrors";
 import { stripInlineCitations } from "./researchPrompt";
 import { getCompanyProfile } from "./companyProfile";
@@ -140,7 +143,9 @@ async function aiClassifyChange(input: {
     let content: string;
     // On a connected ChatGPT subscription, as lead research is — and with no
     // fallback to Anthropic credit, for the same reason (lib/ai.ts aiResearch).
-    if (await usesChatGpt()) {
+    const provider = await competitorAi();
+    if (!provider) return null;
+    if (provider === "chatgpt") {
       const reply = await codexRespond({ job: "Competitor watch", instructions: system, prompt: user, reasoningEffort: "low", timeoutMs: 25000 });
       if ("error" in reply) {
         await logError("competitor-ai", "ChatGPT classification failed", safeCodexError(reply.error));
@@ -419,7 +424,9 @@ async function callWithWebSearch(opts: {
   maxUses?: number;
   timeoutMs?: number;
 }): Promise<WebSearchOut | { error: string }> {
-  if (await usesChatGpt()) {
+  const provider = await competitorAi();
+  if (!provider) return { error: "AI isn't set up — connect ChatGPT, or choose a Claude model (Settings → Integrations)." };
+  if (provider === "chatgpt") {
     // Medium effort: the cron gives each call 90 seconds, and high effort runs
     // 50–80 seconds before the search is counted.
     const reply = await codexRespond({

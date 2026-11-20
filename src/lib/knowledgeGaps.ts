@@ -117,7 +117,7 @@ async function draftClaimed(tenantId: string, gapId: string, token: string): Pro
   const gap = await basePrisma.knowledgeGap.findFirst({ where: { id: gapId, tenantId, status: "drafting", draftEntryId: token } });
   if (!gap) return { ok: false, error: "That question was already drafted or dismissed — refresh the page." };
   const provider = await aiProvider();
-  if (!provider) return { ok: false, error: "This workspace has no AI set up — connect ChatGPT or add a Claude key (Settings → Integrations)." };
+  if (!provider) return { ok: false, error: "This workspace has no AI set up — connect ChatGPT, or choose a Claude model and add its key (Settings → Integrations)." };
   const examples = Array.isArray(gap.examples) ? gap.examples.filter((e): e is string => typeof e === "string") : [gap.question];
   const [company, brief, products, entries, replies] = await Promise.all([
     getCompanyProfile(),
