@@ -6,6 +6,7 @@ import { askCrm } from "./crmAssistant";
 import { assistantAskAllowed, assistantUserFor } from "./assistantUser";
 import { sendUpdatesToLinkedPhone } from "./assistantWhatsApp";
 import { dropAlerts, mayBeTold, setting, switchedOn } from "./proactive";
+import { briefReviewSection } from "./assistantLearnedReview";
 import type { CronSliceContext } from "./tenantCron";
 import {
   ASSISTANT_PROACTIVE_KEY,
@@ -152,11 +153,21 @@ async function writeBrief(tenantId: string, userId: string, claimId: string, now
   const result = await askCrm(user, briefQuestion(now, held.map((alert) => alert.text), { mondayStuck, chatbotProblems }), null, { source: "schedule" });
   if (!result.ok || !result.turnId) return false; // retried next tick; past 11:00 the held alerts go on their own
   const turnId = result.turnId;
+  // The owner's brief ends with what DAX learned, numbered for "keep 1" / "drop all" on WhatsApp — added by the CRM,
+  // never written by the model (lib/assistantLearnedReview). A failure here costs only that section, not the brief.
+  const review = await briefReviewSection(tenantId, user).catch(async (error: unknown) => {
+    await logError("assistant-schedule", "brief review section failed", error instanceof Error ? error.name : "unknown", { tenantId });
+    return "";
+  });
   // Done, in one step: labelled as the brief (not a scheduled question), the day marked written, and the held
   // alerts marked as delivered in it.
   // ponytail: the answer is saved by askCrm before this; if this one step fails the brief is written again next tick.
   await basePrisma.$transaction(async (tx) => {
     await tx.assistantTurn.updateMany({ where: { id: turnId, tenantId, userId }, data: { source: BRIEF_SOURCE, question: BRIEF_QUESTION } });
+    if (review) {
+      const turn = await tx.assistantTurn.findFirst({ where: { id: turnId, tenantId, userId }, select: { answer: true } });
+      if (turn) await tx.assistantTurn.updateMany({ where: { id: turnId, tenantId, userId }, data: { answer: `${turn.answer}\n${review}` } });
+    }
     await tx.assistantProactiveAlert.updateMany({ where: { id: claimId, tenantId }, data: { text: BRIEF_QUESTION, turnId, deliveredAt: new Date(), claimedAt: null } });
     if (held.length) {
       await tx.assistantProactiveAlert.updateMany({
