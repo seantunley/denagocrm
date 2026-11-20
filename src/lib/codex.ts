@@ -16,6 +16,7 @@ import {
   needsRefresh,
   parseCodexStream,
   renewedByAnotherHolder,
+  streamFailureKind,
   type CodexTokens,
   type CodexUsage,
 } from "./codexProtocol";
@@ -649,10 +650,13 @@ export async function codexRespond(input: {
         refusals.push(model);
         continue;
       }
-      // A reason only: the provider's failure text can echo what was asked,
+      // The code only: the provider's failure text can echo what was asked,
       // and what was asked mentions customers (no client data in logs).
-      await logError("codex-research", "ChatGPT response failed");
-      return { error: `ChatGPT could not answer: ${parsed.failed.slice(0, 120)}` };
+      await logError("codex-research", `ChatGPT response failed (${parsed.failedCode ?? "no code"})`);
+      const kind = streamFailureKind(parsed.failedCode);
+      if (kind === "limit") return { error: "ChatGPT is unavailable or over its usage limit (429).", transient: true };
+      // A passing fault is transient, so DAX retries it once (assistantBreaker) instead of giving up at once.
+      return { error: `ChatGPT could not answer: ${parsed.failed.slice(0, 120)}`, ...(kind === "passing" ? { transient: true as const } : {}) };
     }
 
     // The model that answered is not the one the workspace had — it retired,

@@ -191,13 +191,14 @@ export function accountIdFromToken(token: string | undefined | null): string | n
 /** outputTokens only when the stream reports it (review of #1056: screening meters ChatGPT calls too). */
 export type CodexUsage = { inputTokens: number; cachedTokens: number; outputTokens?: number };
 
-export function parseCodexStream(raw: string): { text: string; incomplete: boolean; failed: string | null; usage: CodexUsage | null } {
+export function parseCodexStream(raw: string): { text: string; incomplete: boolean; failed: string | null; failedCode: string | null; usage: CodexUsage | null } {
   let deltas = "";
   let itemsText = "";
   let completedText = "";
   let incomplete = false;
   let terminal = false;
   let failed: string | null = null;
+  let failedCode: string | null = null;
   let usage: CodexUsage | null = null;
   const readUsage = (response: unknown) => {
     const u = (response as { usage?: { input_tokens?: unknown; output_tokens?: unknown; input_tokens_details?: { cached_tokens?: unknown } } } | undefined)?.usage;
@@ -243,17 +244,40 @@ export function parseCodexStream(raw: string): { text: string; incomplete: boole
       case "response.failed":
         terminal = true;
         failed = errorText(event.response) ?? "response.failed";
+        failedCode = errorCode(event.response);
         break;
       case "error":
         terminal = true;
         failed = errorText(event) ?? "error";
+        failedCode = errorCode(event);
         break;
     }
   }
 
   // `||`, not `??`: an empty completed output is exactly the case that was
   // silently discarding the answer.
-  return { text: (completedText || itemsText || deltas).trim(), incomplete: incomplete || !terminal, failed, usage };
+  return { text: (completedText || itemsText || deltas).trim(), incomplete: incomplete || !terminal, failed, failedCode, usage };
+}
+
+/**
+ * The failure's code ("server_error", "rate_limit_exceeded"…): an identifier, never the provider's words, so it is safe
+ * to log — the message can echo what was asked. Anything that isn't a plain identifier is dropped.
+ */
+function errorCode(source: unknown): string | null {
+  const error = (source as { error?: { code?: unknown; type?: unknown } })?.error;
+  const code = error?.code ?? error?.type ?? (source as { code?: unknown })?.code;
+  return typeof code === "string" && /^[A-Za-z0-9_.-]{1,64}$/.test(code) ? code : null;
+}
+
+/**
+ * What a failure partway through a reply means (2026-11-20: DAX gave up at once on three of these in one day).
+ * "limit": the plan's usage limit — lifts on its own, not in a second. "permanent": the same request fails the same way.
+ * "passing": a server fault or no code at all — worth one retry, like a 5xx before the stream starts.
+ */
+export function streamFailureKind(code: string | null): "limit" | "permanent" | "passing" {
+  if (code && /rate_limit|usage_limit|quota|insufficient/i.test(code)) return "limit";
+  if (code && /context_length|invalid|content|policy|unsupported|not_found/i.test(code)) return "permanent";
+  return "passing";
 }
 
 function outputText(response: unknown): string {
