@@ -67,6 +67,8 @@ export async function transferVehicle(vehicleId: string, formData: FormData) {
         tenantId,
         vehicleId,
         newContactId,
+        // The owner the dialog showed: a vehicle transferred by someone else meanwhile is refused, not moved on.
+        expectedOwnerId: text(formData, "currentOwnerId", 64) || null,
         newContact: creating
           ? {
               firstName: text(formData, "firstName", 80),

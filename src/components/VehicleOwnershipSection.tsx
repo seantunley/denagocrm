@@ -58,6 +58,7 @@ export default async function VehicleOwnershipSection({
         vehicleId={vehicle.id}
         model={vehicle.model}
         currentOwner={contactName(vehicle.contact)}
+        currentOwnerId={vehicle.contactId}
         contacts={contacts.map((c) => ({ id: c.id, label: contactName(c) }))}
         canCreateContact={canCreateContact}
         earliest={day(current?.ownedFrom ?? new Date(0))}

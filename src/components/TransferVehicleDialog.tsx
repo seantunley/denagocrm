@@ -16,6 +16,7 @@ export default function TransferVehicleDialog({
   vehicleId,
   model,
   currentOwner,
+  currentOwnerId,
   contacts,
   canCreateContact,
   earliest,
@@ -28,6 +29,8 @@ export default function TransferVehicleDialog({
   vehicleId: string;
   model: string;
   currentOwner: string;
+  /** Sent back with the transfer: refused if the vehicle changed hands meanwhile. */
+  currentOwnerId: string;
   /** Contacts this person may open, the current owner left out. */
   contacts: { id: string; label: string }[];
   canCreateContact: boolean;
@@ -55,6 +58,7 @@ export default function TransferVehicleDialog({
   return (
     <ModalTrigger label="Transfer to new owner" title={`Transfer ${model} to a new owner`} buttonClass="btn-secondary" defaultOpen={openOnArrival}>
       <SaveForm action={transferVehicle.bind(null, vehicleId)} success="Transferred" className="space-y-4">
+        <input type="hidden" name="currentOwnerId" value={currentOwnerId} />
         <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm">
           <p>
             Currently owned by <strong>{currentOwner}</strong>. The vehicle&apos;s services, claims, job cards and documents stay

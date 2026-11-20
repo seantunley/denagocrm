@@ -121,6 +121,12 @@ export type TransferInput = {
   vehicleId: string;
   /** An existing contact — or, with `newContact`, "" and the contact is created inside the transfer. */
   newContactId: string;
+  /**
+   * The owner the person saw when they chose to transfer (the dialog sends it). If the vehicle has changed hands since,
+   * the transfer is refused rather than moving it on from someone they never saw: two people transferring the same
+   * vehicle at once don't both land.
+   */
+  expectedOwnerId?: string | null;
   newContact?: NewOwnerContact | null;
   date: Date;
   reason: TransferReason;
@@ -155,6 +161,9 @@ export async function transferVehicleOwnership(
         select: { model: true, contactId: true, fleetId: true },
       });
       if (!vehicle) refuse("This vehicle is in the trash or no longer exists, so it can't be transferred.");
+      if (input.expectedOwnerId && vehicle.contactId !== input.expectedOwnerId) {
+        refuse("Someone else transferred this vehicle just now. Refresh the page to see its owner.");
+      }
       const open = await tx.vehicleOwnership.findFirst({
         where: { tenantId, vehicleId, ownedUntil: null },
         select: { id: true, ownedFrom: true, warranty: true },

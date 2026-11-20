@@ -88,9 +88,9 @@ async function main() {
     const tomorrow = new Date(Date.now() + 86_400_000);
     check("a transfer dated in the future is refused", /future/.test(await refused(() => asOwner(a, () => transferVehicleOwnership({ tenantId: A, vehicleId: vehicle.id, newContactId: third.id, date: tomorrow, reason: "other", odometerKm: null, note: null, proofDocumentId: null, actor })))));
 
-    // Two at once: exactly one lands.
+    // Two at once, each from the owner its dialog showed (the second): exactly one lands.
     const race = await Promise.allSettled([third.id, fourth.id].map((newContactId) =>
-      asOwner(a, () => transferVehicleOwnership({ tenantId: A, vehicleId: vehicle.id, newContactId, date: day("2026-03-01"), reason: "sold_privately", odometerKm: null, note: null, proofDocumentId: null, actor })),
+      asOwner(a, () => transferVehicleOwnership({ tenantId: A, vehicleId: vehicle.id, newContactId, expectedOwnerId: second.id, date: day("2026-03-01"), reason: "sold_privately", odometerKm: null, note: null, proofDocumentId: null, actor })),
     ));
     const landed = race.filter((r) => r.status === "fulfilled").length;
     const open = await openRows(vehicle.id);

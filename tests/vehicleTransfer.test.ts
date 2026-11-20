@@ -85,6 +85,9 @@ test("the transfer is one transaction: the vehicle held, every update count-chec
   const transfer = core.slice(core.indexOf("export async function transferVehicleOwnership"), core.indexOf("export async function undoLastTransfer"));
   assert.match(transfer, /prisma\.\$transaction\(async \(tx\) =>/);
   assert.match(transfer, /FROM "Vehicle" WHERE "id" = \$\{vehicleId\} AND "tenantId" = \$\{tenantId\} AND "deletedAt" IS NULL FOR UPDATE/, "soft-deleted vehicles are not transferable");
+  assert.match(transfer, /if \(input\.expectedOwnerId && vehicle\.contactId !== input\.expectedOwnerId\) \{\s*refuse\(/, "two people transferring at once: the second is refused, not moved on from an owner they never saw");
+  assert.match(code("src/app/actions/vehicleTransfer.ts"), /expectedOwnerId: text\(formData, "currentOwnerId", 64\) \|\| null,/);
+  assert.match(code("src/components/TransferVehicleDialog.tsx"), /<input type="hidden" name="currentOwnerId" value=\{currentOwnerId\} \/>/);
   assert.match(transfer, /if \(closed\.count !== 1\) refuse\(/);
   assert.match(transfer, /if \(moved\.count !== 1\) refuse\(/);
   assert.match(transfer, /logAuditStrict\(\s*\{\s*action: "vehicle\.transferred"[\s\S]*?\},\s*tx,\s*\)/);
