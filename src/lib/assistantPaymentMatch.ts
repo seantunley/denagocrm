@@ -11,6 +11,7 @@ import { MAX_CHOICES } from "./assistantActions";
 import { getAccessibleQuoteIds, hasPermission, type PermissionUser } from "./permissions";
 import { getRegionalSettings } from "@/lib/settings";
 import { withCurrency } from "./currencyRules";
+import { summary } from "./assistant/observationFit";
 
 type Output = { rows: { label: string; detail: string; href: string }[]; data: unknown[]; truncated: boolean };
 
@@ -76,12 +77,12 @@ export async function matchPayment(user: PermissionUser, args: z.infer<typeof ma
   return {
     truncated: matches.length > page.length || quotes.length === CANDIDATES,
     data: [
-      {
+      summary({
         amount: formatZAR(amountCents, moneyFmt), reference: args.reference ?? null, paidOn: args.paidOn ?? null,
         verdict: clear
           ? `ONE CLEAR MATCH: Q-${clear.candidate.quoteNumber} — propose record_payment for it`
           : page.length ? "SEVERAL POSSIBLE — offer them as choices; do not pick one" : "NO MATCH among the invoiced quotes with money owing that this person can open — ask which quote",
-      },
+      }),
       ...page.map(({ candidate: c, reasons }) => ({
         quote: `Q-${c.quoteNumber}`,
         invoice: c.invoiceNumber ? formatInvoiceNumber(c.invoiceNumber) : null,

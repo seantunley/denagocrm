@@ -17,6 +17,7 @@ import type { ModuleId } from "./modules/registry";
 import { contactName } from "./format";
 import { getFieldDefs } from "./customFieldValues";
 import { displayValue, isFieldShown, multiValues, type CustomEntity, type FieldDef, type LinkChoices, type LinkTarget } from "./customFields-helpers";
+import { summary } from "./assistant/observationFit";
 
 /*
  * DAX AND CUSTOM FIELDS (Sean, 2026-11-14: "DAX must have knowledge of those things, permission based").
@@ -244,14 +245,14 @@ export async function customFieldsLookup(user: PermissionUser, args: CustomField
   return {
     truncated: capped || live.length > take,
     data: [
-      {
+      summary({
         record: args.record,
         field: def.label,
         ...(args.value ? { value: args.value } : {}),
         total: capped ? `at least ${live.length}` : live.length,
         listed: page.length,
         ...(capped ? { partial: `Only the ${SCAN_MAX} most recently changed values were read, so this is not every match — say so, and ask for a narrower value for the rest.` } : {}),
-      },
+      }),
       ...page.map((v) => ({ link: `/${record.path}/${v.recordId}`, name: labels.get(v.recordId), [def.label]: displayValue(def, v.value, links) })),
     ],
     rows: page.map((v) => ({ label: labels.get(v.recordId) ?? args.record, detail: `${def.label}: ${displayValue(def, v.value, links)}`, href: `/${record.path}/${v.recordId}` })),

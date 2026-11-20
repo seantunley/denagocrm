@@ -6,6 +6,7 @@ import { dealFinanceHouses, loadDealFinance, loadFinanceDeals, loadLeadFinances,
 import { financeStatusLabel, financeStatusShort, isFinanceStatus } from "./dealFinanceRules";
 import type { FinanceCard } from "./assistantFinanceRules";
 import { johannesburgDateKey } from "./activityDay";
+import { summary } from "./assistant/observationFit";
 
 /**
  * DAX AND FINANCE (Sean, 2026-11-16) — "which deals are waiting on finance?", "WesBank approved Jody". The lookup reads
@@ -36,7 +37,7 @@ export async function financeLookup(user: PermissionUser, args: FinanceArgs): Pr
       href: `/leads/${deal.leadId}?tab=finance`,
     })),
     data: [
-      { total: deals.length, toChase: deals.filter((deal) => deal.chase).length, note: args.all ? "Every financed deal." : "In progress only: not paid out, withdrawn or on a lost deal." },
+      summary({ total: deals.length, toChase: deals.filter((deal) => deal.chase).length, note: args.all ? "Every financed deal." : "In progress only: not paid out, withdrawn or on a lost deal." }),
       ...rows.map((deal) => ({
         leadId: deal.leadId, quote: deal.quoteNumber ? `Q-${deal.quoteNumber}` : null, link: `/leads/${deal.leadId}?tab=finance`, customer: deal.name, deal: deal.leadStatus, owner: deal.ownerName ?? "unassigned",
         financeHouse: deal.financeHouse, reference: deal.reference, status: financeStatusLabel(deal.status), since: johannesburgDateKey(deal.statusAt),

@@ -12,6 +12,7 @@ import { firstCustomerView, memoCustomer } from "../../signing/customerView";
 import { getAccessibleQuoteIds, hasAnyPermission } from "../../permissions";
 import { countQuoted, modelsNamed, quoteLineWhere } from "../../quotedProducts";
 import { quoteArgs } from "../../crmAssistantPlan";
+import { summary } from "../observationFit";
 import { DAY, CANDIDATES, ToolOutput, User, dateKey, LIVE_SIGNING, signingFor, viewedByCustomer, quoteFacts, refused } from "../lookupKit";
 
 export async function findQuotes(user: User, raw: z.infer<typeof quoteArgs>): Promise<ToolOutput> {
@@ -103,7 +104,7 @@ export async function findQuotes(user: User, raw: z.infer<typeof quoteArgs>): Pr
   return {
     // With an exact count, a shorter list is not a cut-off answer: "matching" says how many there are.
     truncated: matching ? !matching.exact : priced.length > take || quotes.length === CANDIDATES,
-    data: [...(matching ? [{ matching }] : []), ...page.map(({ quote, total }) => ({
+    data: [...(matching ? [summary({ matching })] : []), ...page.map(({ quote, total }) => ({
       quote: `Q-${quote.number}`,
       link: `/quotes/${quote.id}`,
       leadId: quote.lead?.id ?? null,

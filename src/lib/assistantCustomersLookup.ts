@@ -8,6 +8,7 @@ import { isModuleEnabled } from "./modules/enabled";
 import { contactName } from "./format";
 import { birthdayKeys, formatBirthday, nextDays } from "./birthdays";
 import type { customersArgs } from "./crmAssistantPlan";
+import { summary } from "./assistant/observationFit";
 
 /**
  * CUSTOMERS AS A LIST (Sean, 2026-11-14: "DAX must have knowledge of those things, permission based") — until now DAX
@@ -116,7 +117,7 @@ export async function customersLookup(user: PermissionUser, args: Args): Promise
   }));
   return {
     truncated: total > shown.length,
-    data: [{ total, listed: shown.length }, ...shown],
+    data: [summary({ total, listed: shown.length }), ...shown],
     rows: shown.map((c) => ({
       label: c.customer,
       detail: [c.area, c.birthday ? `birthday ${c.birthday}` : null, `${c.openDeals} open deal${c.openDeals === 1 ? "" : "s"}`, c.owner].filter(Boolean).join(" · "),

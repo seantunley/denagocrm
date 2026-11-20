@@ -12,7 +12,7 @@ import { splitListed } from "../assistantListedRules";
 import { type PriorTurn } from "../crmAssistantPlan";
 import { DAY, HISTORY_DAYS, ToolOutput, User } from "./lookupKit";
 import { when } from "./lookups/schedule";
-import { fitObservation } from "./observationFit";
+import { fitObservation, leadingSummaries } from "./observationFit";
 
 /** Turns this recent are "the conversation"; older ones are only reachable via recall. */
 export const CONVERSATION_WINDOW_MS = 3 * 60 * 60 * 1000;
@@ -284,7 +284,7 @@ export function observationText(o: Observation): string {
   const { truncated, results } = { truncated: o.output.truncated, results: cleanDeep(o.output.data) };
   const budget = OBSERVATION_BUDGET[o.tool] ?? OBSERVATION_CHARS;
   // Over budget: whole records and "showing N of M", not JSON cut mid-record (lib/assistant/observationFit).
-  const body = fitObservation(results, truncated, budget);
+  const body = fitObservation(results, truncated, budget, leadingSummaries(o.output.data));
   return `${o.tool} ${JSON.stringify(cleanDeep(o.args ?? {}))} →\n${body}`;
 }
 

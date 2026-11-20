@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { fitObservation, lookupFailedNote } from "../src/lib/assistant/observationFit";
+import { fitObservation, leadingSummaries, lookupFailedNote, summary } from "../src/lib/assistant/observationFit";
 import { briefQuestion, briefSinceDay } from "../src/lib/proactiveRules";
 import { catchUpSince } from "../src/lib/assistantCatchUp";
 
@@ -26,6 +26,40 @@ test("gap 2: a big result ends at whole records and says how many were left out"
   // A single record that still doesn't fit is cut as before, rather than nothing shown.
   assert.match(fitObservation([{ body: "y".repeat(5_000) }], false, 1_000), /…\(cut\)$/);
   assert.match(readFileSync("src/lib/assistant/context.ts", "utf8"), /const body = fitObservation\(results, truncated, budget\);/);
+});
+
+// Review of #1157: find_leads heads its list with { total, listed }, find_quotes with { matching } — counted as records,
+// "showing 13" meant 12 leads and "showing 1" none. Summaries are marked where made, always kept, never counted.
+test("a summary heading the list is kept whole and never counted as a record", () => {
+  const leads = [summary({ total: 61, listed: 25, note: "newest first" }), ...rows(25)];
+  assert.equal(leadingSummaries(leads), 1);
+  assert.equal(leadingSummaries(rows(3)), 0, "unmarked look-alikes are records");
+  assert.equal(leadingSummaries([{ total: 61, listed: 25 }, ...rows(2)]), 0, "only a MARKED summary counts — never guessed by shape");
+
+  const out = JSON.parse(fitObservation(JSON.parse(JSON.stringify(leads)), true, 1_500, leadingSummaries(leads)));
+  const shownLeads = out.results.slice(1);
+  assert.deepEqual(out.results[0], { total: 61, listed: 25, note: "newest first" }, "the summary, whole, first");
+  assert.equal(out.showing, `${shownLeads.length} of 25+`, "records only");
+  assert.ok(shownLeads.every((r: { id: string }) => r.id.startsWith("lead-")));
+  assert.match(out.note, /the summary before them is complete/);
+
+  // Only the summary fits: "0 of 25" — never "showing 1".
+  const tight = JSON.parse(fitObservation(leads, false, 400, 1));
+  assert.equal(tight.showing, "0 of 25");
+  assert.equal(tight.results.length, 1);
+
+  const quotes = [summary({ matching: "3 quotes with a Rover XL in red" }), ...rows(30)];
+  assert.match(JSON.parse(fitObservation(quotes, false, 1_200, leadingSummaries(quotes))).showing, /^\d+ of 30$/);
+
+  // Wired: the count is read from the lookup's own objects (cleanDeep copies them), and every summary-first lookup marks it.
+  assert.match(readFileSync("src/lib/assistant/context.ts", "utf8"), /fitObservation\(results, truncated, budget, leadingSummaries\(o\.output\.data\)\)/);
+  for (const [file, n] of [
+    ["src/lib/assistant/lookups/leads.ts", 1], ["src/lib/assistant/lookups/quotes.ts", 1], ["src/lib/assistantCustomersLookup.ts", 1],
+    ["src/lib/assistantCustomFieldsLookup.ts", 1], ["src/lib/assistantFinance.ts", 1], ["src/lib/assistantInvoicesLookup.ts", 1],
+    ["src/lib/assistantPartsFleetsLookup.ts", 2], ["src/lib/assistantPaymentMatch.ts", 1], ["src/lib/assistantTestDrivesLookup.ts", 1],
+  ] as const) {
+    assert.equal((readFileSync(file, "utf8").match(/\bsummary\(\{/g) ?? []).length, n, file);
+  }
 });
 
 test("gap 1: a failed lookup says which one, what kind of failure, and what to do", () => {

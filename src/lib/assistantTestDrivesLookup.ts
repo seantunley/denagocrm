@@ -7,6 +7,7 @@ import { isModuleEnabled } from "./modules/enabled";
 import { accessibleTestDriveWhere } from "./testDriveAccess";
 import { testDriveStatusLabel } from "./testDriveMetrics";
 import { contactName } from "./format";
+import { summary } from "./assistant/observationFit";
 
 /**
  * TEST DRIVES, past and upcoming (Sean, 2026-11-14: "DAX must have knowledge of those things, permission based").
@@ -129,14 +130,14 @@ export async function testDrivesLookup(user: PermissionUser, args: TestDrivesArg
   return {
     truncated: filtered.length > take || count > READ,
     data: [
-      {
+      summary({
         total,
         listed: page.length,
         period: `${saDay(from).slice(0, 10)} to ${saDay(new Date(to.getTime() - DAY)).slice(0, 10)}`,
         ...(unknownLeftOut
           ? { unverified: `${unknownLeftOut} more drive(s) left out: whether that customer bought can't be checked with this person's access (a deal they can't open). Say so — never call them "didn't buy".` }
           : {}),
-      },
+      }),
       ...page.map((d) => {
         const deal = boughtAfter(d);
         return {
