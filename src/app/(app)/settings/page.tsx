@@ -17,6 +17,7 @@ import { signatureCompanyFrom, buildSignature, parseSignatureDesign, SIGNATURE_D
 import SignatureDesignEditor from "@/components/SignatureDesignEditor";
 import SendingDomainCheck from "@/components/settings/SendingDomainCheck";
 import { getSetting, resolveIntegrationBundle } from "@/lib/settings";
+import { imapUsable, mailSetupLabel, smtpUsable } from "@/lib/integrationsCatalogue";
 import { getCompanyProfile } from "@/lib/companyProfile";
 import { tenantOrigin } from "@/lib/tenantOrigin";
 import { AddUserForm, ChangePasswordForm } from "@/components/TeamForms";
@@ -650,11 +651,10 @@ export default async function SettingsPage({
             <Row
               title="Email sending (SMTP)"
               status={
-                smtpMail?.SMTP_HOST ? (
-                  <span className="badge bg-emerald-500/15 text-emerald-300">Set up</span>
-                ) : (
-                  <span className="badge bg-amber-500/15 text-amber-300">Not set up</span>
-                )
+                // The same test the send path applies (smtpUsable): a saved host alone is "Incomplete", not "Set up".
+                <span className={smtpUsable(smtpMail) ? "badge bg-emerald-500/15 text-emerald-300" : "badge bg-amber-500/15 text-amber-300"}>
+                  {mailSetupLabel(smtpUsable(smtpMail), Boolean(smtpMail && Object.values(smtpMail).some(Boolean)))}
+                </span>
               }
             >
               <p className="text-xs text-muted-foreground mb-4">
@@ -664,17 +664,16 @@ export default async function SettingsPage({
                 <Link href="/settings/integrations" className="text-primary underline">Settings → Integrations → Outbound email</Link>.
               </p>
               <TestEmailButton />
-              {smtpMail?.SMTP_HOST && <SendingDomainCheck />}
+              {smtpUsable(smtpMail) && <SendingDomainCheck />}
             </Row>
 
             <Row
               title="Incoming email (IMAP)"
               status={
-                imapMail?.IMAP_HOST ? (
-                  <span className="badge bg-emerald-500/15 text-emerald-300">Set up</span>
-                ) : (
-                  <span className="badge bg-amber-500/15 text-amber-300">Not set up</span>
-                )
+                // The same test the inbox sync applies (imapUsable).
+                <span className={imapUsable(imapMail) ? "badge bg-emerald-500/15 text-emerald-300" : "badge bg-amber-500/15 text-amber-300"}>
+                  {mailSetupLabel(imapUsable(imapMail), Boolean(imapMail && Object.values(imapMail).some(Boolean)))}
+                </span>
               }
             >
               <p className="text-xs text-muted-foreground mb-4">

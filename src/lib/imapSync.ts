@@ -15,6 +15,7 @@ import { logError } from "./errorLog";
 import { logAudit, logAuditStrict } from "./audit";
 import { bounceLines, failedAddresses, newBounceLines, readBounce, type Bounce } from "./emailBounce";
 import { fileFinanceHouseEmail } from "./financeEmail";
+import { imapUsable } from "./integrationsCatalogue";
 
 // The transaction client handed to prisma.$transaction — derived from our
 // EXTENDED client (soft-delete filtering), which differs from the plain
@@ -543,7 +544,8 @@ export async function syncInboundEmail(): Promise<number> {
   const bundle = await resolveIntegrationBundle(tenantId, "imap");
   if (!bundle) return 0;
   const { IMAP_HOST: host, IMAP_PORT: portRaw, IMAP_SECURE: secureRaw, IMAP_USER: user, IMAP_PASS: pass } = bundle;
-  if (!host || !user || !pass) return 0;
+  // The same test the Email tab shows (integrationsCatalogue imapUsable) — one rule for "can read".
+  if (!imapUsable(bundle) || !host || !user || !pass) return 0;
   if (!(await acquireSyncLock())) return 0; // another run is in progress
 
   const secure = secureRaw !== "false";

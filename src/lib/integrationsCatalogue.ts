@@ -122,6 +122,22 @@ export function workspaceIntegrationState(input: {
   return "not-set-up";
 }
 
+/**
+ * Whether outgoing / incoming mail can actually run with these resolved values — the SAME tests the mail code applies
+ * (email.ts getSmtpConfig: host and From; imapSync syncInboundEmail: host, username and password). Review of #1158: a
+ * saved host alone read "Set up" while nothing could send.
+ */
+export function smtpUsable(values: Record<string, string | null> | null | undefined): boolean {
+  return Boolean(values?.SMTP_HOST && values?.SMTP_FROM);
+}
+export function imapUsable(values: Record<string, string | null> | null | undefined): boolean {
+  return Boolean(values?.IMAP_HOST && values?.IMAP_USER && values?.IMAP_PASS);
+}
+/** The Email tab's word for it: usable, partly filled in, or nothing at all. */
+export function mailSetupLabel(usable: boolean, anything: boolean): "Set up" | "Incomplete" | "Not set up" {
+  return usable ? "Set up" : anything ? "Incomplete" : "Not set up";
+}
+
 /** "5 minutes ago" — for "last checked …". */
 export function checkedAgo(at: Date, now: Date = new Date()): string {
   const minutes = Math.max(0, Math.round((now.getTime() - at.getTime()) / 60_000));

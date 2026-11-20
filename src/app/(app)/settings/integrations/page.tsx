@@ -30,7 +30,6 @@ import {
 } from "@/lib/tenantCredentialFields";
 import { SettingsWorkspace, SettingsIntegrationRow } from "@/components/settings-workspace";
 import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
-import { tenantEnforcing } from "@/lib/tenantEnforcement";
 import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { hasIntegrationFlow, getIntegrationFlow, flowFieldKeys } from "@/lib/integrationFlow";
 import { getIntegrationConnections, type IntegrationConnectionState } from "@/lib/integrationConnection";
@@ -88,9 +87,10 @@ export default async function IntegrationsPage({ searchParams }: { searchParams?
   };
   const xeroTaxChoices = parseXeroTaxChoices(await xeroSetting(XERO_TAX_CHOICES_KEY));
   const paymentsFromXero = (await xeroSetting(XERO_PAYMENTS_SOURCE_KEY)) !== "crm";
-  // Founding tenant falls back to platform credentials when no override is set.
-  // Every other tenant gets null — they must configure their own credentials.
-  const usesPlatformFallback = !tenantEnforcing() || tenantId === DEFAULT_TENANT_ID;
+  // Only the founding workspace has original settings to fall back to — the SAME rule as resolveIntegrationBundle,
+  // whatever the enforcement mode (review of #1158: off/monitor told every workspace it had them). Every other
+  // workspace gets null and must configure its own.
+  const usesPlatformFallback = tenantId === DEFAULT_TENANT_ID;
 
   const allKeys = TENANT_CREDENTIAL_INTEGRATIONS.flatMap((integration) =>
     integration.fields.map((field) => field.key)

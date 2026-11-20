@@ -110,5 +110,5 @@ test("the check is owner-only, read-only, and a failed lookup is never reported 
   assert.match(action, /if \(root === null \|\| dmarc === null\) return \{ ok: false as const, error: "The lookup did not get an answer\. Try again in a minute\." \};/);
   assert.doesNotMatch(action, /prisma\.|putSetting|sendEmail/, "it reads DNS and nothing else");
   // Shown when outgoing mail is set up — read by the same per-workspace rule the mail code uses (2026-11-20).
-  assert.match(src("src/app/(app)/settings/page.tsx"), /\{smtpMail\?\.SMTP_HOST && <SendingDomainCheck \/>\}/);
+  assert.match(src("src/app/(app)/settings/page.tsx"), /\{smtpUsable\(smtpMail\) && <SendingDomainCheck \/>\}/);
 });
