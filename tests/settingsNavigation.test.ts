@@ -84,8 +84,10 @@ const keysFor = (viewer: Parameters<typeof visibleSettingsGroups>[0], enabled?: 
 test("a non-owner sees exactly the settings their permissions open", () => {
   const keys = keysFor({ isOwner: false, permissions: ["pipelines.manage", "workshop.manage", "roles.view"] });
   // "integrations" is the one Integrations page (batch 6), open to tenant owners.
-  assert.deepEqual(keys.sort(), ["account", "integrations", "pipeline", "team", "workshop-settings"].sort());
-  assert.deepEqual(keysFor({ isOwner: false, permissions: [] }).sort(), ["account", "integrations"]);
+  // "email-signatures": everyone's own signature (the Email signatures pack, 2026-11-20) — gone with the pack (below).
+  assert.deepEqual(keys.sort(), ["account", "email-signatures", "integrations", "pipeline", "team", "workshop-settings"].sort());
+  assert.deepEqual(keysFor({ isOwner: false, permissions: [] }).sort(), ["account", "email-signatures", "integrations"]);
+  assert.deepEqual(keysFor({ isOwner: false, permissions: [] }, new Set(["core"])).sort(), ["account", "integrations"], "pack off: not listed");
 });
 
 test("the platform owner sees everything; switched-off modules hide for everyone", () => {

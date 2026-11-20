@@ -3,6 +3,7 @@ import { prisma } from "./db";
 import { ciExactIds } from "./ciExact";
 import { contactName } from "./format";
 import { sendPushToAll } from "./push";
+import { isModuleEnabled } from "./modules/enabled";
 import {
   BANNER_REF,
   CLICK_MAX_ANONYMOUS_PER_DAY,
@@ -36,6 +37,9 @@ export async function senderTeamIds(tenantId: string, userId: string): Promise<s
 
 /** The banners this person's emails could carry right now, the default first (lib/signatureBanners.ts → eligibleBanners). */
 export async function bannersForSender(tenantId: string, senderId: string, place: BannerPlace = "composer"): Promise<BannerRow[]> {
+  // Banners belong to the Email signatures pack (2026-11-20): off, no email carries one. Every sender path (composer,
+  // quote email, the composer's banner list) comes through here, so this is the one check.
+  if (!(await isModuleEnabled("signatures"))) return [];
   const banners = await prisma.signatureBanner.findMany({ where: { tenantId, active: true }, select: BANNER_SELECT });
   if (banners.length === 0) return [];
   // Team membership is only looked up when some banner is for a team.
