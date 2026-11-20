@@ -287,19 +287,24 @@ export default function AppShell({
 
       {/* Mobile top bar. Three columns, not a centred logo with the cluster
           floating over it: an absolutely-positioned cluster reserves NO layout
-          space, so on a 375px screen a wordmark brand — BrandLogo falls back to
-          the workspace name, whitespace-nowrap, up to 120 characters — ran
-          straight underneath the controls. The outer columns are the same width,
-          so the logo is still optically centred, and it CLIPS rather than
-          growing into the cluster. */}
+          space, so a wordmark brand ran straight underneath the controls.
+
+          THE CLUSTER'S COLUMN FITS THE CLUSTER. It was a fixed 7.5rem, sized for
+          the ~115px the cluster once was. Search then joined it on phones and a
+          notification or birthday count widens it further (~139px and up), so it
+          spilled out of its column and over the logo (Sean, 2026-11-20). A fixed
+          width is a guess about a group that keeps changing; now the two outer
+          columns share the spare room equally (flex-1 basis-0), and only the
+          right one refuses to go below its content. So the logo is centred
+          whenever there is room, slides left when there is not, and CLIPS rather
+          than ever meeting the cluster. */}
       <header className="fixed inset-x-0 top-0 z-40 flex h-12 items-center gap-2 border-b border-sidebar-border bg-sidebar/90 px-2 backdrop-blur-xl lg:hidden">
-        {/* Kept empty so the logo stays centred; connection status is the dot on the avatar (AccountMenu). */}
-        <div className="w-[7.5rem] shrink-0" aria-hidden />
+        {/* Kept empty so the logo stays centred; connection status is the dot on the avatar (AccountMenu). min-w-0: this one may give all its room away. */}
+        <div className="min-w-0 flex-1 basis-0" aria-hidden />
 
         {/* min-w-0 lets the flex item shrink below its content, overflow-hidden
-            clips what is left. Together the centre column can never grow past its
-            own width, so the logo cannot reach the cluster whatever it contains. */}
-        <div className="flex min-w-0 flex-1 justify-center overflow-hidden">
+            clips what is left: the logo cannot reach the cluster whatever it contains. */}
+        <div className="flex min-w-0 shrink justify-center overflow-hidden">
           <BrandLogo
             logoUrl={brand?.logoUrl ?? null}
             alt={brand?.displayName ?? "Denago Cape Town"}
@@ -307,8 +312,11 @@ export default function AppShell({
             wordmarkClassName="text-xs"
           />
         </div>
-        <div className="flex w-[7.5rem] shrink-0 justify-end">
-          <AccountCluster user={user} isOwner={ownsWorkspace(user)} tenantId={tenantId} unreadNotices={unreadNotices} birthdaysToday={birthdaysToday} />
+        {/* No min-w-0 here, on purpose: a flex item's minimum is its content, so this column is never narrower than the cluster. */}
+        <div className="flex flex-1 basis-0 justify-end">
+          <div className="shrink-0">
+            <AccountCluster user={user} isOwner={ownsWorkspace(user)} tenantId={tenantId} unreadNotices={unreadNotices} birthdaysToday={birthdaysToday} />
+          </div>
         </div>
       </header>
 
