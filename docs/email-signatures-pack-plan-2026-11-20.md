@@ -40,6 +40,20 @@
 - **Three or four more layouts.**
 - **Colours** come from `Tenant.brandPrimary` / brand settings instead of the fixed `CARD_ORANGE` / `CARD_DARK`. Breastfeeding Art has a brand colour set; Denago has none and keeps today's orange.
 
+## Then: the rest of the document (Sean: "The document needs to be built. Copy my signature can be left out. Its built in PR1161")
+
+| Item | Built as |
+| --- | --- |
+| 2. Visual editor | Your details on the left, your signature redrawn as you type on the right. Locked details show greyed with a padlock. The owner edits each team member in the same editor. |
+| 6. Legal lines | The workspace already has an email legal line at the foot of every email (set on Signature banners). The Rules section edits that same line, and adds a privacy policy link under every signature. No second notice. |
+| 7. Preview across mail apps | Computer / Phone / Dark mode views of the preview, and "Send myself a test": the real email to your own address. |
+| 8. Completeness nudges | The owner sees whose signature is missing a job title or mobile; each person sees their own. |
+| 9. Copy my signature | Not here: built in #1161. |
+| 10. Personal call-to-action | "Your own line": one more detail, lockable like the rest. |
+| 11. Link analytics | Off until the owner ticks "Count clicks on signature links". Web links only (website, WhatsApp, booking, socials, privacy); phone and email links can't go through a web page without breaking. Clicks by link and by person. |
+
+PR 3's colours reach the card too, as item 5 warned: its orange website link and stripe become the workspace's colour (the stripe a straight bar). Colour and the three new designs (Modern, Compact, Minimal) apply only while the pack is on; Denago has no colour set, so it keeps its orange.
+
 ## Rules carried
 
 - New features go in their own files; the big files get only the wiring.
