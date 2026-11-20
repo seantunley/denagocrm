@@ -371,7 +371,10 @@ test("session GUCs really do span separate statements, in every migration that u
   //
   // 23 → 24: 20261116190000_deal_finance_per_quote moves each existing finance record onto its deal's quote (finance
   // per quote). DealFinance and Quote FORCE RLS — the same reason.
-  assert.equal(spans.length, 24, "twenty-four migrations set a session GUC");
+  //
+  // 24 → 25: 20261120170000_vehicle_ownership opens one ownership row for every existing vehicle and grants
+  // vehicles.transfer to the manager roles. Vehicle, VehicleOwnership, Role and RolePermission FORCE RLS — the same reason.
+  assert.equal(spans.length, 25, "twenty-five migrations set a session GUC");
   for (const { name, between } of spans) {
     assert.ok(between > 0, `${name}: a SET with no following statement would not need session pinning`);
   }

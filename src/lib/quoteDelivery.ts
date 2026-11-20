@@ -389,6 +389,10 @@ export async function deliverQuote(input: {
               })
             : { count: await tx.vehicle.count({ where: { id: existing.id, tenantId, contactId: contact!.id, deletedAt: null } }) };
           if (owned.count !== 1) refuse(vinConflictMessage(unit.serial ?? ""));
+          // An ownerless record given its owner: its open ownership row names them too (lib/vehicleOwnership.ts).
+          if (existing.match === "attach") {
+            await tx.vehicleOwnership.updateMany({ where: { vehicleId: existing.id, tenantId, ownedUntil: null }, data: { contactId: contact!.id } });
+          }
           ids.push(existing.id);
           continue;
         }

@@ -23,6 +23,7 @@ import { composerReplyToDefault } from "@/lib/replyToDefault";
 import LeadTimeline from "@/components/LeadTimeline";
 import WatchButton from "@/components/WatchButton";
 import { watchState } from "@/lib/collaboration";
+import PreviouslyOwnedVehicles from "@/components/PreviouslyOwnedVehicles";
 import { auditDetailFor } from "@/lib/auditDetailQuery";
 import ConfirmDelete from "@/components/ConfirmDelete";
 import { QuickCreateButton } from "@/components/QuickCreateButton";
@@ -589,6 +590,8 @@ export default async function ContactDetailPage({
                         })}
                       </ul>
                     )}
+                    {/* Vehicles they owned before a transfer (warranty-transfer-brief.md). */}
+                    <PreviouslyOwnedVehicles tenantId={contact.tenantId} contactId={contact.id} />
                   </div>
                 ),
               }] : []),
