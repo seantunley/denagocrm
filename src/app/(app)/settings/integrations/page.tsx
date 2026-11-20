@@ -30,7 +30,6 @@ import {
 } from "@/lib/tenantCredentialFields";
 import { SettingsWorkspace, SettingsIntegrationRow } from "@/components/settings-workspace";
 import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
-import { tenantEnforcing } from "@/lib/tenantEnforcement";
 import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { hasIntegrationFlow, getIntegrationFlow, flowFieldKeys } from "@/lib/integrationFlow";
 import { getIntegrationConnections, type IntegrationConnectionState } from "@/lib/integrationConnection";
@@ -88,9 +87,10 @@ export default async function IntegrationsPage({ searchParams }: { searchParams?
   };
   const xeroTaxChoices = parseXeroTaxChoices(await xeroSetting(XERO_TAX_CHOICES_KEY));
   const paymentsFromXero = (await xeroSetting(XERO_PAYMENTS_SOURCE_KEY)) !== "crm";
-  // Founding tenant falls back to platform credentials when no override is set.
-  // Every other tenant gets null — they must configure their own credentials.
-  const usesPlatformFallback = !tenantEnforcing() || tenantId === DEFAULT_TENANT_ID;
+  // Only the founding workspace has original settings to fall back to — the SAME rule as resolveIntegrationBundle,
+  // whatever the enforcement mode (review of #1158: off/monitor told every workspace it had them). Every other
+  // workspace gets null and must configure its own.
+  const usesPlatformFallback = tenantId === DEFAULT_TENANT_ID;
 
   const allKeys = TENANT_CREDENTIAL_INTEGRATIONS.flatMap((integration) =>
     integration.fields.map((field) => field.key)
@@ -184,7 +184,7 @@ export default async function IntegrationsPage({ searchParams }: { searchParams?
               [
                 // What it's connected to — only while it IS in use; a stray value on a "Not set up" row misleads.
                 state === "connected" || state === "shared" ? connectedTo(integration.id, effectiveShown) : null,
-                state === "shared" ? "Using the shared setup" : null,
+                state === "shared" ? "Using this workspace's original settings" : null,
                 state === "unverified"
                   ? guided
                     ? "Saved but never tested — open it and press Test connection"
@@ -344,7 +344,7 @@ export default async function IntegrationsPage({ searchParams }: { searchParams?
                               {source === "own" ? (
                                 <span className="text-xs font-normal text-emerald-400">(this workspace&apos;s own)</span>
                               ) : source === "default" ? (
-                                <span className="text-xs font-normal text-muted-foreground">(shared setup)</span>
+                                <span className="text-xs font-normal text-muted-foreground">(original setting)</span>
                               ) : (
                                 <span className="text-xs font-normal text-muted-foreground">(not set)</span>
                               )}
@@ -383,7 +383,7 @@ export default async function IntegrationsPage({ searchParams }: { searchParams?
                           <form action={clearTenantCredentialOverride.bind(null, field.key)}>
                             <button
                               className="btn-secondary"
-                              title={`Clear this workspace's own ${field.label} — it goes back to the shared setup, if there is one`}
+                              title={`Clear this workspace's own ${field.label} — it goes back to its original settings, if there are any`}
                             >
                               Clear
                             </button>
@@ -415,13 +415,14 @@ export default async function IntegrationsPage({ searchParams }: { searchParams?
         <summary className="cursor-pointer select-none text-foreground">How this works</summary>
         {usesPlatformFallback ? (
           <p className="mt-2">
-            Saving here gives this workspace its <b>own</b> settings for that integration. They take over only once
-            <b> every required field</b> is set — until then it keeps using the <b>shared setup</b>. Clear them to go back to
-            it. Passwords and keys can&apos;t be viewed again once saved, only whether they are set.
+            Each integration&apos;s settings belong to this workspace alone. This workspace also keeps its{" "}
+            <b>original settings</b> from before every workspace had its own storage; an integration uses them only while
+            its own fields are empty. New values saved here take over once <b>every required field</b> is set. Passwords and
+            keys can&apos;t be viewed again once saved, only whether they are set.
           </p>
         ) : (
           <p className="mt-2">
-            This workspace needs its own settings for each integration — it doesn&apos;t use a shared setup. An integration
+            Each integration&apos;s settings belong to this workspace alone — never another workspace&apos;s. An integration
             that is <b>Not set up</b> can&apos;t be used until you connect it. Passwords and keys can&apos;t be viewed again once
             saved, only whether they are set.
           </p>

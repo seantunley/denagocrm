@@ -51,7 +51,9 @@ export type IntegrationState = "connected" | "unverified" | "shared" | "not-set-
 export const STATE_LABEL: Record<IntegrationState, string> = {
   connected: "Connected",
   unverified: "Saved, not checked",
-  shared: "Using shared setup",
+  // Only the founding workspace can be here: its values from before workspaces had their own storage (AppSetting).
+  // They are its own, never another workspace's — "shared" read as borrowing (Sean, 2026-11-20).
+  shared: "Using original settings",
   "not-set-up": "Not set up",
   reconnect: "Reconnect needed",
   incomplete: "Half set up",
@@ -118,6 +120,22 @@ export function workspaceIntegrationState(input: {
   if (input.ownStatus === "active") return "unverified";
   if (input.sharedInUse) return "shared";
   return "not-set-up";
+}
+
+/**
+ * Whether outgoing / incoming mail can actually run with these resolved values — the SAME tests the mail code applies
+ * (email.ts getSmtpConfig: host and From; imapSync syncInboundEmail: host, username and password). Review of #1158: a
+ * saved host alone read "Set up" while nothing could send.
+ */
+export function smtpUsable(values: Record<string, string | null> | null | undefined): boolean {
+  return Boolean(values?.SMTP_HOST && values?.SMTP_FROM);
+}
+export function imapUsable(values: Record<string, string | null> | null | undefined): boolean {
+  return Boolean(values?.IMAP_HOST && values?.IMAP_USER && values?.IMAP_PASS);
+}
+/** The Email tab's word for it: usable, partly filled in, or nothing at all. */
+export function mailSetupLabel(usable: boolean, anything: boolean): "Set up" | "Incomplete" | "Not set up" {
+  return usable ? "Set up" : anything ? "Incomplete" : "Not set up";
 }
 
 /** "5 minutes ago" — for "last checked …". */
