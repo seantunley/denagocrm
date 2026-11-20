@@ -46,6 +46,12 @@ const PUBLIC_PREFIXES = [
   // token — never to anything in the request — counts the click, and for any
   // other token redirects home. See lib/signatureLinks.ts.
   "track/s/",
+  // "Save my contact" in an email signature (lib/contactCardServer.ts). PUBLIC BY
+  // NECESSITY: the customer's phone opens the card, and mail apps fetch its QR
+  // picture, with no session. The token is an HMAC (lib/contactCardToken.ts) —
+  // never guessable — and the card is only what the signature already shows,
+  // served only while the person is in the workspace and the owner has it on.
+  "contact-card/",
   // Secure file download. PUBLIC BY NECESSITY: the customer has no account, so
   // the link is the authority — stored only as a hash, checked on every request,
   // dead once recalled or expired, throttled, and POST-only so a mail gateway's
