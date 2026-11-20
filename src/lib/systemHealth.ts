@@ -5,7 +5,7 @@ import { getProviderKey, getSetting, putSetting } from "./settings";
 import { sendPushToAll } from "./push";
 import { logError } from "./errorLog";
 import { recordUsage } from "./usage";
-import { aiCostMicros, type AiUsage } from "./usageMeters";
+import { aiCostMicros, hasListedPrice, type AiUsage } from "./usageMeters";
 
 /* ── AI usage ledger (our own token counter, month by month) ─────── */
 
@@ -20,6 +20,9 @@ const monthKey = () => {
  */
 export async function recordAiUsage(usage?: AiUsage, model?: string | null) {
   if (!usage) return;
+  // A model with no listed price is metered at 0 for its tokens, never a guessed rate (review of #1155) — and said
+  // here, by name only, so the weekly price PR adds it.
+  if (!hasListedPrice(model)) await logError("usage-meter", `No listed price for ${model ?? "an unnamed model"} — its tokens were not billed`).catch(() => {});
   await recordUsage({ ai_usd_micros: aiCostMicros(usage, model), ai_calls: 1 });
   try {
     const cur = JSON.parse((await getSetting(monthKey())) ?? '{"in":0,"out":0,"calls":0}');

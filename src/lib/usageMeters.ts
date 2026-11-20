@@ -63,27 +63,28 @@ export function termsInForce<T extends { month: string }>(history: T[], period: 
   return best;
 }
 
-/**
- * A model not in the generated list yet (it is refreshed weekly): priced as Opus 5, so a brand-new model is never
- * costed below what it might be. Same rule the hand-kept list had.
- */
-const UNLISTED_PRICE = [5, 25, 6.25, 0.5] as const;
 const WEB_SEARCH_USD = 0.01;
 
 /**
  * US$ per million tokens [input, output, cache write, cache read] for a model, from the list generated from LiteLLM's
  * public prices (scripts/update-model-prices.mjs — Sean, 2026-11-20: the hand-kept list priced every new model as
  * Opus). A dated id ("claude-haiku-4-5-20251001") takes the longest listed id it extends.
+ *
+ * NULL when the model has no listed price — NEVER a guess (review of #1155: a guessed Opus rate overcharged a cheap new
+ * model on a billable meter). Its tokens are then not billed (aiCostMicros) and the gap is logged (recordAiUsage) until
+ * the weekly price PR lists it; the model picker (#1154) offers only models with a listed price.
  */
-export function modelPrice(model: string | null | undefined): readonly [number, number, number, number] {
+export function modelPrice(model: string | null | undefined): readonly [number, number, number, number] | null {
   const id = model ?? "";
   const exact = GENERATED_MODEL_PRICES[id];
   if (exact) return exact;
   const base = Object.keys(GENERATED_MODEL_PRICES)
     .filter((listed) => id.startsWith(`${listed}-`))
     .sort((a, b) => b.length - a.length)[0];
-  return base ? GENERATED_MODEL_PRICES[base] : UNLISTED_PRICE;
+  return base ? GENERATED_MODEL_PRICES[base] : null;
 }
+
+export const hasListedPrice = (model: string | null | undefined): boolean => modelPrice(model) !== null;
 
 export type AiUsage = {
   input_tokens?: number;
@@ -95,7 +96,8 @@ export type AiUsage = {
 
 /** One response's cost in micro-dollars (US$ × 1,000,000), rounded up. */
 export function aiCostMicros(usage: AiUsage, model: string | null | undefined): number {
-  const [input, output, cacheWrite, cacheRead] = modelPrice(model);
+  // No listed price: its tokens are not billed (never a guessed rate); web search has one price whatever the model.
+  const [input, output, cacheWrite, cacheRead] = modelPrice(model) ?? [0, 0, 0, 0];
   // Per-million price × tokens = micro-dollars.
   const micros =
     (usage.input_tokens ?? 0) * input +

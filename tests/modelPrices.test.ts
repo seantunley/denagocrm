@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { GENERATED_MODEL_PRICES } from "../src/lib/modelPrices.generated";
-import { aiCostMicros, chatGptJobForScope, chatGptJobMeter, METERS, modelPrice } from "../src/lib/usageMeters";
+import { aiCostMicros, chatGptJobForScope, chatGptJobMeter, hasListedPrice, METERS, modelPrice } from "../src/lib/usageMeters";
 import { pricesFrom, render } from "../scripts/update-model-prices.mjs";
 
 // Sean, 2026-11-20 (from Scarlet): the billable AI usage meter is costed from a list refreshed from LiteLLM's public
@@ -22,10 +22,17 @@ test("every Claude model the app names has a listed price, and the prices are sa
   }
 });
 
-test("costing: exact id, then a dated id takes its base, and an unlisted model is priced as Opus", () => {
+test("costing: exact id, then a dated id takes its base — and an unlisted model is NEVER billed at a guessed rate", () => {
   assert.deepEqual(modelPrice("claude-sonnet-5-5"), GENERATED_MODEL_PRICES["claude-sonnet-5-5"]);
   assert.deepEqual(modelPrice("claude-opus-5-5-20261101"), GENERATED_MODEL_PRICES["claude-opus-5-5"], "the longest listed base, not claude-opus-5");
-  assert.deepEqual(modelPrice("claude-sonnet-9"), [5, 25, 6.25, 0.5]);
+  // Review of #1155: a cheap new Haiku the price file doesn't list yet was billed as Opus. Now: no price, no tokens billed.
+  assert.equal(modelPrice("claude-haiku-6"), null);
+  assert.equal(hasListedPrice("claude-haiku-6"), false);
+  assert.equal(hasListedPrice("claude-haiku-4-5-20251001"), true);
+  assert.equal(aiCostMicros({ input_tokens: 1_000_000, output_tokens: 1_000_000 }, "claude-haiku-6"), 0);
+  assert.equal(aiCostMicros({ server_tool_use: { web_search_requests: 2 } }, "claude-haiku-6"), 20_000, "web search has one price, whatever the model");
+  const health = readFileSync("src/lib/systemHealth.ts", "utf8");
+  assert.match(health, /if \(!hasListedPrice\(model\)\) await logError\("usage-meter", `No listed price for/);
   // Cache reads at the listed price, not a guessed 0.1× (Sonnet 5.5 reads at 0.05× input).
   const [, , , read] = GENERATED_MODEL_PRICES["claude-sonnet-5-5"];
   assert.equal(aiCostMicros({ cache_read_input_tokens: 1_000_000 }, "claude-sonnet-5-5"), Math.ceil(read * 1_000_000));
