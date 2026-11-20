@@ -572,11 +572,7 @@ export async function runAssistantAction(
         await logAudit({ action: "assistant.action_confirmed", summary: `Confirmed the assistant's proposal: open job card #${opened.number}`, user, contactId: vehicle.contactId, metadata: { kind: card.kind, ...cardRecords(card) } });
         return { ok: true, success: `Job card #${opened.number} opened. The customer has not been contacted.`, href: `/jobcards/${opened.id}` };
       }
-      case "transfer_vehicle": {
-        // The transfer's own core (lib/assistantVehicleTransfer.ts): refused if the vehicle changed hands since. Nobody is contacted.
-        const done = await confirmTransferCard(user, card);
-        return done.ok ? done : { ok: false, error: done.error };
-      }
+      case "transfer_vehicle": return confirmTransferCard(user, card);
       case "block_time": {
         // A personal calendar item. No assignee is passed, so it is the
         // signed-in person's OWN calendar — the card cannot name anybody else's.

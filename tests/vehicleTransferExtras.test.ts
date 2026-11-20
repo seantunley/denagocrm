@@ -65,7 +65,7 @@ test("DAX: reads who owned it when, behind the vehicles grant; proposes a transf
   assert.match(dax, /canAccessContact\(user, p\.contactId\)/);
   assert.match(dax, /expectedOwnerId: card\.fromContactId/, "a vehicle that changed hands since the card was shown is refused");
   assert.match(code("src/lib/crmAssistant.ts"), /const transfers = proposes && modules\.has\("automotive"\) \? VEHICLE_TRANSFER_RULE : "";/);
-  assert.match(code("src/app/actions/assistant.ts"), /case "transfer_vehicle": \{\s*\/\/[^\n]*\n\s*const done = await confirmTransferCard\(user, card\);/);
+  assert.match(code("src/app/actions/assistant.ts"), /case "transfer_vehicle": return confirmTransferCard\(user, card\);/);
   const lookups = code("src/lib/assistant/lookups/vehicles.ts");
   assert.match(lookups, /if \(args\.kind === "ownership"\) \{\s*return \(await hasAnyPermission\(user, "vehicles\.view_all", "vehicles\.view_owned"\)\)/);
   assert.match(code("src/lib/assistant/lookups/vehicleOwnership.ts"), /\.\.\.\(accessible \? \{ id: \{ in: accessible \} \} : \{\}\)/, "only vehicles they may open");
