@@ -21,7 +21,7 @@ const PERSONAS: Record<string, { admin: boolean; perms: string[]; enabled?: Set<
 
 /** What buildNav on main (d9ae92b5) showed each persona, before the regroup — plus /finance (2026-11-16) for anyone with leads. */
 const BEFORE: Record<string, string[]> = {
-  owner: ["/", "/activities", "/assistant", "/audit", "/birthdays", "/bot-builder", "/calendar", "/cases", "/chatbot", "/competitors", "/contacts", "/d/home", "/data-quality", "/deliveries", "/document-studio", "/documents", "/finance", "/fleets", "/forecast", "/health", "/inbox", "/invoices", "/jobcards", "/jobcards/insights", "/journeys", "/leads", "/marketing/audiences", "/marketing/calendar", "/marketing/campaigns", "/marketing/overview", "/marketing/surveys", "/marketing/surveys/insights", "/marketing/templates", "/parts", "/quotes", "/referrals", "/repairs", "/reports", "/service-due", "/signatures", "/stock", "/targets", "/test-drives", "/today", "/vehicles", "/warranty", "/workshop-calendar"],
+  owner: ["/", "/activities", "/assistant", "/audit", "/birthdays", "/bot-builder", "/calendar", "/cases", "/chatbot", "/competitors", "/contacts", "/d/home", "/data-quality", "/deliveries", "/document-studio", "/documents", "/email-signatures", "/finance", "/fleets", "/forecast", "/health", "/inbox", "/invoices", "/jobcards", "/jobcards/insights", "/journeys", "/leads", "/marketing/audiences", "/marketing/calendar", "/marketing/campaigns", "/marketing/overview", "/marketing/surveys", "/marketing/surveys/insights", "/marketing/templates", "/parts", "/quotes", "/referrals", "/repairs", "/reports", "/service-due", "/signatures", "/stock", "/targets", "/test-drives", "/today", "/vehicles", "/warranty", "/workshop-calendar"],
   sales: ["/", "/activities", "/assistant", "/birthdays", "/calendar", "/contacts", "/d/home", "/data-quality", "/documents", "/finance", "/health", "/inbox", "/leads", "/quotes", "/signatures", "/test-drives", "/today"],
   workshop: ["/", "/activities", "/assistant", "/calendar", "/cases", "/d/home", "/jobcards", "/jobcards/insights", "/parts", "/service-due", "/test-drives", "/vehicles", "/warranty", "/workshop-calendar"],
   marketing: ["/", "/d/home", "/documents", "/marketing/audiences", "/marketing/calendar", "/marketing/campaigns", "/marketing/overview", "/marketing/surveys", "/marketing/surveys/insights", "/marketing/templates", "/referrals"],
@@ -49,7 +49,8 @@ test("pinned, then the groups in the order work happens", () => {
   assert.deepEqual(labels("marketing"), ["Overview", "Campaigns", "Audiences", "Templates", "Calendar", "Surveys", "Survey insights", "Referrals"]);
   assert.deepEqual(labels("insights"), ["Dashboards", "Reports", "Targets", "Forecast", "Workshop Insights", "Competitors", "Ask the CRM"]);
   assert.deepEqual(labels("automation"), ["Journeys", "Chatbot", "Flow builder"]);
-  assert.deepEqual(labels("admin"), ["Document Studio", "Data quality", "Audit log", "System repairs"]);
+  // "Email signatures": the Email signatures pack's page, owner only (2026-11-20).
+  assert.deepEqual(labels("admin"), ["Document Studio", "Data quality", "Audit log", "Email signatures", "System repairs"]);
 });
 
 test("renamed links are still found by their old names; custom names for leads and job cards still apply", () => {

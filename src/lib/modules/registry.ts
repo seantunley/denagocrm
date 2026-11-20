@@ -17,6 +17,7 @@ export type ModuleId =
   | "portal"
   | "multicurrency"
   | "suppliers"
+  | "signatures"
   | "finance";
 
 export type AppModule = {
@@ -101,6 +102,13 @@ export const MODULE_REGISTRY: AppModule[] = [
     description: "Suppliers on deals and purchase orders: each deal's file asks every supplier for its quote, invoice and proof of payment.",
     // Settings → Suppliers only. The rest of it lives inside the deal file, documents and purchase orders.
     routePrefixes: ["/settings/vendors"],
+  },
+  {
+    id: "signatures",
+    label: "Email signatures",
+    description: "Everyone's email signature in one place: the workspace design, each person's own signature and the banners under it. Off: emails keep the automatic signature, with no banners.",
+    // Sean, 2026-11-20: "I think it needs its own module now." Its page, and the banners' settings page.
+    routePrefixes: ["/email-signatures", "/settings/signature-banners"],
   },
   {
     id: "finance",

@@ -180,6 +180,9 @@ export function buildNav(
   if (can("document_templates.manage", "docbuilder.view", "docbuilder.manage")) adminLinks.push({ href: "/document-studio", label: "Document Studio", icon: FileText });
   if (can("contacts.view_all", "contacts.view_owned")) adminLinks.push({ href: "/data-quality", label: "Data quality", icon: ShieldCheck, keywords: ["duplicates", "missing details", "data quality", "clean up"] });
   if (can("audit.view")) adminLinks.push({ href: "/audit", label: "Audit log", icon: ScrollText });
+  // The Email signatures pack (2026-11-20): the owner's design and banners. Hidden with the pack (isPathEnabled below);
+  // staff reach their own signature from Settings → My account.
+  if (isAdmin) adminLinks.push({ href: "/email-signatures", label: "Email signatures", icon: PenLine, keywords: ["signature", "email signature", "banner"] });
   // `isAdmin`, not `can(...)`, to match ROUTE_RULES' `{ prefix: "/repairs",
   // owner: true }`. A `can(...)` list here would be a second, independently
   // authored answer to a question the route table already answers.

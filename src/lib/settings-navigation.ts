@@ -127,7 +127,9 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
     items: [
       { key: "email", label: "Email", keywords: ["smtp", "imap", "templates"] },
       // Owner-only (no `permission`, not `everyone`): mirrors the page and its actions' requireTenantOwner().
-      { key: "signature-banners", label: "Signature banners", href: "/settings/signature-banners", keywords: ["signature", "banner", "marketing", "promotion", "campaign", "email footer", "rocketseed", "advert", "special"] },
+      // The Email signatures pack (2026-11-20): its page, and the banners under the signature. Both hidden with the pack.
+      { key: "email-signatures", label: "Email signatures", href: "/email-signatures", module: "signatures", everyone: true, keywords: ["signature", "email signature", "my signature", "signature design", "card", "classic"] },
+      { key: "signature-banners", label: "Signature banners", href: "/settings/signature-banners", module: "signatures", keywords: ["signature", "banner", "marketing", "promotion", "campaign", "email footer", "rocketseed", "advert", "special"] },
       { key: "helpdesk", label: "Help desk", href: "/settings/helpdesk", permission: "cases.manage", module: "support", keywords: ["mailboxes", "saved replies", "tags", "support", "tickets", "cases"] },
       {
         // ONE Integrations page (batch 6) — it replaced the owner-only Settings tab
