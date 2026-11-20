@@ -11,6 +11,10 @@ import CopySignature from "@/components/CopySignature";
 import { teamLineFor } from "@/lib/signaturePeople";
 import { senderSignatureDetails, signatureAccent } from "@/lib/signatureSender";
 import { signatureLinkReport } from "@/lib/signatureLinkStore";
+import { upcomingNotices } from "@/lib/signatureNoticeStore";
+import { liveNotices, noticeState } from "@/lib/signatureNotices";
+import { bannerDayValue } from "@/lib/signatureBanners";
+import type { NoticeItem } from "@/components/SignatureNotices";
 import { PageHeader } from "@/components/page-header";
 import EmailSignatureSection from "@/components/EmailSignatureSection";
 import EmailSignatureDetails, { type SignaturePerson } from "@/components/EmailSignatureDetails";
@@ -65,7 +69,14 @@ export default async function EmailSignaturesPage() {
         select: { userId: true, teamId: true },
       })
     : [];
+  // Dated lines (lib/signatureNotices.ts): on now and to come. Each person's preview shows the ones on today.
+  const now = new Date();
+  const noticeRows = await upcomingNotices(tenantId, now).catch(() => []);
+  const asItem = (row: (typeof noticeRows)[number]): NoticeItem => ({
+    id: row.id, text: row.text, startsOn: bannerDayValue(row.startsAt), endsOn: bannerDayValue(row.endsAt), state: noticeState(row, now),
+  });
   const asPerson = (u: PersonRow): SignaturePerson => ({
+    notices: liveNotices(noticeRows, u.id, now),
     id: u.id, name: u.name, email: u.email, mobile: u.mobile, jobTitle: u.jobTitle,
     qualifications: u.signatureQualifications, directLine: u.signatureDirectLine, whatsapp: u.signatureWhatsapp,
     bookingUrl: u.signatureBookingUrl, hours: u.signatureHours, cta: u.signatureCta, photo: u.signaturePhoto, hasPhoto: Boolean(u.avatarRef),
@@ -92,6 +103,11 @@ export default async function EmailSignaturesPage() {
         legalLine={isOwner ? cleanLegalLine(await getWorkspaceSetting(tenantId, LEGAL_LINE_KEY)) : ""}
         privacyUrl={design.legal?.privacyUrl ?? ""}
         trackLinks={design.trackLinks === true}
+        notices={{
+          mine: noticeRows.filter((row) => row.userId === me.id).map(asItem),
+          everyone: isOwner ? noticeRows.filter((row) => row.userId === null).map(asItem) : [],
+          today: bannerDayValue(now),
+        }}
         clicks={isOwner ? await signatureLinkReport(tenantId).catch(() => null) : null}
         staff={others.map(asPerson)}
       />

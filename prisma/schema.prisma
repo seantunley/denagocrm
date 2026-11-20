@@ -3252,6 +3252,22 @@ model SignatureLink {
   @@index([tenantId, userId])
 }
 
+/// A dated line on email signatures (Sean, 2026-11-20): "On leave until 5 January, contact Thandi", or holiday trading
+/// hours — shown from startsAt to endsAt, then gone by itself. userId null = on everyone's signature (the owner's);
+/// otherwise that person's own. lib/signatureNotices.ts.
+model SignatureNotice {
+  id          String   @id @default(cuid())
+  tenantId    String
+  userId      String?
+  text        String
+  startsAt    DateTime
+  endsAt      DateTime
+  createdById String
+  createdAt   DateTime @default(now())
+
+  @@index([tenantId, endsAt])
+}
+
 model SignatureBannerClick {
   id              String          @id @default(cuid())
   tenantId        String

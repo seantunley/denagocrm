@@ -40,7 +40,7 @@ export type SignaturePerson = {
  * What "Copy my signature" copies: the sender's signature as the send path builds it — their details, team line, the
  * workspace's design and colour (review of #1161) — with every picture address made absolute.
  *
- * Less one thing: the PHOTO. In a CRM email it travels inside the message; its address is for signed-in staff only, so
+ * Less the dated lines (below), and the PHOTO. In a CRM email it travels inside the message; its address is for signed-in staff only, so
  * pasted into Gmail it would be a broken picture for every recipient. `photoLeftOut` says so on the screen.
  */
 export function copyableSignature(
@@ -48,7 +48,8 @@ export function copyableSignature(
   company: SignatureCompany,
 ): { html: string; text: string; photoLeftOut: boolean } {
   const photoLeftOut = Boolean(person.extras?.photoUrl) && !person.signatureHtml?.trim();
-  const sender = { ...person, extras: person.extras ? { ...person.extras, photoUrl: null } : undefined };
+  // Nor today's dated lines: a pasted copy can't take them down on their last day, so "On leave" would stay for good.
+  const sender = { ...person, extras: person.extras ? { ...person.extras, photoUrl: null, notices: [] } : undefined };
   return {
     html: absolutise(buildSignature(sender, company), signatureAssetOrigin(company)),
     text: plainSignature(sender, company),
