@@ -7,13 +7,13 @@ const editor = readFileSync("src/components/RichTextEditor.tsx", "utf8");
 const pictures = readFileSync("src/components/emailBlockStyle.ts", "utf8");
 
 test("the signature shows under the message, built by the same server code Send uses, and runs nothing", () => {
-  assert.match(composer, /previewComposerEmail\("", \{ to, contactId, leadId, choice: banner \}\)/);
+  assert.match(composer, /previewComposerEmail\("", \{ to, contactId, leadId, choice: banner, reply: Boolean\(inReplyTo\) \}\)/);
   const frame = composer.match(/<iframe title="Signature preview"[^>]*\/>/)?.[0] ?? "";
   // No scripts, and (since #893) not even same-origin: it is only looked at.
   assert.match(frame, /sandbox=""/);
   assert.doesNotMatch(frame, /allow-scripts/);
   // A changed banner or recipient changes the banner the email carries, so the signature is built again.
-  assert.match(composer, /\}, \[open, smtpConfigured, to, banner, contactId, leadId, signatureKey\]\);/);
+  assert.match(composer, /\}, \[open, smtpConfigured, to, banner, contactId, leadId, inReplyTo, signatureKey\]\);/);
 });
 
 test("pictures in an email start at an email's width and can be resized by their corners", () => {

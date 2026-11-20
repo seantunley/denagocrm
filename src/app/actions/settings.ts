@@ -7,7 +7,7 @@ import { validPassword } from "@/lib/passwordPolicy";
 import crypto from "crypto";
 import { basePrisma, prisma } from "@/lib/db";
 import { ciExactIdFilter } from "@/lib/ciExact";
-import { createSessionCookie, getActiveTenantId, requireUser, requireTenantOwner } from "@/lib/auth";
+import { createSessionCookie, getActiveTenantId, isTenantOwner, requireUser, requireTenantOwner } from "@/lib/auth";
 import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import {
   findOwnedPipelineForStage,
@@ -730,6 +730,11 @@ export async function saveMyProfile(formData: FormData) {
   return asActionResult(async () => {
     const user = await requireUser();
     const signatureHtml = String(formData.get("signatureHtml") ?? "").trim() || null;
+    // While the Email signatures pack is on, custom HTML is the owner's alone (item 2: "few staff can do it, and it can
+    // break the brand"); anyone may still CLEAR theirs back to the workspace design. Pack off: as before, anyone may.
+    if (signatureHtml && (await isModuleEnabled("signatures")) && !(await isTenantOwner())) {
+      refuse("Only the workspace owner can use custom signature HTML. Your details — phone, hours, booking link — go on the Email signatures page.");
+    }
     await prisma.user.update({ where: { id: user.id }, data: { signatureHtml } });
     revalidatePath("/settings");
   });

@@ -16,7 +16,18 @@ import { SIGNATURE_GUIDES } from "@/lib/signatureCopy";
  * the text. A browser that can't put HTML on the clipboard is told so — it is
  * never handed the plain text while being told it has the design.
  */
-export default function CopySignature({ html, text, usesOwnHtml }: { html: string; text: string; usesOwnHtml: boolean }) {
+export default function CopySignature({
+  html,
+  text,
+  usesOwnHtml,
+  photoLeftOut = false,
+}: {
+  html: string;
+  text: string;
+  usesOwnHtml: boolean;
+  /** The photo can't travel in a pasted signature (lib/signatureCopy.ts copyableSignature). */
+  photoLeftOut?: boolean;
+}) {
   const [copied, setCopied] = useState<"designed" | "plain" | null>(null);
 
   const done = (which: "designed" | "plain") => {
@@ -60,6 +71,7 @@ export default function CopySignature({ html, text, usesOwnHtml }: { html: strin
         <p className="text-sm text-muted-foreground">
           Emails you write in the CRM are signed for you. Copy the same signature into your other mail apps so everything you send matches.
           {usesOwnHtml ? " This copies your own HTML signature, since that is what your emails use." : ""}
+          {photoLeftOut ? " Your photo is left out: it only shows on emails sent from the CRM, which carry it inside the email." : ""}
         </p>
         <div className="flex flex-wrap gap-2">
           <button type="button" onClick={copyDesigned} className="btn-primary btn-sm inline-flex items-center gap-1.5">

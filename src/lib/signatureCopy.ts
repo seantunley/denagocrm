@@ -1,4 +1,5 @@
-import { htmlToText, type SignatureCompany } from "./signature";
+import { buildSignature, htmlToText, signatureAssetOrigin, type SignatureCompany } from "./signature";
+import type { SignatureExtras } from "./signaturePeople";
 
 /**
  * "Copy my signature" — the CRM's signature, for use in a mail app outside it
@@ -29,7 +30,31 @@ export function absolutise(html: string, origin: string): string {
   return html.replace(/\b(src|href)=(["'])\/(?!\/)/gi, (_m, attr: string, quote: string) => `${attr}=${quote}${base}/`);
 }
 
-export type SignaturePerson = { name: string; email: string; mobile?: string | null; jobTitle?: string | null; signatureHtml?: string | null };
+export type SignaturePerson = {
+  name: string; email: string; mobile?: string | null; jobTitle?: string | null; signatureHtml?: string | null;
+  /** The Email signatures pack's details and team line ({} or absent while it is off). */
+  extras?: SignatureExtras; teamLine?: string;
+};
+
+/**
+ * What "Copy my signature" copies: the sender's signature as the send path builds it — their details, team line, the
+ * workspace's design and colour (review of #1161) — with every picture address made absolute.
+ *
+ * Less one thing: the PHOTO. In a CRM email it travels inside the message; its address is for signed-in staff only, so
+ * pasted into Gmail it would be a broken picture for every recipient. `photoLeftOut` says so on the screen.
+ */
+export function copyableSignature(
+  person: SignaturePerson,
+  company: SignatureCompany,
+): { html: string; text: string; photoLeftOut: boolean } {
+  const photoLeftOut = Boolean(person.extras?.photoUrl) && !person.signatureHtml?.trim();
+  const sender = { ...person, extras: person.extras ? { ...person.extras, photoUrl: null } : undefined };
+  return {
+    html: absolutise(buildSignature(sender, company), signatureAssetOrigin(company)),
+    text: plainSignature(sender, company),
+    photoLeftOut,
+  };
+}
 
 /**
  * The signature as plain text, for a mail app that takes nothing else.
@@ -43,12 +68,22 @@ export function plainSignature(person: SignaturePerson, company: Pick<SignatureC
   const switchboard = clean(company.switchboard);
   const title = clean(person.jobTitle);
   const companyLine = clean(company.design?.companyLine) || clean(company.name);
+  const x = person.extras ?? {};
+  const direct = clean(x.directLine);
+  const whatsapp = clean(x.whatsapp);
   return [
     clean(person.name),
+    clean(x.qualifications),
     [title, companyLine].filter(Boolean).join(" | "),
-    [mobile && `M ${mobile}`, switchboard && switchboard !== mobile && `T ${switchboard}`].filter(Boolean).join("  "),
+    [mobile && `M ${mobile}`, direct && `D ${direct}`, switchboard && switchboard !== mobile && `T ${switchboard}`, whatsapp && `WhatsApp ${whatsapp}`]
+      .filter(Boolean)
+      .join("  "),
     clean(person.email),
     clean(company.website).replace(/^https?:\/\//i, "").replace(/\/$/, ""),
+    clean(x.bookingUrl) && `Book a time: ${clean(x.bookingUrl)}`,
+    clean(x.hours),
+    clean(x.cta),
+    clean(person.teamLine),
   ]
     .filter(Boolean)
     .join("\n");

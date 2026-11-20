@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { SIGNATURE_GUIDES, absolutise, plainSignature } from "../src/lib/signatureCopy";
+import { SIGNATURE_GUIDES, absolutise, copyableSignature, plainSignature } from "../src/lib/signatureCopy";
 import { DEFAULT_SIGNATURE_COMPANY, buildSignature, signatureAssetOrigin, type SignatureCompany } from "../src/lib/signature";
 
 /**
@@ -93,12 +93,35 @@ test("every guide starts with the copy button its app needs, and a phone gets pl
   assert.match(phone.note ?? "", /plain text/);
 });
 
-test("the page copies what the send path builds, with full addresses", () => {
-  const page = code("src/app/(app)/settings/page.tsx");
-  assert.match(page, /html=\{absolutise\(buildSignature\(currentUser, signatureCompany\), signatureAssetOrigin\(signatureCompany\)\)\}/);
-  assert.match(page, /text=\{plainSignature\(currentUser, signatureCompany\)\}/);
-  // The same builder and the same company the composer sends with.
-  assert.match(code("src/lib/composerSend.ts"), /buildSignature\(user, company\)/);
+test("the copy is the sender's signature: their details and team line, the design and colour — the photo left out", () => {
+  const extras = { qualifications: "CA(SA)", directLine: "021 555 0199", whatsapp: "082 555 0101", bookingUrl: "https://cal.acme.example/thandi", hours: "Mon–Fri 8–5", cta: "Ask me about the new model", photoUrl: "https://crm.acme.example/api/signature-photo/user_123456" };
+  const c = { ...company(), accent: "#123456" };
+  const copied = copyableSignature({ ...person, extras, teamLine: "Workshop 021 555 0111" }, c);
+  // The send path's own signature, the photo excepted.
+  assert.equal(copied.html, absolutise(buildSignature({ ...person, extras: { ...extras, photoUrl: null }, teamLine: "Workshop 021 555 0111" }, c), signatureAssetOrigin(c)));
+  for (const bit of ["CA(SA)", "021 555 0199", "cal.acme.example/thandi", "Mon–Fri 8–5", "Ask me about the new model", "Workshop 021 555 0111", "#123456"]) assert.ok(copied.html.includes(bit), bit);
+  assert.doesNotMatch(copied.html, /signature-photo/, "a sign-in-only address would be a broken picture for every recipient");
+  assert.equal(copied.photoLeftOut, true);
+  assert.equal(
+    copied.text,
+    ["Thandi Nkosi", "CA(SA)", "Sales Executive | Acme Motors", "M 082 555 0101  D 021 555 0199  T 021 555 0100  WhatsApp 082 555 0101", "thandi@acme.example", "acme.example", "Book a time: https://cal.acme.example/thandi", "Mon–Fri 8–5", "Ask me about the new model", "Workshop 021 555 0111"].join("\n"),
+  );
+  // Pack off: no details — exactly the automatic signature, as before.
+  const plain = copyableSignature(person, company());
+  assert.equal(plain.html, absolutise(buildSignature(person, company()), signatureAssetOrigin(company())));
+  assert.equal(plain.text, plainSignature(person, company()));
+  assert.equal(plain.photoLeftOut, false);
+});
+
+test("Copy is on the pack's page for everyone, and on Settings while the pack is off — each with its own signature", () => {
+  const pack = code("src/app/(app)/email-signatures/page.tsx");
+  // Outside the owner/own-HTML section, so staff get it too; with the sender's details from senderSignatureDetails.
+  assert.match(pack, /staff=\{others\.map\(asPerson\)\}\s*\/>\s*\{\/\*[^*]*\*\/\}\s*<CopySignature \{\.\.\.copyableSignature\(\{ \.\.\.me, \.\.\.details \}, company\)\}/);
+  assert.match(pack, /senderSignatureDetails\(tenantId, user\.id, design, company\.assetBase\)/);
+  const settings = code("src/app/(app)/settings/page.tsx");
+  assert.match(settings, /\{signaturesOn \? \([\s\S]*?href="\/email-signatures"[\s\S]*?\) : \(\s*<>[\s\S]*?<CopySignature \{\.\.\.copyableSignature\(currentUser, signatureCompany\)\}/);
+  // Settings' design is the one the send path uses with the pack off.
+  assert.match(settings, /const signatureDesign = await signatureDesignInUse\(signatureTenantId,/);
 });
 
 test("the designed copy goes on the clipboard as HTML with plain text beside it — never plain passed off as designed", () => {

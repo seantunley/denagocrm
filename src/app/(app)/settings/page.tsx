@@ -4,7 +4,6 @@ import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { getActiveTenantId, isTenantOwner, requireUser } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import {
-  saveMyProfile,
   saveQuoteDefaults,
   saveDocumentTypes,
   saveDealFileChecklist,
@@ -13,10 +12,11 @@ import {
   saveWorkshopSettings,
   saveNotificationPrefs,
 } from "@/app/actions/settings";
-import { signatureCompanyFrom, buildSignature, parseSignatureDesign, signatureAssetOrigin, SIGNATURE_DESIGN_KEY } from "@/lib/signature";
-import SignatureDesignEditor from "@/components/SignatureDesignEditor";
+import { signatureCompanyFrom, parseSignatureDesign, SIGNATURE_DESIGN_KEY } from "@/lib/signature";
+import { signatureAccent, signatureDesignInUse } from "@/lib/signatureSender";
+import EmailSignatureSection from "@/components/EmailSignatureSection";
 import CopySignature from "@/components/CopySignature";
-import { absolutise, plainSignature } from "@/lib/signatureCopy";
+import { copyableSignature } from "@/lib/signatureCopy";
 import SendingDomainCheck from "@/components/settings/SendingDomainCheck";
 import { getSetting, resolveIntegrationBundle } from "@/lib/settings";
 import { imapUsable, mailSetupLabel, smtpUsable } from "@/lib/integrationsCatalogue";
@@ -86,12 +86,14 @@ export default async function SettingsPage({
   // where you check your signature is the one screen that lies about it.
   const profile = await getCompanyProfile();
   // The preview must render what the send path renders, glyph URLs included.
-  const signatureDesign = parseSignatureDesign(await getSetting(SIGNATURE_DESIGN_KEY));
-  const signatureCompany = signatureCompanyFrom(profile, await tenantOrigin(await getActiveTenantId()), signatureDesign);
+  const signatureTenantId = await getActiveTenantId();
+  const signatureDesign = await signatureDesignInUse(signatureTenantId, parseSignatureDesign(await getSetting(SIGNATURE_DESIGN_KEY)));
+  const signatureCompany = signatureCompanyFrom(profile, await tenantOrigin(signatureTenantId), signatureDesign, await signatureAccent(signatureTenantId));
   const enabled = await getEnabledModuleIds();
   const automotiveOn = enabled.has("automotive");
   const commerceOn = enabled.has("commerce");
   const marketingOn = enabled.has("marketing");
+  const signaturesOn = enabled.has("signatures");
   // The tabs rendered on THIS page are owner-only apart from My Account. A
   // non-owner's nav still lists the settings pages their permissions open
   // (Pipeline, Checklists, Team & access…) — those live on their own routes.
@@ -347,53 +349,19 @@ export default async function SettingsPage({
                 <span className="btn-secondary btn-sm">View &amp; edit</span>
               </summary>
               <div className="px-5 pb-5 space-y-4">
-                <SignatureDesignEditor
-                  user={{ name: currentUser.name, email: currentUser.email, mobile: currentUser.mobile, jobTitle: currentUser.jobTitle }}
-                  company={signatureCompany}
-                  initial={signatureDesign}
-                  canEdit={isAdmin}
-                />
-                {isAdmin && (
-                  <p className="text-xs text-muted-foreground">
-                    Want a promotion under the signature? Add a marketing banner, with dates, on{" "}
-                    <Link href="/settings/signature-banners" className="text-primary hover:underline">Signature banners</Link>.
+                {/* The Email signatures pack on: it has its own page (2026-11-20). Off: edited here, exactly as before. */}
+                {signaturesOn ? (
+                  <p className="text-sm text-muted-foreground">
+                    Your email signature has its own page now:{" "}
+                    <Link href="/email-signatures" className="text-primary hover:underline">Email signatures</Link>.
                   </p>
+                ) : (
+                  <>
+                    <EmailSignatureSection user={currentUser} company={signatureCompany} design={signatureDesign} canEditDesign={isAdmin} bannersHref={null} />
+                    {/* Copy my signature (#1161), pack off: the automatic signature, exactly as the send path builds it. */}
+                    <CopySignature {...copyableSignature(currentUser, signatureCompany)} usesOwnHtml={Boolean(currentUser.signatureHtml?.trim())} />
+                  </>
                 )}
-                {/* The signature as the send path builds it, for use outside the CRM (lib/signatureCopy.ts). */}
-                <CopySignature
-                  html={absolutise(buildSignature(currentUser, signatureCompany), signatureAssetOrigin(signatureCompany))}
-                  text={plainSignature(currentUser, signatureCompany)}
-                  usesOwnHtml={Boolean(currentUser.signatureHtml?.trim())}
-                />
-                <details className="rounded-lg border border-border">
-                  <summary className="px-4 py-2.5 cursor-pointer text-sm text-muted-foreground">
-                    Advanced: use your own HTML instead{currentUser.signatureHtml?.trim() ? " (in use on your emails)" : ""}
-                  </summary>
-                  <div className="px-4 pb-4 space-y-3">
-                    {currentUser.signatureHtml?.trim() && (
-                      <div
-                        className="rounded-lg bg-white p-4 overflow-x-auto"
-                        dangerouslySetInnerHTML={{ __html: buildSignature(currentUser, signatureCompany) }}
-                      />
-                    )}
-                    <SaveForm success="Profile saved" resetOnSuccess={false} action={saveMyProfile} className="space-y-3 max-w-md">
-                      <div>
-                        <label className="label">Custom signature HTML (optional)</label>
-                        <textarea
-                          name="signatureHtml"
-                          className="input font-mono text-xs"
-                          rows={4}
-                          defaultValue={currentUser.signatureHtml ?? ""}
-                          placeholder="Leave blank to use the workspace signature (recommended)."
-                        />
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          Replaces the workspace signature on your emails only.
-                        </p>
-                      </div>
-                      <SaveButton className="btn-primary btn-sm">Save</SaveButton>
-                    </SaveForm>
-                  </div>
-                </details>
               </div>
             </details>
           </div>

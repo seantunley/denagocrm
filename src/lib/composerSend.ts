@@ -39,6 +39,8 @@ import { tenantOrigin } from "@/lib/tenantOrigin";
 import { bannerClickUrl, bannerHtml, bannerPosition } from "@/lib/signatureBanners";
 import { LEGAL_LINE_KEY, htmlWithLegalLine } from "@/lib/emailLegalLine";
 import { bannerForEmail, recordBannerSent } from "@/lib/signatureBannerStore";
+import { senderSignatureDetails, signatureAccent, signatureDesignInUse } from "@/lib/signatureSender";
+import { trackSignatureLinks } from "@/lib/signatureLinkStore";
 import { threadableMessageId } from "@/lib/emailReply";
 
 /** Each attached quote is a PDF rendered during the send; a handful is plenty for one email. */
@@ -63,7 +65,14 @@ export async function tenantIdFor(userId: string): Promise<string | null> {
 }
 
 /** `choice`: the banner the sender picked in the composer — an id, "none", or blank for the default. */
-export type ComposerRecipient = { to?: string; contactId?: string | null; leadId?: string | null; choice?: string | null };
+export type ComposerRecipient = {
+  to?: string;
+  contactId?: string | null;
+  leadId?: string | null;
+  choice?: string | null;
+  /** Answering an email: the short signature when the owner chose short replies (the Email signatures pack). */
+  reply?: boolean;
+};
 
 /**
  * The composer email's HTML: the message, the sender's signature, and under it
@@ -80,9 +89,10 @@ export async function composerHtml(
   preview = false,
 ): Promise<{ html: string; tenantId: string | null; bannerId: string | null }> {
   // The workspace's signature design (Settings → My account → Email signature), same as the settings preview.
-  const design = parseSignatureDesign(await getSetting(SIGNATURE_DESIGN_KEY));
   const tenantId = await tenantIdFor(user.id);
-  const company = signatureCompanyFrom(profile, await tenantOrigin(tenantId), design);
+  // The pack's extras (short replies, privacy link, its designs, link counting) only while it is on.
+  const design = await signatureDesignInUse(tenantId, parseSignatureDesign(await getSetting(SIGNATURE_DESIGN_KEY)));
+  const company = signatureCompanyFrom(profile, await tenantOrigin(tenantId), design, await signatureAccent(tenantId));
   // The banner's link is on the same origin as the signature's own images: the workspace's.
   const origin = company.assetBase;
   // Never a reason to lose the email: a banner that can't be worked out is an email without one.
@@ -90,7 +100,17 @@ export async function composerHtml(
   const marketing = banner ? bannerHtml(banner, preview ? banner.linkUrl : bannerClickUrl(origin, banner.token)) : "";
   // Under the signature, or — the owner's choice per banner — at the top of the email, above the message.
   const above = Boolean(banner) && bannerPosition(banner!.position) === "above";
-  const built = buildEmailHtml(bodyHtml, buildSignature(user, company) + (above ? "" : marketing));
+  // The sender's own details, team line and photo (the Email signatures pack; {} while it is off) — and short on a reply.
+  const details = await senderSignatureDetails(tenantId, user.id, design, origin).catch(() => ({}));
+  const signature = buildSignature({ ...user, ...details, reply: recipient.reply === true }, company);
+  // Its web links counted when the owner has that on (the Email signatures pack, item 11) — on a real send, never a preview.
+  const counted = preview
+    ? signature
+    : await trackSignatureLinks(
+        { tenantId, userId: user.id, origin, on: design.trackLinks, known: { website: company.website, bookingUrl: "extras" in details ? details.extras?.bookingUrl : null, privacyUrl: design.legal?.privacyUrl } },
+        signature,
+      );
+  const built = buildEmailHtml(bodyHtml, counted + (above ? "" : marketing));
   const html = above ? built.replace(/<body[^>]*>/i, (open) => `${open}${marketing}`) : built;
   // The legal line is added to every email where it leaves (lib/email.ts). A preview never gets
   // there, so it is added here for the preview alone — or Preview would not be what Send sends.
@@ -358,7 +378,7 @@ export async function sendComposerForm(
     linksText = secureLinksText(lines, expiresLabel);
   }
   // The message (with its secure-link block, if any), the signature, and the signature banner for this sender and recipient.
-  const { html, tenantId: bannerTenantId, bannerId } = await composerHtml(user, messageHtml, profile, { to, contactId, leadId, choice });
+  const { html, tenantId: bannerTenantId, bannerId } = await composerHtml(user, messageHtml, profile, { to, contactId, leadId, choice, reply: Boolean(answering) });
 
   const result = await sendEmail({
     to,

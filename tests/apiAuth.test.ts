@@ -41,6 +41,11 @@ const PUBLIC_PREFIXES = [
   // in the request — and for any other token it redirects home. It reads nothing
   // back. See lib/signatureBanners.ts.
   "track/b/",
+  // A counted link in an email signature (the Email signatures pack). PUBLIC BY
+  // NECESSITY, like the banner click: it redirects to the address STORED for the
+  // token — never to anything in the request — counts the click, and for any
+  // other token redirects home. See lib/signatureLinks.ts.
+  "track/s/",
   // Secure file download. PUBLIC BY NECESSITY: the customer has no account, so
   // the link is the authority — stored only as a hash, checked on every request,
   // dead once recalled or expired, throttled, and POST-only so a mail gateway's

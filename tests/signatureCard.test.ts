@@ -86,7 +86,7 @@ test("the logo panel banner: shown at its size and linked, https only, and kept 
   assert.equal(parseSignatureDesign(JSON.stringify({ bannerUrl })).bannerUrl, bannerUrl);
   const action = readFileSync(new URL("../src/app/actions/emails.ts", import.meta.url), "utf8");
   const save = action.slice(action.indexOf("export async function saveSignatureDesign"), action.indexOf("const storedSignatureDesign"));
-  assert.match(save, /bannerUrl: \(await storedSignatureDesign\(tenantId\)\)\.bannerUrl/, "Save for everyone must not drop the banner");
+  assert.match(save, /const stored = await storedSignatureDesign\(tenantId\);[\s\S]*bannerUrl: stored\.bannerUrl/, "Save for everyone must not drop the banner");
   const upload = action.slice(action.indexOf("export async function saveSignatureBanner"));
   assert.match(upload, /requireTenantOwner\(\)/);
   assert.match(upload, /\["image\/png", "image\/jpeg"\]\.includes\(file\.type\)/);
@@ -139,7 +139,7 @@ test("the send and the settings preview both use the workspace's saved design", 
   for (const file of ["src/lib/composerSend.ts", "src/app/(app)/settings/page.tsx"]) {
     const code = src(file);
     assert.match(code, /parseSignatureDesign\(await getSetting\(SIGNATURE_DESIGN_KEY\)\)/, file);
-    assert.match(code, /signatureCompanyFrom\(profile, await tenantOrigin\([^;]*\), (signatureD|d)esign\)/, file);
+    assert.match(code, /signatureCompanyFrom\(profile, await tenantOrigin\([^;]*\), (signatureD|d)esign, await signatureAccent\([^;]*\)\)/, file);
   }
   const action = src("src/app/actions/emails.ts");
   const save = action.slice(action.indexOf("export async function saveSignatureDesign"));

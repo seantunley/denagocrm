@@ -12,6 +12,8 @@ import {
   type SignatureCompany,
   type SignatureDesign,
 } from "@/lib/signature";
+import type { SignatureExtras } from "@/lib/signaturePeople";
+import { accentOf, BRAND_STYLES, BRAND_STYLE_LABELS, isBrandStyle } from "@/lib/signatureDesigns";
 import { drawSignatureBanner } from "@/lib/signatureBanner";
 
 /**
@@ -24,11 +26,15 @@ export default function SignatureDesignEditor({
   company,
   initial,
   canEdit,
+  moreDesigns = false,
 }: {
-  user: { name: string; email: string; mobile?: string | null; jobTitle?: string | null };
+  /** extras / teamLine: the person's own details and team line (the Email signatures pack), so the preview is theirs. */
+  user: { name: string; email: string; mobile?: string | null; jobTitle?: string | null; extras?: SignatureExtras; teamLine?: string };
   company: SignatureCompany;
   initial: SignatureDesign;
   canEdit: boolean;
+  /** The Email signatures pack's designs (lib/signatureDesigns.ts) — offered only while the pack is on. */
+  moreDesigns?: boolean;
 }) {
   const [design, setDesign] = useState(initial);
   const set = (patch: Partial<SignatureDesign>) => setDesign((d) => ({ ...d, ...patch }));
@@ -64,7 +70,7 @@ export default function SignatureDesignEditor({
       logo.src = src.pathname.startsWith("/branding/") ? src.pathname : src.href;
       await logo.decode();
       const canvas = document.createElement("canvas");
-      drawSignatureBanner(canvas, logo, { dark: CARD_DARK, accent: CARD_ORANGE });
+      drawSignatureBanner(canvas, logo, { dark: CARD_DARK, accent: accentOf(company, CARD_ORANGE) });
       const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
       if (!blob) throw new Error("no image");
       await sendBanner(blob, "generate");
@@ -99,7 +105,7 @@ export default function SignatureDesignEditor({
           <p className="text-xs text-muted-foreground">
             {design.bannerUrl
               ? "Using the panel image above. Generate it again after changing your logo, or upload your own."
-              : "Generate the panel from your logo — the dark slanted panel with the orange stripe — or upload your own image (PNG or JPG, up to 1 MB; 960 × 300 looks sharpest)."}
+              : "Generate the panel from your logo — the dark slanted panel with a stripe in your colour — or upload your own image (PNG or JPG, up to 1 MB; 960 × 300 looks sharpest)."}
           </p>
           <div className="flex flex-wrap gap-2">
             <button type="button" className="btn-primary btn-sm" disabled={!!busy || !company.logoUrl} onClick={generate}>
@@ -141,13 +147,25 @@ export default function SignatureDesignEditor({
               name="style"
               className="input"
               value={design.style}
-              onChange={(e) => set({ style: e.target.value === "classic" ? "classic" : "card" })}
+              onChange={(e) => {
+                const style = e.target.value;
+                set({ style: style === "classic" || isBrandStyle(style) ? style : "card" });
+              }}
             >
               <option value="card">Card — logo panel, round icons, address line</option>
               <option value="classic">Classic — logo above, socials row</option>
+              {BRAND_STYLES.filter((style) => moreDesigns || design.style === style).map((style) => (
+                <option key={style} value={style}>{BRAND_STYLE_LABELS[style]}</option>
+              ))}
             </select>
+            {isBrandStyle(design.style) && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                Drawn in your workspace&apos;s accent colour{company.accent ? "" : " (none is set yet, so orange)"}. The platform
+                team sets it with your branding. Check the preview: a logo made for a dark background may suit the Card design better.
+              </p>
+            )}
           </div>
-          {design.style === "card" && (
+          {design.style !== "classic" && (
             <>
               <div>
                 <label className="label" htmlFor="sig-company">Line under the name</label>

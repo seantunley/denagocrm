@@ -231,5 +231,11 @@ test("the settings preview renders what the send path renders", () => {
     assert.match(code, /getCompanyProfile\(\)/, `${file} must resolve the profile`);
     assert.match(code, /signatureCompanyFrom\(profile, await tenantOrigin\(/, `${file} must map it through the ONE helper, on the tenant origin`);
   }
-  assert.match(settings, /buildSignature\(currentUser, signatureCompany\)/);
+  // The preview is the shared section (the Email signatures pack, 2026-11-20), given exactly that user and company.
+  assert.match(settings, /<EmailSignatureSection user=\{currentUser\} company=\{signatureCompany\} design=\{signatureDesign\}/);
+  assert.match(shipped("src/components/EmailSignatureSection.tsx"), /buildSignature\(user, company\)/);
+  // …and the pack's own page builds it the same way.
+  const page = shipped("src/app/(app)/email-signatures/page.tsx");
+  assert.match(page, /const tenantId = await getActiveTenantId\(\);/);
+  assert.match(page, /signatureCompanyFrom\(await getCompanyProfile\(\), await tenantOrigin\(tenantId\), design, await signatureAccent\(tenantId\)\)/);
 });
