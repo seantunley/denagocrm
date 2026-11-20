@@ -74,15 +74,40 @@ test("one object holding the list: its list is trimmed to whole records, the tot
   const parsed = JSON.parse(out) as { showing: string; results: [{ total: number; listed: number; requests: { link: string }[] }] };
   assert.ok(out.length <= 7_000 && !out.endsWith("…(cut)"));
   const kept = parsed.results[0].requests;
-  assert.equal(parsed.showing, `${kept.length} of 60 requests`);
+  assert.equal(parsed.showing, `requests ${kept.length} of 60`);
   assert.equal(parsed.results[0].total, 60, "the totals beside the list are kept");
   assert.deepEqual(kept.map((r) => r.link), signing[0].requests.slice(0, kept.length).map((r) => r.link), "whole, in order");
 
   const ticket = (i: number) => ({ case: `C-${i}`, subject: "Battery not charging after the service ".repeat(3), customer: `Customer ${i}`, status: "open", priority: "high", assignedTo: "nobody", lastMessage: "x".repeat(140), link: `/cases/${i}` });
   const tickets = [{ open: 25, waitingOnUs: 9, overdue: 4, overdueMeans: "a customer has been waiting 24 hours or more", tickets: Array.from({ length: 25 }, (_, i) => ticket(i)) }];
   const t = JSON.parse(fitObservation(tickets, true, 3_000)) as { showing: string; results: [{ open: number; tickets: unknown[] }] };
-  assert.equal(t.showing, `${t.results[0].tickets.length} of 25 tickets+`);
+  assert.equal(t.showing, `tickets ${t.results[0].tickets.length} of 25 (and the lookup had more)`);
   assert.equal(t.results[0].open, 25);
+
+  // Re-review of #1157: deal_file holds SEVERAL lists at once (quotes, checklist, papers, signing). The reviewer's
+  // shape: 12 quotes, 25 checklist items, 15 paper groups, 20 signing requests — ~13.7k against a 7,000 budget.
+  const dealFile = [{
+    deal: "Golf estate fleet", customer: "Example Estates", link: "/leads/x",
+    quotes: Array.from({ length: 12 }, (_, i) => ({ quote: `Q-${2000 + i}`, status: "sent", replaced: i > 0, delivered: null })),
+    checklist: Array.from({ length: 25 }, (_, i) => ({ item: `Checklist item ${i}`, done: i % 2 === 0, detail: "d".repeat(140) })),
+    missing: Array.from({ length: 12 }, (_, i) => `Checklist item ${i * 2 + 1}`),
+    papersOnFile: Array.from({ length: 15 }, (_, i) => ({ type: `Type ${i}`, count: 5, files: Array.from({ length: 5 }, (_, j) => `file-${i}-${j}.pdf`) })),
+    signing: Array.from({ length: 20 }, (_, i) => ({ title: `Signing request ${i} `.repeat(3), status: "sent", sent: "2026-11-01", completed: null })),
+    handoverPhotos: 4,
+  }];
+  const full = JSON.stringify({ truncated: false, results: dealFile }).length;
+  assert.ok(full > 10_000, `well over the 7,000 budget, as the reviewer's (${full})`);
+  const d = fitObservation(dealFile, false, 7_000);
+  assert.ok(d.length <= 7_000 && !d.endsWith("…(cut)"), "valid, within budget");
+  const dp = JSON.parse(d) as { showing: string; results: [Record<string, unknown> & { quotes: unknown[]; checklist: unknown[]; papersOnFile: unknown[]; signing: unknown[] }] };
+  const df = dp.results[0];
+  for (const key of ["quotes", "checklist", "papersOnFile", "signing"] as const) {
+    const n = df[key].length;
+    assert.deepEqual(df[key], dealFile[0][key].slice(0, n), `${key}: the first records, whole`);
+    if (n < dealFile[0][key].length) assert.match(dp.showing, new RegExp(`${key} ${n} of ${dealFile[0][key].length}`));
+  }
+  assert.equal(df.deal, "Golf estate fleet");
+  assert.equal(df.missing && (df.missing as string[]).length, 12, "a list of plain strings is a field — kept whole");
 
   // A field that is a list of plain strings is not "the records"; nothing to trim → the documented cut.
   assert.match(fitObservation([{ tags: Array.from({ length: 900 }, (_, i) => `tag-${i}`) }], false, 1_000), /…\(cut\)$/);

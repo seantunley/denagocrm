@@ -60,22 +60,29 @@ export function fitObservation(results: unknown, truncated: boolean, budget: num
 function trimNestedList(record: unknown, head: unknown[], truncated: boolean, budget: number): string | null {
   if (!record || typeof record !== "object" || Array.isArray(record)) return null;
   const obj = record as Record<string, unknown>;
-  // The longest array of objects is the list; a bare array of strings (tags, reasons) is a field, not records.
-  const key = Object.keys(obj)
-    .filter((k) => Array.isArray(obj[k]) && (obj[k] as unknown[]).length > 1 && (obj[k] as unknown[]).every((v) => v && typeof v === "object"))
-    .sort((a, b) => (obj[b] as unknown[]).length - (obj[a] as unknown[]).length)[0];
-  if (!key) return null;
-  const list = obj[key] as unknown[];
-  for (let n = list.length - 1; n >= 0; n--) {
+  // EVERY list of records in it — deal_file holds quotes, checklist, papers and signing at once (re-review of #1157).
+  // A bare array of strings (tags, reasons) is a field, not records.
+  const keys = Object.keys(obj).filter(
+    (k) => Array.isArray(obj[k]) && (obj[k] as unknown[]).length > 0 && (obj[k] as unknown[]).every((v) => v && typeof v === "object"),
+  );
+  if (!keys.length) return null;
+  const full = Object.fromEntries(keys.map((k) => [k, (obj[k] as unknown[]).length]));
+  const kept = { ...full };
+  // ponytail: drops one record at a time from whichever list is longest now, so every list keeps its first records;
+  // re-measures each step (lists here are ≤60 each).
+  for (;;) {
+    const cut = keys.filter((k) => kept[k] < full[k]);
     const body = JSON.stringify({
       truncated: true,
-      showing: `${n} of ${list.length} ${key}${truncated ? "+" : ""}`,
-      note: `Only the first ${n} ${key} fit (the totals with them are complete). Narrow the lookup to see the rest — never say these are all of them.`,
-      results: [...head, { ...obj, [key]: list.slice(0, n) }],
+      showing: cut.map((k) => `${k} ${kept[k]} of ${full[k]}`).join(", ") + (truncated ? " (and the lookup had more)" : ""),
+      note: `Only the first records of ${cut.join(", ")} fit (the totals with them are complete). Narrow the lookup to see the rest — never say these are all of them.`,
+      results: [...head, { ...obj, ...Object.fromEntries(keys.map((k) => [k, (obj[k] as unknown[]).slice(0, kept[k])])) }],
     });
-    if (body.length <= budget) return body;
+    if (cut.length && body.length <= budget) return body;
+    const longest = keys.filter((k) => kept[k] > 0).sort((a, b) => kept[b] - kept[a])[0];
+    if (!longest) return null; // every list emptied and it still doesn't fit: the documented cut
+    kept[longest]--;
   }
-  return null;
 }
 
 /** A lookup that threw: which, what kind of failure, and what to do — not "that lookup failed". */
