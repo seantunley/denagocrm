@@ -111,20 +111,42 @@ test("the sender's details: read only while the pack is on, only for a member of
   const sender = src("src/lib/signatureSender.ts");
   assert.match(sender, /if \(!tenantId \|\| !\(await isModuleEnabled\("signatures"\)\)\) return \{\};/);
   assert.equal(sender.match(/memberships: \{ some: \{ tenantId \} \}/g)?.length, 2);
-  assert.match(sender, /where: \{ id: userId, signaturePhoto: true, memberships/, "the photo only when switched on");
   assert.match(src("src/lib/emailInlineLogo.ts"), /if \(photoOf\) return \(await import\("\.\/signatureSender"\)\)\.signaturePhotoBytes\(tenantId, photoOf\);/);
   // Every send path builds the signature with the sender's details.
   for (const f of ["src/lib/composerSend.ts", "src/app/actions/quoteEmail.ts"]) assert.match(src(f), /senderSignatureDetails\(/, f);
   assert.match(src("src/lib/composerSend.ts"), /reply: Boolean\(answering\)/, "replies are told they are replies");
 });
 
-test("the page: everyone edits their own details; the owner also gets the rules and the team's details", () => {
+test("the page: everyone edits their own signature; the owner also gets the design, the rules and the team", () => {
   const page = src("src/app/(app)/email-signatures/page.tsx");
   assert.match(page, /isOwner \? listActingTenantTeams\(\) : Promise\.resolve\(\[\]\)/);
   assert.match(page, /isOwner \? listActingTenantStaff\(\) : Promise\.resolve\(\[\]\)/);
-  assert.match(page, /details=\{details\}/, "the preview is the person's real signature");
+  assert.match(page, /memberships: \{ some: \{ tenantId \} \}/, "only people in this workspace");
+  assert.match(page, /teamMember\.findMany\(\{\s*where: \{ tenantId,/, "team lines from this workspace's teams");
+  assert.match(page, /\{\(isOwner \|\| Boolean\(me\.signatureHtml\?\.trim\(\)\)\) && \(/, "the design is the owner's; staff see it only to clear old HTML");
+  assert.match(page, /designPreview=\{isOwner\}/);
   const ui = src("src/components/EmailSignatureDetails.tsx");
+  assert.match(ui, /Your signature[\s\S]*?editor\(me, saveMySignatureDetails, "Save my signature", isOwner\)/);
   assert.match(ui, /\{isOwner && \(\s*<section[\s\S]*?Rules for everyone/);
   assert.match(ui, /\{isOwner && staff\.length > 0 && \(/);
-  assert.match(ui, /mayEdit\(field, locked, isOwner\) \?/, "locked details show, not editable");
+  assert.match(ui, /saveStaffSignatureDetails\.bind\(null, person\.id\)/);
+});
+
+test("the visual editor: the preview is the send path's own signature, redrawn from what is typed; locked details aren't sent", () => {
+  const editor = src("src/components/SignatureVisualEditor.tsx");
+  assert.match(editor, /^"use client";/);
+  assert.match(editor, /buildEmailHtml\("", buildSignature\(\{ \.\.\.person, signatureHtml: null, extras, teamLine \}, company\)\)/);
+  assert.match(editor, /onChange=\{\(e\) => setValues/, "redrawn as you type");
+  assert.match(editor, /problem\(field\) \? "" : values\[field\]\.trim\(\)/, "a detail that won't save isn't previewed");
+  assert.match(editor, /<input value=\{values\[field\] \|\| "—"\} readOnly disabled/, "a locked detail has no name, so it is not sent");
+  assert.match(editor, /photoUrl: photo && initial\.hasPhoto \? `\/api\/signature-photo\/\$\{person\.id\}` : null/);
+  assert.match(editor, /sandbox="allow-same-origin"/);
+});
+
+test("the preview photo: the person and the owner see it before it is switched on; a sent email only when on", () => {
+  const route = src("src/app/api/signature-photo/[userId]/route.ts");
+  assert.match(route, /userId === viewerId \|\|\s*\(await basePrisma\.tenant\.findFirst\(\{ where: \{ id: tenantId, ownerUserId: viewerId \}/);
+  const sender = src("src/lib/signatureSender.ts");
+  assert.match(sender, /\.\.\.\(evenIfOff \? \{\} : \{ signaturePhoto: true \}\)/);
+  assert.doesNotMatch(src("src/lib/emailInlineLogo.ts"), /evenIfOff/, "emails never use the preview's exception");
 });

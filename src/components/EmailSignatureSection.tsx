@@ -17,6 +17,7 @@ export default function EmailSignatureSection({
   canEditDesign,
   bannersHref,
   details,
+  designPreview = true,
 }: {
   user: { name: string; email: string; mobile: string | null; jobTitle: string | null; signatureHtml: string | null };
   company: SignatureCompany;
@@ -26,15 +27,19 @@ export default function EmailSignatureSection({
   bannersHref: string | null;
   /** The person's own details and team line, so the preview is their real signature (the Email signatures pack). */
   details?: { extras?: SignatureExtras; teamLine?: string };
+  /** The design and its preview. Off on the pack's page for staff: their visual editor already shows the signature. */
+  designPreview?: boolean;
 }) {
   return (
     <div className="space-y-4">
-      <SignatureDesignEditor
-        user={{ name: user.name, email: user.email, mobile: user.mobile, jobTitle: user.jobTitle, ...details }}
-        company={company}
-        initial={design}
-        canEdit={canEditDesign}
-      />
+      {designPreview && (
+        <SignatureDesignEditor
+          user={{ name: user.name, email: user.email, mobile: user.mobile, jobTitle: user.jobTitle, ...details }}
+          company={company}
+          initial={design}
+          canEdit={canEditDesign}
+        />
+      )}
       {canEditDesign && bannersHref && (
         <p className="text-xs text-muted-foreground">
           Want a promotion under the signature? Add a marketing banner, with dates, on{" "}

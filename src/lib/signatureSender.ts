@@ -52,10 +52,15 @@ const PHOTO_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp
  * The photo's bytes for the email (lib/emailInlineLogo.ts embeds them, so mail apps that block remote images still show
  * it) — only for a member of THIS workspace who switched their photo on. Null otherwise.
  */
-export async function signaturePhotoBytes(tenantId: string, userId: string): Promise<{ content: Buffer; contentType: string } | null> {
+export async function signaturePhotoBytes(
+  tenantId: string,
+  userId: string,
+  /** The editor's live preview, for the person themselves or the owner: the photo before it is switched on. */
+  { evenIfOff = false }: { evenIfOff?: boolean } = {},
+): Promise<{ content: Buffer; contentType: string } | null> {
   if (!/^[A-Za-z0-9_-]{6,64}$/.test(userId)) return null;
   const person = await basePrisma.user.findFirst({
-    where: { id: userId, signaturePhoto: true, memberships: { some: { tenantId } } },
+    where: { id: userId, ...(evenIfOff ? {} : { signaturePhoto: true }), memberships: { some: { tenantId } } },
     select: { avatarRef: true, avatarMimeType: true },
   });
   if (!person?.avatarRef || !person.avatarMimeType || !PHOTO_TYPES.has(person.avatarMimeType)) return null;
