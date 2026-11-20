@@ -23,6 +23,8 @@ import AssistantPlanCard from "@/components/AssistantPlanCard";
 import { wantsReport } from "@/lib/assistantReport";
 import AnswerMarkup from "@/components/AnswerMarkup";
 import type { OpeningLine } from "@/lib/daxBriefRules";
+import AssistantLearnedCard from "@/components/AssistantLearnedCard";
+import type { LearnedItem } from "@/lib/assistantLearnedReviewRules";
 
 /** DAX speaks first: "Hi — 1 customer waiting for a reply (…); 2 quotes expiring (…)." Each fact links to its list. */
 function Opening({ opening, className }: { opening: OpeningLine; className: string }) {
@@ -42,6 +44,7 @@ function Opening({ opening, className }: { opening: OpeningLine; className: stri
 type Turn = {
   question: string; answer?: string; cited?: string; evidence?: Evidence[]; turnId?: string;
   error?: string; rows: AssistantRow[]; learned?: number; actions?: ActionCard[]; choices?: string[]; source?: string;
+  learnedNotes?: { notes: LearnedItem[]; canReview: boolean };
   /** Stopped by the person: shown here as stopped, with nothing from it — never a card. Not in the saved history. */
   stopped?: boolean;
 };
@@ -336,7 +339,7 @@ export default function AssistantChat({
         : result.ok
           ? {
               question: shown, answer: result.answer, cited: result.cited, evidence: result.evidence, turnId: result.turnId,
-              rows: result.rows, learned: result.learned, actions: result.actions, choices: result.choices,
+              rows: result.rows, learned: result.learned, learnedNotes: result.learnedNotes, actions: result.actions, choices: result.choices,
             }
           : { question: shown, error: result.error, rows: [] },
       // The exchange it corrected is gone from the server — unless the server kept it (and asked nothing).
@@ -486,7 +489,9 @@ export default function AssistantChat({
       {/* Only under an answer to "a report on…" / "a PDF of…": never on every reply. */}
       {turn.turnId && turn.answer && !turn.stopped && wantsReport(turn.question) && <ReportLink turnId={turn.turnId} />}
       {listen && turn.turnId && <Listen turnId={turn.turnId} />}
-      {Boolean(turn.learned) && (
+      {turn.learnedNotes?.notes.length ? (
+        <AssistantLearnedCard name={name} notes={turn.learnedNotes.notes} canReview={turn.learnedNotes.canReview} />
+      ) : Boolean(turn.learned) && (
         <p className="text-[11px] text-muted-foreground">
           🧠 {name} learned something from this — the workspace owner can review it in Settings → Assistant.
         </p>

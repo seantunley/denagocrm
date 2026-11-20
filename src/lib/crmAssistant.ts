@@ -58,6 +58,8 @@ import type { SearchHitType } from "./recordSearch";
 import { assistantWebAllowed } from "./assistantUser";
 import { MAX_IMAGES_PER_QUESTION } from "./assistantImage";
 import { applyLearn, loadLearned, loadPlaybook, markNotesUsed, saveDecision, visibleTo } from "./assistantMemoryStore";
+import { justLearned } from "./assistantLearnedReview";
+import type { LearnedItem } from "./assistantLearnedReviewRules";
 import { checkBacksOn, setCheckBacks, type CheckBack } from "./proactiveFollowUp";
 import { findExistingContact } from "./contactMatch";
 import { DOCUMENT_TYPES_KEY, parseDocumentTypes } from "./documentLabels";
@@ -135,6 +137,8 @@ export type AssistantResult =
   | {
       ok: true; answer: string; cited?: string; evidence?: Evidence[]; rows: AssistantRow[]; tools: string[];
       learned: number; actions: ActionCard[]; choices: string[]; saved: boolean; turnId?: string;
+      /** What it learned (lib/assistantLearnedReview justLearned), shown under the answer; canReview = keep/drop there. */
+      learnedNotes?: { notes: LearnedItem[]; canReview: boolean };
       /** The conversation this answer is in (assistantConversation) — the chat keeps asking in it. */
       conversationId?: string;
       /** The version to SAY, when asked for one (opts.spoken) and it still matches the answer. */
@@ -1075,6 +1079,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   }
   // In the trail: that it learned, from whose conversation, how much — not the
   // text (that is in Settings → Assistant → Advanced, for the owner to review).
+  const learnedNotes = learnedCount > 0 ? await justLearned(ownedWriteTenantId(), user, new Date(started)).catch(() => undefined) : undefined;
   if (learnedCount > 0) {
     await logAudit({
       action: "assistant.learned",
@@ -1132,7 +1137,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
     await runAfterResponse(() => afterAnswer(who, thread.id, asked, reply.state));
   }
   return {
-    ok: true, answer, rows, tools, learned: learnedCount, actions, choices, saved: saved !== null,
+    ok: true, answer, rows, tools, learned: learnedCount, learnedNotes, actions, choices, saved: saved !== null,
     ...(dropWaiting.length ? { dropWaiting } : {}),
     // The script was written with the answer: when the CRM replaced the answer (tasks that weren't set up) or added
     // a caution about its figures, it no longer matches — then the answer itself is read.

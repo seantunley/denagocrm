@@ -22,6 +22,7 @@ import { ASSISTANT_VOICE_REPLIES_KEY, voiceLanguageFor, voiceRepliesSwitchOn } f
 import { voiceLanguage, type VoiceLanguage } from "./voiceLanguage";
 import { ASSISTANT_PROFILE_KEY, parseProfile } from "./assistantSoul";
 import { logAudit } from "./audit";
+import { answerReviewReply } from "./assistantLearnedReview";
 import { canAccessQuote, hasPermission } from "./permissions";
 import { logError } from "./errorLog";
 import { rateLimitKey, registerRateLimitAttempt } from "./rateLimit";
@@ -317,6 +318,13 @@ export async function handleStaffWhatsApp(
   if (pendingId) {
     await confirmFromWhatsApp(tenantId, user, waId, pendingId);
     return afterConfirm();
+  }
+  // "keep 1" / "drop all" answering the morning brief's "To review" list (lib/assistantLearnedReview). Exactly that or
+  // nothing, and only with a recent list: anything else is a question. Not a question either — no ask limit.
+  const reviewed = "text" in input && !input.choiceId ? await answerReviewReply(tenantId, user, input.text) : null;
+  if (reviewed) {
+    await sendPlan(waId, { texts: [reviewed], buttons: null });
+    return true;
   }
   if ("text" in input && !input.choiceId && (await answerYes(input.text))) {
     return true;
