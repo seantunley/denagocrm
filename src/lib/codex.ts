@@ -88,6 +88,29 @@ export async function codexModel(): Promise<string> {
   return modelCandidates(await getSetting(CODEX_MODEL_KEY))[0];
 }
 
+// ponytail: client_version is pinned (Codex 0.171.0, Nov 2026); the backend may hide models newer than it. Raise it
+// when the list stops showing a model the Codex app shows.
+const MODELS_URL = "https://chatgpt.com/backend-api/codex/models?client_version=0.171.0";
+
+/**
+ * The models ChatGPT offers this sign-in — the list the Codex app's own picker reads (codex-rs codex-api
+ * endpoint/models.rs). null when it can't be read; the settings page then shows the built-in list. Never renews the
+ * sign-in: it runs while a page renders, where a token write has no workspace to land in — an access token due for
+ * renewal just means the built-in list this time.
+ */
+export async function codexModelList(): Promise<unknown[] | null> {
+  const tokens = await readTokens();
+  if (!tokens || needsRefresh(tokens)) return null;
+  const res = await fetch(MODELS_URL, {
+    headers: headers({ Authorization: `Bearer ${tokens.access}`, ...(tokens.accountId ? { "chatgpt-account-id": tokens.accountId } : {}) }),
+    signal: AbortSignal.timeout(5000),
+    cache: "no-store",
+  }).catch(() => null);
+  if (!res?.ok) return null;
+  const json = (await res.json().catch(() => null)) as { models?: unknown } | null;
+  return Array.isArray(json?.models) ? json.models : null;
+}
+
 export type CodexStatus =
   | { state: "disconnected" }
   | { state: "pending"; userCode: string; verificationUrl: string; expiresAt: number }

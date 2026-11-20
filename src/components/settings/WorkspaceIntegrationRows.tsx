@@ -9,8 +9,9 @@ import { connectTelegram, disconnectTelegram } from "@/app/actions/bot";
 import { getSetting } from "@/lib/settings";
 import { saveAiModel } from "@/app/actions/aiModel";
 import { codexModel, codexStatus, type CodexStatus } from "@/lib/codex";
-import { CODEX_DEFAULT_MODEL, CODEX_QUICK_MODEL, modelChoices } from "@/lib/codexProtocol";
-import { AI_CLAUDE_MODEL_KEY, AI_PROVIDER_CHOICES, CLAUDE_MODEL_CHOICES, claudeModelFor, pickAiProvider } from "@/lib/aiProviderRules";
+import { CODEX_DEFAULT_MODEL, CODEX_QUICK_MODEL } from "@/lib/codexProtocol";
+import { AI_CLAUDE_MODEL_KEY, AI_PROVIDER_CHOICES, claudeModelFor, pickAiProvider } from "@/lib/aiProviderRules";
+import { aiModelCatalog } from "@/lib/aiModelCatalog";
 import VoicePicker from "@/components/settings/VoicePicker";
 import { DEFAULT_TTS_MODEL, TTS_MODELS, VOICE_SPEEDS, elevenLabsVoices, modelTakesSpeed } from "@/lib/elevenlabs";
 import { STT_CUSTOMER_NAMES_KEY, TTS_MODEL_KEY, VOICE_SPEED_KEY } from "@/lib/voiceSettings";
@@ -65,17 +66,24 @@ export default async function platformIntegrationRows({ xAccountId }: { xAccount
   const chatGpt: CodexStatus = await codexStatus().catch((): CodexStatus => ({ state: "disconnected" }));
   // The voices in the ElevenLabs account, for the picker; null (a typed ID instead) when there is no key or it fails.
   const voices = setting("ELEVENLABS_API_KEY") ? await elevenLabsVoices().catch(() => null) : null;
-  // What the chatbot and AI helpers actually run on now — the choice, or the other one when the choice isn't set up.
+  // What the chatbot and AI helpers actually run on now: the choice — or ChatGPT when Claude is chosen without a key.
+  // Never Claude in place of ChatGPT (pickAiProvider): then the AI is off, and the row says so.
   const aiInUse = pickAiProvider(setting("AI_PROVIDER"), chatGpt.state === "connected", Boolean(setting("ANTHROPIC_API_KEY")));
   const aiChosen = setting("AI_PROVIDER") === "claude" ? "claude" : "chatgpt";
-  // The one model picker: every ChatGPT model on offer and every Claude one. ChatGPT's model is read through the same
-  // scoped read as the status, connected or not.
+  // The one model picker: the models each provider lists for this workspace (lib/aiModelCatalog), the built-in lists
+  // when it can't be asked. ChatGPT's model is read through the same scoped read as the status, connected or not.
   const chatGptModel = chatGpt.state === "connected" ? chatGpt.model : await codexModel().catch(() => CODEX_DEFAULT_MODEL);
   const claudeChosen = claudeModelFor(setting(AI_CLAUDE_MODEL_KEY), "");
+  const catalog = await aiModelCatalog({ chatgpt: chatGptModel, claude: claudeChosen });
   const modelGroups = {
-    chatgpt: modelChoices(chatGptModel).map((choice) => ({ value: `chatgpt:${choice.id}`, label: choice.label })),
-    claude: CLAUDE_MODEL_CHOICES.map((choice) => ({ value: `claude:${choice.id}`, label: choice.label })),
+    chatgpt: catalog.chatgpt.map((choice) => ({ value: `chatgpt:${choice.id}`, label: choice.label })),
+    claude: catalog.claude.map((choice) => ({ value: `claude:${choice.id}`, label: choice.label })),
   };
+  // Nothing hidden: say which lists came from the provider and which are the built-in fallback.
+  const listSource = [
+    chatGpt.state === "connected" ? `ChatGPT's models ${catalog.chatgptLive ? "are as ChatGPT lists them" : "are the built-in list (ChatGPT couldn't be asked just now)"}` : null,
+    setting("ANTHROPIC_API_KEY") ? `Claude's ${catalog.claudeLive ? "are as Anthropic lists them" : "are the built-in list (Anthropic couldn't be asked just now)"}` : null,
+  ].filter(Boolean).join("; ");
   const modelChosen = aiChosen === "claude" ? `claude:${claudeChosen}` : `chatgpt:${chatGptModel}`;
   const modelInUse = aiInUse === "chatgpt" ? chatGptModel : claudeChosen || "automatic";
 
@@ -229,8 +237,8 @@ export default async function platformIntegrationRows({ xAccountId }: { xAccount
           run on the model chosen here. A ChatGPT model runs on your subscription, with no per-use cost, and is DAX&apos;s
           model too. A Claude model is paid per use from Anthropic credit. Either way, quick and automatic jobs (chatbot
           replies, spam screening, the automatic lead research) stay on a quick, low-cost model ({CODEX_QUICK_MODEL} or
-          Claude Haiku); the model chosen here runs the jobs someone asks for. DAX always uses ChatGPT. If the one chosen
-          isn&apos;t set up, the other is used.
+          Claude Haiku); the model chosen here runs the jobs someone asks for. DAX always uses ChatGPT. If ChatGPT
+          isn&apos;t connected the AI is off — it never moves to paid Claude credit by itself.
         </p>
         <SaveForm resetOnSuccess={false} action={saveAiModel} className="flex gap-2 items-end">
           <div className="flex-1">
@@ -247,10 +255,16 @@ export default async function platformIntegrationRows({ xAccountId }: { xAccount
           </div>
           <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
         </SaveForm>
+        {listSource && <p className="mt-2 text-xs text-muted-foreground">{listSource}.</p>}
         {aiInUse && aiInUse !== aiChosen && (
           <p className="mt-2 text-xs text-amber-300" role="status">
-            {aiChosen === "chatgpt" ? "ChatGPT isn't connected" : "There's no Anthropic key"}, so{" "}
-            {aiInUse === "chatgpt" ? "ChatGPT" : "Claude"} is being used.
+            There&apos;s no Anthropic key, so ChatGPT is being used.
+          </p>
+        )}
+        {!aiInUse && aiChosen === "chatgpt" && setting("ANTHROPIC_API_KEY") && (
+          <p className="mt-2 text-xs text-amber-300" role="status">
+            ChatGPT isn&apos;t connected, so the AI is off. Reconnect ChatGPT below, or choose a Claude model to use
+            Anthropic credit.
           </p>
         )}
       </>
@@ -263,7 +277,7 @@ export default async function platformIntegrationRows({ xAccountId }: { xAccount
       body: (
       <>
         <p className="text-xs text-muted-foreground mb-4">
-          Pay-per-use Claude, used when &quot;Which AI the CRM uses&quot; is set to a Claude model (or ChatGPT isn&apos;t connected).
+          Pay-per-use Claude, used only when &quot;Which AI the CRM uses&quot; is set to a Claude model.
           Suggestions only — the AI never changes data. Get a key and load credit at console.anthropic.com.
         </p>
         <div className="space-y-3">
@@ -315,7 +329,7 @@ export default async function platformIntegrationRows({ xAccountId }: { xAccount
               <div className="flex-1">
                 <label className="label" htmlFor="codex-model">DAX and research model</label>
                 <select id="codex-model" name="value" className="input font-mono" defaultValue={chatGpt.model}>
-                  {modelChoices(chatGpt.model).map((choice) => (
+                  {catalog.chatgpt.map((choice) => (
                     <option key={choice.id} value={choice.id}>{choice.label}</option>
                   ))}
                 </select>

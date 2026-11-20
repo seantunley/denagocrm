@@ -5,7 +5,7 @@ import { CODEX_QUICK_MODEL } from "./codexProtocol";
 import { safeCodexError } from "./codexErrors";
 import { recordAiUsage } from "./systemHealth";
 import { logError } from "./errorLog";
-import { AI_CLAUDE_MODEL_KEY, AI_PROVIDER_KEY, chatTranscript, claudeModelFor, isOutOfCredit, pickAiProvider, type AiProvider } from "./aiProviderRules";
+import { AI_CLAUDE_MODEL_KEY, AI_PROVIDER_KEY, chatTranscript, claudeModelFor, isModelGone, isOutOfCredit, pickAiProvider, type AiProvider } from "./aiProviderRules";
 
 /** The Claude model a job runs on: the one chosen in Settings → Integrations, or the job's own when none is. */
 export async function claudeModel(jobModel: string): Promise<string> {
@@ -68,10 +68,10 @@ export async function aiText(input: AiTextInput, chosen?: AiProvider | null): Pr
       model = input.quick ? CODEX_QUICK_MODEL : "chatgpt";
       return await askChatGpt(input, model);
     }
-    model = input.claudeModel ?? "claude-haiku-4-5";
+    const jobModel = input.claudeModel ?? "claude-haiku-4-5";
     // Quick jobs (chatbot, screening, extraction) keep their cheap model, as quick ChatGPT jobs keep the quick one.
-    if (!input.quick) model = await claudeModel(model);
-    return await askClaude(input, model);
+    model = input.quick ? jobModel : await claudeModel(jobModel);
+    return await askClaude(input, model, jobModel);
   } catch (error) {
     const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
     await logError(input.scope, error instanceof Error ? error.name : "error").catch(() => {});
@@ -96,7 +96,8 @@ async function askChatGpt(input: AiTextInput, asked: string): Promise<AiTextResu
   return { ok: true, text: reply.text, provider: "chatgpt", model: reply.model ?? asked, usage };
 }
 
-async function askClaude(input: AiTextInput, asked: string): Promise<AiTextResult> {
+/** jobModel: the job's own model, used once if Anthropic no longer offers the chosen one (`asked`). */
+async function askClaude(input: AiTextInput, asked: string, jobModel?: string): Promise<AiTextResult> {
   const apiKey = await getProviderKey("ANTHROPIC_API_KEY");
   if (!apiKey) return { ok: false, failure: "not_configured", provider: "claude", model: null };
   // Text alone goes as a plain string, exactly as every caller sent it before; blocks only for a file.
@@ -114,7 +115,13 @@ async function askClaude(input: AiTextInput, asked: string): Promise<AiTextResul
     body: JSON.stringify({ model: asked, max_tokens: input.maxTokens, system: input.system, messages: input.history ?? [{ role: "user", content }] }),
   });
   if (!res.ok) {
-    const noCredit = isOutOfCredit(res.status, await res.text().catch(() => ""));
+    const body = await res.text().catch(() => "");
+    if (jobModel && jobModel !== asked && isModelGone(res.status, body)) {
+      // Model names only — never the reply body (no client data in logs).
+      await logError(input.scope, `Claude model ${asked} isn't offered any more — used ${jobModel}. Choose another in Settings → Integrations.`).catch(() => {});
+      return askClaude(input, jobModel);
+    }
+    const noCredit = isOutOfCredit(res.status, body);
     await logError(input.scope, `Anthropic API ${res.status}${noCredit ? " — out of credit" : ""}`).catch(() => {});
     return { ok: false, failure: noCredit ? "no_credit" : "failed", provider: "claude", model: asked };
   }

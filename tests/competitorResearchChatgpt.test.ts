@@ -13,8 +13,10 @@ const fn = (name: string) => lib.slice(lib.indexOf(`async function ${name}(`), l
 
 test("research and discovery use ChatGPT (the default AI), and never reach Anthropic on that path", () => {
   const call = fn("callWithWebSearch");
-  const codexBranch = call.slice(call.indexOf("if (await usesChatGpt())"), call.indexOf('const apiKey = await getProviderKey("ANTHROPIC_API_KEY")'));
-  assert.ok(call.indexOf("if (await usesChatGpt())") > -1 && call.indexOf("if (await usesChatGpt())") < call.indexOf("api.anthropic.com"));
+  const codexBranch = call.slice(call.indexOf('if (provider === "chatgpt")'), call.indexOf('const apiKey = await getProviderKey("ANTHROPIC_API_KEY")'));
+  assert.ok(call.indexOf('if (provider === "chatgpt")') > -1 && call.indexOf('if (provider === "chatgpt")') < call.indexOf("api.anthropic.com"));
+  // No AI set up stops here: never read as "not ChatGPT, so Claude" (Sean, 2026-11-20: never slide into per-use billing).
+  assert.match(call, /const provider = await competitorAi\(\);\s+if \(!provider\) return \{ error:/);
   assert.match(codexBranch, /codexRespond\(\{[\s\S]*webSearch: true,/);
   assert.match(codexBranch, /if \("error" in reply\) \{[\s\S]*return \{ error: reply\.error \};/, "a ChatGPT failure is returned, not retried on Anthropic");
   assert.doesNotMatch(codexBranch, /anthropic/i);
@@ -22,7 +24,9 @@ test("research and discovery use ChatGPT (the default AI), and never reach Anthr
 
 test("daily change classification uses ChatGPT too", () => {
   const classify = fn("aiClassifyChange");
-  assert.ok(classify.indexOf("if (await usesChatGpt())") < classify.indexOf("api.anthropic.com"));
+  const branch = classify.indexOf('if (provider === "chatgpt")');
+  assert.ok(branch > -1 && branch < classify.indexOf("api.anthropic.com"));
+  assert.match(classify, /const provider = await competitorAi\(\);\s+if \(!provider\) return null;/);
   assert.match(classify, /codexRespond\(\{ instructions: system, prompt: user, reasoningEffort: "low"/);
 });
 
