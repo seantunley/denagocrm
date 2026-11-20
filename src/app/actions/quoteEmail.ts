@@ -18,7 +18,7 @@ import { tenantEmailContent } from "@/lib/signing/signingEmail";
 import { deliverQuoteEmail, quotePdfFileName } from "@/lib/quoteEmail";
 import { emitQuoteJourneyEvent } from "@/lib/leadJourneyEvents";
 import { emailWithBanner, recordBannerSent } from "@/lib/signatureBannerStore";
-import { senderSignatureDetails, signatureAccent } from "@/lib/signatureSender";
+import { senderSignatureDetails, signatureAccent, signatureDesignInUse } from "@/lib/signatureSender";
 import { trackSignatureLinks } from "@/lib/signatureLinkStore";
 import { tenantOrigin } from "@/lib/tenantOrigin";
 import { getSetting, getRegionalSettings } from "@/lib/settings";
@@ -103,13 +103,15 @@ async function signQuoteEmail(
   // whose lines the owner chose. A second signature must not be added to it.
   if (email.designed) return email;
   try {
-    const [person, profile, design, origin] = await Promise.all([
+    const [person, profile, saved, origin] = await Promise.all([
       prisma.user.findUnique({ where: { id: user.id }, select: { name: true, email: true, mobile: true, jobTitle: true, signatureHtml: true } }),
       getCompanyProfile(tenantId),
       getSetting(SIGNATURE_DESIGN_KEY).then(parseSignatureDesign),
       tenantOrigin(tenantId),
     ]);
     if (!person) return email;
+    // The pack's extras (privacy link, its designs, link counting) only while it is on.
+    const design = await signatureDesignInUse(tenantId, saved);
     // THE PERSON, in the workspace's signature style. Inside the branded card the
     // header already carries the logo and the footer the company's details, so
     // the signature leaves out the logo panel, tagline and address — the same

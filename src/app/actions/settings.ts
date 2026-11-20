@@ -730,9 +730,9 @@ export async function saveMyProfile(formData: FormData) {
   return asActionResult(async () => {
     const user = await requireUser();
     const signatureHtml = String(formData.get("signatureHtml") ?? "").trim() || null;
-    // Custom HTML replaces the whole branded signature, so it is the owner's alone (the Email signatures pack, item 2:
-    // "few staff can do it, and it can break the brand"). Anyone may still CLEAR theirs back to the workspace design.
-    if (signatureHtml && !(await isTenantOwner())) {
+    // While the Email signatures pack is on, custom HTML is the owner's alone (item 2: "few staff can do it, and it can
+    // break the brand"); anyone may still CLEAR theirs back to the workspace design. Pack off: as before, anyone may.
+    if (signatureHtml && (await isModuleEnabled("signatures")) && !(await isTenantOwner())) {
       refuse("Only the workspace owner can use custom signature HTML. Your details — phone, hours, booking link — go on the Email signatures page.");
     }
     await prisma.user.update({ where: { id: user.id }, data: { signatureHtml } });

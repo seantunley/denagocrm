@@ -19,6 +19,21 @@ export const BRAND_STYLE_LABELS: Record<BrandStyle, string> = {
 
 export const isBrandStyle = (style: unknown): style is BrandStyle => BRAND_STYLES.includes(style as BrandStyle);
 
+/**
+ * The design as the pack being OFF uses it: the signature from before the pack. Its extras pause — a pack design falls
+ * back to the card; no short replies, privacy link or link counting. Only what is USED changes: the stored design keeps
+ * them, so switching the pack back on restores everything (review of #1162).
+ */
+export function withoutPackExtras(design: SignatureDesign): SignatureDesign {
+  return {
+    ...design,
+    style: isBrandStyle(design.style) ? "card" : design.style,
+    shortReplies: false,
+    legal: { privacyUrl: "" },
+    trackLinks: false,
+  };
+}
+
 /** The orange every signature used before workspaces had colours; the colour for a workspace that hasn't set one. */
 export const DEFAULT_ACCENT = "#ea580c";
 

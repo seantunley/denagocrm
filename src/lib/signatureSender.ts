@@ -6,6 +6,7 @@ import { brandForTenant } from "./tenantBrand";
 import { senderTeamIds } from "./signatureBannerStore";
 import { teamLineFor, type SignatureExtras } from "./signaturePeople";
 import type { SignatureDesign } from "./signature";
+import { withoutPackExtras } from "./signatureDesigns";
 
 /*
  * What a sender's signature carries beyond name, title, mobile and email (the Email signatures pack, 2026-11-20): their
@@ -20,6 +21,11 @@ import type { SignatureDesign } from "./signature";
 export async function signatureAccent(tenantId: string | null): Promise<string | null> {
   if (!tenantId || !(await isModuleEnabled("signatures"))) return null;
   return (await brandForTenant(tenantId)).primary;
+}
+
+/** The saved design as this workspace's signatures use it: whole while the pack is on, without its extras when off. */
+export async function signatureDesignInUse(tenantId: string | null, design: SignatureDesign): Promise<SignatureDesign> {
+  return tenantId && (await isModuleEnabled("signatures")) ? design : withoutPackExtras(design);
 }
 
 /** The address of a person's signature photo. Never fetched by recipients: the email carries the bytes (below). */

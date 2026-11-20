@@ -39,7 +39,7 @@ import { tenantOrigin } from "@/lib/tenantOrigin";
 import { bannerClickUrl, bannerHtml, bannerPosition } from "@/lib/signatureBanners";
 import { LEGAL_LINE_KEY, htmlWithLegalLine } from "@/lib/emailLegalLine";
 import { bannerForEmail, recordBannerSent } from "@/lib/signatureBannerStore";
-import { senderSignatureDetails, signatureAccent } from "@/lib/signatureSender";
+import { senderSignatureDetails, signatureAccent, signatureDesignInUse } from "@/lib/signatureSender";
 import { trackSignatureLinks } from "@/lib/signatureLinkStore";
 import { threadableMessageId } from "@/lib/emailReply";
 
@@ -89,8 +89,9 @@ export async function composerHtml(
   preview = false,
 ): Promise<{ html: string; tenantId: string | null; bannerId: string | null }> {
   // The workspace's signature design (Settings → My account → Email signature), same as the settings preview.
-  const design = parseSignatureDesign(await getSetting(SIGNATURE_DESIGN_KEY));
   const tenantId = await tenantIdFor(user.id);
+  // The pack's extras (short replies, privacy link, its designs, link counting) only while it is on.
+  const design = await signatureDesignInUse(tenantId, parseSignatureDesign(await getSetting(SIGNATURE_DESIGN_KEY)));
   const company = signatureCompanyFrom(profile, await tenantOrigin(tenantId), design, await signatureAccent(tenantId));
   // The banner's link is on the same origin as the signature's own images: the workspace's.
   const origin = company.assetBase;

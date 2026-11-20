@@ -19,6 +19,7 @@ export default function EmailSignatureSection({
   details,
   designPreview = true,
   moreDesigns = false,
+  htmlOwnerOnly = false,
 }: {
   user: { name: string; email: string; mobile: string | null; jobTitle: string | null; signatureHtml: string | null };
   company: SignatureCompany;
@@ -32,7 +33,11 @@ export default function EmailSignatureSection({
   designPreview?: boolean;
   /** The pack's extra designs; only its own page offers them (the pack is on there). */
   moreDesigns?: boolean;
+  /** The pack is on: custom HTML is the owner's alone; anyone else can only remove theirs (saveMyProfile agrees). */
+  htmlOwnerOnly?: boolean;
 }) {
+  const hasHtml = Boolean(user.signatureHtml?.trim());
+  const mayEditHtml = canEditDesign || !htmlOwnerOnly;
   return (
     <div className="space-y-4">
       {designPreview && (
@@ -50,17 +55,24 @@ export default function EmailSignatureSection({
           <Link href={bannersHref} className="text-primary hover:underline">Signature banners</Link>.
         </p>
       )}
-      {/* Custom HTML replaces the whole branded signature: the owner's alone (saveMyProfile refuses anyone else). */}
-      {/* Anyone who already has one still sees it, to clear it. */}
-      {(canEditDesign || Boolean(user.signatureHtml?.trim())) && (
+      {/* Custom HTML replaces the whole branded signature. Pack on: the owner's alone; anyone who already has one */}
+      {/* still sees it, with only a button to remove it. Pack off: anyone may, as before the pack. */}
+      {(mayEditHtml || hasHtml) && (
       <details className="rounded-lg border border-border">
         <summary className="px-4 py-2.5 cursor-pointer text-sm text-muted-foreground">
-          Advanced: use your own HTML instead{user.signatureHtml?.trim() ? " (in use on your emails)" : ""}
+          Advanced: use your own HTML instead{hasHtml ? " (in use on your emails)" : ""}
         </summary>
         <div className="px-4 pb-4 space-y-3">
-          {user.signatureHtml?.trim() && (
+          {hasHtml && (
             <div className="rounded-lg bg-white p-4 overflow-x-auto" dangerouslySetInnerHTML={{ __html: buildSignature(user, company) }} />
           )}
+          {!mayEditHtml ? (
+            <SaveForm success="Your own HTML is removed" resetOnSuccess={false} action={saveMyProfile} className="space-y-2">
+              <input type="hidden" name="signatureHtml" value="" />
+              <p className="text-xs text-muted-foreground">Only the workspace owner can set custom signature HTML now. Remove yours to use the workspace signature with your own details.</p>
+              <SaveButton className="btn-secondary btn-sm">Remove my HTML signature</SaveButton>
+            </SaveForm>
+          ) : (
           <SaveForm success="Profile saved" resetOnSuccess={false} action={saveMyProfile} className="space-y-3 max-w-md">
             <div>
               <label className="label">Custom signature HTML (optional)</label>
@@ -75,6 +87,7 @@ export default function EmailSignatureSection({
             </div>
             <SaveButton className="btn-primary btn-sm">Save</SaveButton>
           </SaveForm>
+          )}
         </div>
       </details>
       )}

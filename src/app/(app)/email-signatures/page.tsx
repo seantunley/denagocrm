@@ -106,6 +106,7 @@ export default async function EmailSignaturesPage() {
             details={details}
             designPreview={isOwner}
             moreDesigns
+            htmlOwnerOnly
           />
         </section>
       )}
