@@ -16,12 +16,14 @@ export const dynamic = "force-dynamic";
 const PERSON_SELECT = {
   id: true, name: true, email: true, mobile: true, jobTitle: true, signatureHtml: true, avatarRef: true, signaturePhoto: true,
   signatureQualifications: true, signatureDirectLine: true, signatureWhatsapp: true, signatureBookingUrl: true, signatureHours: true,
+  signatureCta: true,
 } as const;
 
 type PersonRow = {
   id: string; name: string; email: string; mobile: string | null; jobTitle: string | null; signatureHtml: string | null;
   avatarRef: string | null; signaturePhoto: boolean; signatureQualifications: string | null; signatureDirectLine: string | null;
   signatureWhatsapp: string | null; signatureBookingUrl: string | null; signatureHours: string | null;
+  signatureCta: string | null;
 };
 
 /**
@@ -62,7 +64,7 @@ export default async function EmailSignaturesPage() {
   const asPerson = (u: PersonRow): SignaturePerson => ({
     id: u.id, name: u.name, email: u.email, mobile: u.mobile, jobTitle: u.jobTitle,
     qualifications: u.signatureQualifications, directLine: u.signatureDirectLine, whatsapp: u.signatureWhatsapp,
-    bookingUrl: u.signatureBookingUrl, hours: u.signatureHours, photo: u.signaturePhoto, hasPhoto: Boolean(u.avatarRef),
+    bookingUrl: u.signatureBookingUrl, hours: u.signatureHours, cta: u.signatureCta, photo: u.signaturePhoto, hasPhoto: Boolean(u.avatarRef),
     teamLine: teamLineFor(design.teams ?? [], memberships.filter((m) => m.userId === u.id).map((m) => m.teamId)),
     customHtmlInUse: Boolean(u.signatureHtml?.trim()),
   });
@@ -83,6 +85,7 @@ export default async function EmailSignaturesPage() {
         teams={teams}
         teamLines={design.teams ?? []}
         shortReplies={design.shortReplies === true}
+        legal={design.legal ?? { companyLine: "", notice: "", privacyUrl: "" }}
         staff={others.map(asPerson)}
       />
       {/* The design is the owner's; anyone else sees this only to clear an old HTML signature of their own. */}

@@ -37,7 +37,7 @@ export async function senderSignatureDetails(
     where: { id: userId, memberships: { some: { tenantId } } },
     select: {
       signatureQualifications: true, signatureDirectLine: true, signatureWhatsapp: true, signatureBookingUrl: true,
-      signatureHours: true, signaturePhoto: true, avatarRef: true,
+      signatureHours: true, signatureCta: true, signaturePhoto: true, avatarRef: true,
     },
   });
   if (!person) return {};
@@ -49,6 +49,7 @@ export async function senderSignatureDetails(
       whatsapp: person.signatureWhatsapp,
       bookingUrl: person.signatureBookingUrl,
       hours: person.signatureHours,
+      cta: person.signatureCta,
       photoUrl: person.signaturePhoto && person.avatarRef ? `${origin.replace(/\/$/, "")}${signaturePhotoPath(userId)}` : null,
     },
     teamLine,

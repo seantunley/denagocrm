@@ -17,6 +17,7 @@ export type PersonDetails = {
   whatsapp: string | null;
   bookingUrl: string | null;
   hours: string | null;
+  cta: string | null;
   photo: boolean;
   /** A profile photo exists to show (it is uploaded in Settings → My account). */
   hasPhoto: boolean;
@@ -28,6 +29,7 @@ const PLACEHOLDER: Record<TextField, string> = {
   whatsapp: "e.g. 082 555 1234",
   bookingUrl: "https://… (your calendar booking page)",
   hours: "e.g. Mon–Fri 8:00–17:00",
+  cta: "e.g. Ask me about the new model",
 };
 
 /**

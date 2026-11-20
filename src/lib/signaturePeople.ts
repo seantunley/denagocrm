@@ -7,7 +7,7 @@
 import { escapeHtml } from "./escapeHtml";
 
 /** The extra details a person can have on their signature. Each appears only when set. */
-export const SIGNATURE_FIELDS = ["qualifications", "directLine", "whatsapp", "bookingUrl", "hours", "photo"] as const;
+export const SIGNATURE_FIELDS = ["qualifications", "directLine", "whatsapp", "bookingUrl", "hours", "cta", "photo"] as const;
 export type SignatureField = (typeof SIGNATURE_FIELDS)[number];
 
 export const SIGNATURE_FIELD_LABELS: Record<SignatureField, string> = {
@@ -16,6 +16,7 @@ export const SIGNATURE_FIELD_LABELS: Record<SignatureField, string> = {
   whatsapp: "WhatsApp number",
   bookingUrl: "Booking link (“book a time with me”)",
   hours: "Working hours",
+  cta: "Your own line (e.g. “Ask me about the new model”)",
   photo: "Photo (your profile photo)",
 };
 
@@ -26,6 +27,7 @@ export type SignatureExtras = {
   whatsapp?: string | null;
   bookingUrl?: string | null;
   hours?: string | null;
+  cta?: string | null;
   photoUrl?: string | null;
 };
 
@@ -102,7 +104,12 @@ export function extrasHtml(extras: SignatureExtras | undefined, teamLine: string
     wa ? link(wa, "WhatsApp me") : "",
     booking ? link(booking, "Book a time with me") : "",
   ].filter(Boolean).join("&nbsp;&nbsp;·&nbsp;&nbsp;");
-  const lines = [reach, e.hours?.trim() ? escapeHtml(e.hours.trim()) : "", teamLine.trim() ? escapeHtml(teamLine.trim()) : ""].filter(Boolean);
+  const lines = [
+    reach,
+    e.hours?.trim() ? escapeHtml(e.hours.trim()) : "",
+    teamLine.trim() ? escapeHtml(teamLine.trim()) : "",
+    e.cta?.trim() ? `<span style="color:${accent};font-weight:bold;">${escapeHtml(e.cta.trim())}</span>` : "",
+  ].filter(Boolean);
   return lines.length
     ? `<div style="padding-top:8px;font-size:13px;line-height:20px;color:#475569;">${lines.join("<br />")}</div>`
     : "";
@@ -120,6 +127,41 @@ export function photoHtml(extras: SignatureExtras | undefined, alt: string, size
 export function qualificationsHtml(extras: SignatureExtras | undefined): string {
   const q = extras?.qualifications?.trim();
   return q ? `<div style="padding-top:2px;font-size:12px;color:#64748b;">${escapeHtml(q)}</div>` : "";
+}
+
+/** The owner's legal lines (item 6), set once for everyone. Each is optional. */
+export type SignatureLegal = { companyLine: string; notice: string; privacyUrl: string };
+export const LEGAL_LINE_MAX = 200;
+export const LEGAL_NOTICE_MAX = 800;
+
+/** The stored legal lines, cleaned: plain text, short; the privacy link a full https address or nothing. */
+export function parseLegal(value: unknown): SignatureLegal {
+  const v = (value ?? {}) as Record<string, unknown>;
+  const text = (s: unknown, max: number) => (typeof s === "string" ? s.replace(/[\r\n]+/g, " ").trim().slice(0, max) : "");
+  const url = text(v.privacyUrl, 300);
+  return {
+    companyLine: text(v.companyLine, LEGAL_LINE_MAX),
+    notice: text(v.notice, LEGAL_NOTICE_MAX),
+    privacyUrl: /^https:\/\/[^\s"'<>]+$/i.test(url) ? url : "",
+  };
+}
+
+/** Small grey print under every signature: the company line, the privacy link, then the notice. "" when none is set. */
+export function legalHtml(legal: SignatureLegal | undefined, accent: string): string {
+  if (!legal) return "";
+  const first = [
+    legal.companyLine ? escapeHtml(legal.companyLine) : "",
+    legal.privacyUrl ? `<a href="${escapeHtml(legal.privacyUrl)}" style="color:${accent};text-decoration:none;">Privacy policy</a>` : "",
+  ].filter(Boolean).join("&nbsp;&nbsp;·&nbsp;&nbsp;");
+  const parts = [first, legal.notice ? escapeHtml(legal.notice) : ""].filter(Boolean);
+  return parts.length
+    ? `<div style="margin-top:12px;max-width:600px;font-family:Arial,Helvetica,sans-serif;font-size:10.5px;line-height:15px;color:#94a3b8;">${parts.join("<br />")}</div>`
+    : "";
+}
+
+/** What a person's signature is missing of the basics it is built from (item 8). Empty = complete. */
+export function missingBasics(person: { jobTitle?: string | null; mobile?: string | null }): string[] {
+  return [!person.jobTitle?.trim() ? "job title" : "", !person.mobile?.trim() ? "mobile" : ""].filter(Boolean);
 }
 
 /**

@@ -55,6 +55,8 @@ model User {
   signatureWhatsapp       String?
   signatureBookingUrl     String?
   signatureHours          String?
+  /// A short line of their own, e.g. "Ask me about the new model" (item 10).
+  signatureCta            String?
   signaturePhoto          Boolean @default(false)
   drawnSignatureRef String? // saved handwritten signature for countersigning documents
   createdAt         DateTime  @default(now())

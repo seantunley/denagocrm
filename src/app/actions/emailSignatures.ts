@@ -17,13 +17,14 @@ import { SIGNATURE_FIELDS, cleanDetail, mayEdit, parseTeamLines, type SignatureF
  * form showed.
  */
 
-const COLUMN: Record<Exclude<SignatureField, "photo">, "signatureQualifications" | "signatureDirectLine" | "signatureWhatsapp" | "signatureBookingUrl" | "signatureHours"> = {
+const COLUMN = {
   qualifications: "signatureQualifications",
   directLine: "signatureDirectLine",
   whatsapp: "signatureWhatsapp",
   bookingUrl: "signatureBookingUrl",
   hours: "signatureHours",
-};
+  cta: "signatureCta",
+} as const satisfies Record<Exclude<SignatureField, "photo">, string>;
 
 async function workspaceDesign(tenantId: string) {
   const row = await basePrisma.appSetting.findUnique({ where: { tenantId_key: { tenantId, key: SIGNATURE_DESIGN_KEY } }, select: { value: true } });
@@ -101,7 +102,15 @@ export async function saveSignatureRules(formData: FormData) {
       locked: SIGNATURE_FIELDS.filter((field) => formData.get(`lock_${field}`) === "on"),
       teams: teamLines,
       shortReplies: formData.get("shortReplies") === "on",
+      legal: {
+        companyLine: String(formData.get("legalCompanyLine") ?? ""),
+        notice: String(formData.get("legalNotice") ?? ""),
+        privacyUrl: String(formData.get("legalPrivacyUrl") ?? ""),
+      },
     }));
+    // A privacy link that isn't a full https address would be dropped quietly by the parser: say so instead.
+    const privacyTyped = String(formData.get("legalPrivacyUrl") ?? "").trim();
+    if (privacyTyped && !next.legal?.privacyUrl) refuse("Privacy policy link: a full https:// address.");
     const value = JSON.stringify(next);
     await basePrisma.appSetting.upsert({
       where: { tenantId_key: { tenantId, key: SIGNATURE_DESIGN_KEY } },

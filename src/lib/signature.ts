@@ -6,6 +6,8 @@ import { escapeHtml } from "./escapeHtml";
 import { BANNER_HEIGHT, BANNER_WIDTH } from "./signatureBanner";
 import {
   extrasHtml,
+  legalHtml,
+  parseLegal,
   parseLocked,
   parseTeamLines,
   photoHtml,
@@ -13,6 +15,7 @@ import {
   shortSignature,
   type SignatureExtras,
   type SignatureField,
+  type SignatureLegal,
   type TeamLine,
 } from "./signaturePeople";
 import { accentOf, brandSignature, DEFAULT_ACCENT, isBrandStyle, type BrandStyle } from "./signatureDesigns";
@@ -91,12 +94,17 @@ export type SignatureDesign = {
   teams?: TeamLine[];
   /** Replies carry the two-line short signature instead of the full one. */
   shortReplies?: boolean;
+  /** Small print under every signature, set once by the owner: company details line, notice, privacy link. */
+  legal?: SignatureLegal;
 };
 
 export const SIGNATURE_DESIGN_KEY = "EMAIL_SIGNATURE";
 export const SIGNATURE_LINE_MAX = 160;
 /** What every workspace gets until its owner changes it. */
-export const DEFAULT_SIGNATURE_DESIGN: SignatureDesign = { style: "card", companyLine: "", footerLine: "", bannerUrl: "", locked: [], teams: [], shortReplies: false };
+export const DEFAULT_SIGNATURE_DESIGN: SignatureDesign = {
+  style: "card", companyLine: "", footerLine: "", bannerUrl: "", locked: [], teams: [], shortReplies: false,
+  legal: { companyLine: "", notice: "", privacyUrl: "" },
+};
 
 /** The stored setting, tolerant of anything: a bad value is the default design, never a broken signature. */
 export function parseSignatureDesign(raw: string | null | undefined): SignatureDesign {
@@ -113,6 +121,7 @@ export function parseSignatureDesign(raw: string | null | undefined): SignatureD
       locked: parseLocked(v?.locked),
       teams: parseTeamLines(v?.teams),
       shortReplies: v?.shortReplies === true,
+      legal: parseLegal(v?.legal),
     };
   } catch {
     return DEFAULT_SIGNATURE_DESIGN;
@@ -172,7 +181,7 @@ export function signatureCompanyFrom(
   };
 }
 
-export function buildSignature(user: {
+type SignatureUser = {
   name: string;
   email: string;
   mobile?: string | null;
@@ -182,8 +191,16 @@ export function buildSignature(user: {
   extras?: SignatureExtras;
   teamLine?: string;
   reply?: boolean;
-}, company: SignatureCompany = DEFAULT_SIGNATURE_COMPANY): string {
+};
+
+export function buildSignature(user: SignatureUser, company: SignatureCompany = DEFAULT_SIGNATURE_COMPANY): string {
   if (user.signatureHtml?.trim()) return user.signatureHtml;
+  // The owner's small print (item 6) goes under every signature built here, full or short.
+  const legal = legalHtml(company.design?.legal, accentOf(company, company.design?.style === "card" ? CARD_ORANGE : DEFAULT_ACCENT));
+  return designedSignature(user, company) + legal;
+}
+
+function designedSignature(user: SignatureUser, company: SignatureCompany): string {
   // A reply, when the owner chose short replies: two plain lines instead of the full signature.
   if (user.reply && company.design?.shortReplies) {
     const style = company.design.style;
