@@ -3,6 +3,7 @@ import { SaveForm, SaveButton } from "@/components/SaveForm";
 import SignatureDesignEditor from "@/components/SignatureDesignEditor";
 import { saveMyProfile } from "@/app/actions/settings";
 import { buildSignature, type SignatureCompany, type SignatureDesign } from "@/lib/signature";
+import type { SignatureExtras } from "@/lib/signaturePeople";
 
 /**
  * The email signature: the workspace design (the owner edits it), how it looks on this person's emails, and their own
@@ -15,6 +16,10 @@ export default function EmailSignatureSection({
   design,
   canEditDesign,
   bannersHref,
+  details,
+  designPreview = true,
+  moreDesigns = false,
+  htmlOwnerOnly = false,
 }: {
   user: { name: string; email: string; mobile: string | null; jobTitle: string | null; signatureHtml: string | null };
   company: SignatureCompany;
@@ -22,29 +27,52 @@ export default function EmailSignatureSection({
   canEditDesign: boolean;
   /** Where the owner manages banners; null when banners aren't available (the pack is off). */
   bannersHref: string | null;
+  /** The person's own details and team line, so the preview is their real signature (the Email signatures pack). */
+  details?: { extras?: SignatureExtras; teamLine?: string };
+  /** The design and its preview. Off on the pack's page for staff: their visual editor already shows the signature. */
+  designPreview?: boolean;
+  /** The pack's extra designs; only its own page offers them (the pack is on there). */
+  moreDesigns?: boolean;
+  /** The pack is on: custom HTML is the owner's alone; anyone else can only remove theirs (saveMyProfile agrees). */
+  htmlOwnerOnly?: boolean;
 }) {
+  const hasHtml = Boolean(user.signatureHtml?.trim());
+  const mayEditHtml = canEditDesign || !htmlOwnerOnly;
   return (
     <div className="space-y-4">
-      <SignatureDesignEditor
-        user={{ name: user.name, email: user.email, mobile: user.mobile, jobTitle: user.jobTitle }}
-        company={company}
-        initial={design}
-        canEdit={canEditDesign}
-      />
+      {designPreview && (
+        <SignatureDesignEditor
+          user={{ name: user.name, email: user.email, mobile: user.mobile, jobTitle: user.jobTitle, ...details }}
+          company={company}
+          initial={design}
+          canEdit={canEditDesign}
+          moreDesigns={moreDesigns}
+        />
+      )}
       {canEditDesign && bannersHref && (
         <p className="text-xs text-muted-foreground">
           Want a promotion under the signature? Add a marketing banner, with dates, on{" "}
           <Link href={bannersHref} className="text-primary hover:underline">Signature banners</Link>.
         </p>
       )}
+      {/* Custom HTML replaces the whole branded signature. Pack on: the owner's alone; anyone who already has one */}
+      {/* still sees it, with only a button to remove it. Pack off: anyone may, as before the pack. */}
+      {(mayEditHtml || hasHtml) && (
       <details className="rounded-lg border border-border">
         <summary className="px-4 py-2.5 cursor-pointer text-sm text-muted-foreground">
-          Advanced: use your own HTML instead{user.signatureHtml?.trim() ? " (in use on your emails)" : ""}
+          Advanced: use your own HTML instead{hasHtml ? " (in use on your emails)" : ""}
         </summary>
         <div className="px-4 pb-4 space-y-3">
-          {user.signatureHtml?.trim() && (
+          {hasHtml && (
             <div className="rounded-lg bg-white p-4 overflow-x-auto" dangerouslySetInnerHTML={{ __html: buildSignature(user, company) }} />
           )}
+          {!mayEditHtml ? (
+            <SaveForm success="Your own HTML is removed" resetOnSuccess={false} action={saveMyProfile} className="space-y-2">
+              <input type="hidden" name="signatureHtml" value="" />
+              <p className="text-xs text-muted-foreground">Only the workspace owner can set custom signature HTML now. Remove yours to use the workspace signature with your own details.</p>
+              <SaveButton className="btn-secondary btn-sm">Remove my HTML signature</SaveButton>
+            </SaveForm>
+          ) : (
           <SaveForm success="Profile saved" resetOnSuccess={false} action={saveMyProfile} className="space-y-3 max-w-md">
             <div>
               <label className="label">Custom signature HTML (optional)</label>
@@ -59,8 +87,10 @@ export default function EmailSignatureSection({
             </div>
             <SaveButton className="btn-primary btn-sm">Save</SaveButton>
           </SaveForm>
+          )}
         </div>
       </details>
+      )}
     </div>
   );
 }

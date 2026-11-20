@@ -183,7 +183,7 @@ test("a customer who opted out of marketing gets no banner — checked where eve
   const composer = src("src/lib/composerSend.ts");
   assert.match(composer, /bannerForEmail\(\{ tenantId, senderId: user\.id, \.\.\.recipient \}\)/);
   // messageHtml: the message plus its secure-link block when files go as links — the banner rules are unchanged by it.
-  assert.match(composer, /composerHtml\(user, messageHtml, profile, \{ to, contactId, leadId, choice \}\)/);
+  assert.match(composer, /composerHtml\(user, messageHtml, profile, \{ to, contactId, leadId, choice, reply: Boolean\(answering\) \}\)/);
   // Every address, or no banner: never the first few.
   assert.match(store, /const addresses = bannerRecipients\(input\.to\);\s*if \(addresses === null\) return null;/);
   assert.match(store, /addresses\.map\(\(address\) => ciExactIds\("contactEmail", address\)\)/);

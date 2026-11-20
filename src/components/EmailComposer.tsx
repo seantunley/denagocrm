@@ -264,7 +264,7 @@ export default function EmailComposer({ defaultTo, templates, smtpConfigured, le
     try {
       const { html } = await previewComposerEmail(
         body,
-        { to: field("to"), contactId, leadId, choice: field("banner") },
+        { to: field("to"), contactId, leadId, choice: field("banner"), reply: Boolean(inReplyTo) },
         secure && allFiles.length > 0 ? { files: allFiles, days } : undefined,
       );
       setPreview({ html, to: field("to"), cc: field("cc"), bcc: field("bcc"), replyTo: field("replyTo"), sentState: state });
@@ -274,15 +274,15 @@ export default function EmailComposer({ defaultTo, templates, smtpConfigured, le
   // YOUR SIGNATURE under the message while you write (#888): built by the server exactly as Send adds it (Preview's
   // builder, with no message), again when the recipient or banner changes — a customer who opted out gets no banner.
   const [signature, setSignature] = useState<{ html: string; key: string } | null>(null);
-  const signatureKey = `${to}:${banner}`;
+  const signatureKey = `${to}:${banner}:${inReplyTo ? "reply" : "new"}`;
   useEffect(() => {
     if (!open || !smtpConfigured) return;
     let alive = true;
     const timer = setTimeout(() => {
-      void previewComposerEmail("", { to, contactId, leadId, choice: banner }).then(({ html }) => { if (alive) setSignature({ html, key: signatureKey }); }, () => { if (alive) setSignature(null); });
+      void previewComposerEmail("", { to, contactId, leadId, choice: banner, reply: Boolean(inReplyTo) }).then(({ html }) => { if (alive) setSignature({ html, key: signatureKey }); }, () => { if (alive) setSignature(null); });
     }, 500);
     return () => { alive = false; clearTimeout(timer); };
-  }, [open, smtpConfigured, to, banner, contactId, leadId, signatureKey]);
+  }, [open, smtpConfigured, to, banner, contactId, leadId, inReplyTo, signatureKey]);
 
   const [attachOpen, setAttachOpen] = useState(false);
   const [attachFilter, setAttachFilter] = useState("");

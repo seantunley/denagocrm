@@ -18,6 +18,8 @@ import { tenantEmailContent } from "@/lib/signing/signingEmail";
 import { deliverQuoteEmail, quotePdfFileName } from "@/lib/quoteEmail";
 import { emitQuoteJourneyEvent } from "@/lib/leadJourneyEvents";
 import { emailWithBanner, recordBannerSent } from "@/lib/signatureBannerStore";
+import { senderSignatureDetails, signatureAccent, signatureDesignInUse } from "@/lib/signatureSender";
+import { trackSignatureLinks } from "@/lib/signatureLinkStore";
 import { tenantOrigin } from "@/lib/tenantOrigin";
 import { getSetting, getRegionalSettings } from "@/lib/settings";
 import { withCurrency } from "@/lib/currencyRules";
@@ -101,13 +103,15 @@ async function signQuoteEmail(
   // whose lines the owner chose. A second signature must not be added to it.
   if (email.designed) return email;
   try {
-    const [person, profile, design, origin] = await Promise.all([
+    const [person, profile, saved, origin] = await Promise.all([
       prisma.user.findUnique({ where: { id: user.id }, select: { name: true, email: true, mobile: true, jobTitle: true, signatureHtml: true } }),
       getCompanyProfile(tenantId),
       getSetting(SIGNATURE_DESIGN_KEY).then(parseSignatureDesign),
       tenantOrigin(tenantId),
     ]);
     if (!person) return email;
+    // The pack's extras (privacy link, its designs, link counting) only while it is on.
+    const design = await signatureDesignInUse(tenantId, saved);
     // THE PERSON, in the workspace's signature style. Inside the branded card the
     // header already carries the logo and the footer the company's details, so
     // the signature leaves out the logo panel, tagline and address — the same
@@ -117,9 +121,23 @@ async function signQuoteEmail(
       { ...profile, tagline: "", address: "", phone: "", logoUrl: "" },
       origin,
       { ...design, bannerUrl: "" },
+      await signatureAccent(tenantId),
     );
+    // The sender's own details, team line and photo (the Email signatures pack; {} while it is off). A quote email is
+    // never a reply, so it always carries the full signature.
+    const details = await senderSignatureDetails(tenantId, user.id, design, origin).catch(() => ({}));
     return {
-      html: email.html ? placeSignatureInEmail(email.html, buildSignature(person, company), SENDER_SIGNATURE_SLOT) : email.html,
+      html: email.html
+        ? placeSignatureInEmail(
+            email.html,
+            // Its web links counted when the owner has that on (the Email signatures pack, item 11).
+            await trackSignatureLinks(
+              { tenantId, userId: user.id, origin, on: design.trackLinks, known: { website: company.website, bookingUrl: "extras" in details ? details.extras?.bookingUrl : null, privacyUrl: design.legal?.privacyUrl } },
+              buildSignature({ ...person, ...details }, company),
+            ),
+            SENDER_SIGNATURE_SLOT,
+          )
+        : email.html,
       text: `${email.text.trimEnd()}\n\n${signatureText(person, profile.name)}`,
     };
   } catch (err) {

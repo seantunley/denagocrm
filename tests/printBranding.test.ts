@@ -235,5 +235,7 @@ test("the settings preview renders what the send path renders", () => {
   assert.match(settings, /<EmailSignatureSection user=\{currentUser\} company=\{signatureCompany\} design=\{signatureDesign\}/);
   assert.match(shipped("src/components/EmailSignatureSection.tsx"), /buildSignature\(user, company\)/);
   // …and the pack's own page builds it the same way.
-  assert.match(shipped("src/app/(app)/email-signatures/page.tsx"), /signatureCompanyFrom\(await getCompanyProfile\(\), await tenantOrigin\(await getActiveTenantId\(\)\), design\)/);
+  const page = shipped("src/app/(app)/email-signatures/page.tsx");
+  assert.match(page, /const tenantId = await getActiveTenantId\(\);/);
+  assert.match(page, /signatureCompanyFrom\(await getCompanyProfile\(\), await tenantOrigin\(tenantId\), design, await signatureAccent\(tenantId\)\)/);
 });
