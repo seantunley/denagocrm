@@ -1,4 +1,4 @@
-import { saveMySignatureDetails, saveSignatureRules, saveStaffSignatureDetails } from "@/app/actions/emailSignatures";
+import { saveMySignatureDetails, saveSignatureRules, saveStaffSignatureDetails, sendMySignatureTest } from "@/app/actions/emailSignatures";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import SignatureVisualEditor, { type PersonDetails } from "@/components/SignatureVisualEditor";
 import type { ActionResult } from "@/lib/actionResultTypes";
@@ -52,7 +52,13 @@ export default function EmailSignatureDetails({
   const lineFor = (teamId: string) => teamLines.find((row) => row.teamId === teamId)?.line ?? "";
   // Item 8: a signature silently drops an empty field, so tell the owner whose is missing what.
   const incomplete = staff.filter((person) => missingBasics(person).length > 0);
-  const editor = (person: SignaturePerson, action: (formData: FormData) => Promise<ActionResult | void | undefined>, saveLabel: string, owner: boolean) => (
+  const editor = (
+    person: SignaturePerson,
+    action: (formData: FormData) => Promise<ActionResult | void | undefined>,
+    saveLabel: string,
+    owner: boolean,
+    testAction?: () => Promise<ActionResult | void | undefined>,
+  ) => (
     <SignatureVisualEditor
       person={{ id: person.id, name: person.name, email: person.email, mobile: person.mobile, jobTitle: person.jobTitle }}
       initial={person}
@@ -63,6 +69,7 @@ export default function EmailSignatureDetails({
       customHtmlInUse={person.customHtmlInUse}
       action={action}
       saveLabel={saveLabel}
+      testAction={testAction}
     />
   );
   return (
@@ -75,7 +82,7 @@ export default function EmailSignatureDetails({
             <Link href="/settings?tab=account" className="underline">Settings → My account</Link>.
           </p>
         )}
-        {editor(me, saveMySignatureDetails, "Save my signature", isOwner)}
+        {editor(me, saveMySignatureDetails, "Save my signature", isOwner, sendMySignatureTest)}
       </section>
 
       {isOwner && (

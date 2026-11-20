@@ -33,6 +33,15 @@ const PLACEHOLDER: Record<TextField, string> = {
 };
 
 /**
+ * A mail app's dark mode, roughly: the colours flipped, the pictures (logo, photo) left as they are — so a dark logo on
+ * a transparent background shows the problem it would have.
+ */
+const DARK_MODE_STYLE = "<style>html{filter:invert(1) hue-rotate(180deg);background:#fff}img{filter:invert(1) hue-rotate(180deg)}</style>";
+export function withDarkMode(html: string): string {
+  return /<\/head>/i.test(html) ? html.replace(/<\/head>/i, `${DARK_MODE_STYLE}</head>`) : `${DARK_MODE_STYLE}${html}`;
+}
+
+/**
  * The visual signature editor (item 2 of email-signature-improvements.md — "a visual editor in place of raw HTML"):
  * the details on the left, the signature they make on the right, redrawn as you type by the same function the send
  * uses. A detail shows on the signature only when filled in; a detail the owner locked is shown greyed with a padlock
@@ -48,6 +57,7 @@ export default function SignatureVisualEditor({
   customHtmlInUse,
   action,
   saveLabel,
+  testAction,
 }: {
   person: { id: string; name: string; email: string; mobile: string | null; jobTitle: string | null };
   initial: PersonDetails;
@@ -60,6 +70,8 @@ export default function SignatureVisualEditor({
   customHtmlInUse: boolean;
   action: (formData: FormData) => Promise<ActionResult | void | undefined>;
   saveLabel: string;
+  /** "Send myself a test" — on the person's own signature only. */
+  testAction?: (formData: FormData) => Promise<ActionResult | void | undefined>;
 }) {
   const [values, setValues] = useState<Record<TextField, string>>(() =>
     Object.fromEntries(TEXT_FIELDS.map((field) => [field, initial[field] ?? ""])) as Record<TextField, string>,
@@ -74,7 +86,10 @@ export default function SignatureVisualEditor({
     ...Object.fromEntries(TEXT_FIELDS.map((field) => [field, problem(field) ? "" : values[field].trim()])),
     photoUrl: photo && initial.hasPhoto ? `/api/signature-photo/${person.id}` : null,
   };
-  const preview = buildEmailHtml("", buildSignature({ ...person, signatureHtml: null, extras, teamLine }, company));
+  const built = buildEmailHtml("", buildSignature({ ...person, signatureHtml: null, extras, teamLine }, company));
+  // Item 7: how it looks on a phone, and in a mail app that darkens emails (which flips the colours but not pictures).
+  const [view, setView] = useState<"computer" | "phone" | "dark">("computer");
+  const preview = view === "dark" ? withDarkMode(built) : built;
 
   return (
     <div className="grid gap-5 lg:grid-cols-2">
@@ -137,7 +152,22 @@ export default function SignatureVisualEditor({
         <SaveButton className="btn-primary btn-sm">{saveLabel}</SaveButton>
       </SaveForm>
       <div className="space-y-2">
-        <div className="text-sm font-medium">How it looks</div>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="text-sm font-medium">How it looks</div>
+          <div className="inline-flex rounded-md border border-border p-0.5 text-xs" role="group" aria-label="Preview as">
+            {(["computer", "phone", "dark"] as const).map((option) => (
+              <button
+                key={option}
+                type="button"
+                onClick={() => setView(option)}
+                aria-pressed={view === option}
+                className={`rounded px-2.5 py-1 ${view === option ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
+              >
+                {option === "computer" ? "Computer" : option === "phone" ? "Phone" : "Dark mode"}
+              </button>
+            ))}
+          </div>
+        </div>
         {customHtmlInUse && (
           <p className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
             Your own HTML signature is in use instead of this one. Clear it under “Advanced” to use this signature.
@@ -152,9 +182,18 @@ export default function SignatureVisualEditor({
             const doc = e.currentTarget.contentDocument;
             if (doc) e.currentTarget.style.height = `${doc.documentElement.scrollHeight + 4}px`;
           }}
-          className="w-full rounded-lg border border-border bg-white"
+          className={`rounded-lg border border-border bg-white ${view === "phone" ? "w-[375px] max-w-full" : "w-full"}`}
           style={{ height: 240 }}
         />
+        {view === "dark" && (
+          <p className="text-xs text-muted-foreground">Roughly how Gmail and Outlook on a phone show it in dark mode. Each app darkens a little differently.</p>
+        )}
+        {testAction && (
+          <SaveForm action={testAction} resetOnSuccess={false} success={`Test sent to ${person.email}`} className="flex flex-wrap items-center gap-2">
+            <SaveButton className="btn-secondary btn-sm">Send myself a test</SaveButton>
+            <span className="text-xs text-muted-foreground">A real email with your saved signature, to {person.email}. Save first if you changed anything.</span>
+          </SaveForm>
+        )}
       </div>
     </div>
   );

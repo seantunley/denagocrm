@@ -8,6 +8,9 @@ import { asActionResult, refuse } from "@/lib/actionResult";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { listActingTenantTeams } from "@/lib/tenantActor";
 import { putWorkspaceSetting } from "@/lib/settings";
+import { composerHtml } from "@/lib/composerSend";
+import { getCompanyProfile } from "@/lib/companyProfile";
+import { sendEmail } from "@/lib/email";
 import { LEGAL_LINE_KEY, cleanLegalLine } from "@/lib/emailLegalLine";
 import { parseSignatureDesign, SIGNATURE_DESIGN_KEY } from "@/lib/signature";
 import { SIGNATURE_FIELDS, cleanDetail, mayEdit, parseTeamLines, type SignatureField } from "@/lib/signaturePeople";
@@ -85,6 +88,37 @@ export async function saveStaffSignatureDetails(userId: string, formData: FormDa
     await basePrisma.user.update({ where: { id: userId }, data });
     await logAudit({ action: "email_signature.details_saved", summary: `Updated ${member.user.name}'s email signature details`, user: owner });
     revalidatePath("/email-signatures");
+  });
+}
+
+/**
+ * "Send myself a test" (item 7): the real email — built and sent the way the composer sends one — to the person's own
+ * address, so they can see it in Outlook, Gmail or on their phone, in light and dark mode. Their saved signature.
+ */
+export async function sendMySignatureTest() {
+  return asActionResult(async () => {
+    const user = await requireUser();
+    if (!(await isModuleEnabled("signatures"))) refuse("Email signatures is switched off for this workspace.");
+    const html = (
+      await composerHtml(
+        user,
+        "<p>This is a test of your email signature, sent from Email signatures in the CRM.</p><p>Check it here, on your phone, and in dark mode if your mail app has it.</p>",
+        await getCompanyProfile(),
+        { to: user.email },
+        // As the preview builds it: a banner here links straight to its page, so a test never counts as a customer's click.
+        true,
+      )
+    ).html;
+    const result = await sendEmail({
+      to: user.email,
+      subject: "Test: your email signature",
+      text: "This is a test of your email signature, sent from Email signatures in the CRM.",
+      html,
+      senderName: user.name,
+    });
+    if (!result.ok) refuse("The test didn't send. Check the email settings in Settings → Email, then try again.");
+    await logAudit({ action: "email_signature.test_sent", summary: "Sent themselves a test of their email signature", user });
+    return { success: `Test sent to ${user.email}` };
   });
 }
 
