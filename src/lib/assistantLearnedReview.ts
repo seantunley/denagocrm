@@ -28,7 +28,7 @@ export async function ownsWorkspace(tenantId: string, user: Person): Promise<boo
   return tenant?.ownerUserId != null && tenant.ownerUserId === user.id;
 }
 
-const SELECT = { id: true, kind: true, name: true, description: true, content: true } as const;
+const SELECT = { id: true, kind: true, name: true, description: true, content: true, status: true } as const;
 
 /**
  * The morning brief's "To review" section for the owner, oldest first, and the offer it makes saved so a reply's

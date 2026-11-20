@@ -72,6 +72,11 @@ test("wired: the owner's brief carries it, WhatsApp answers the reply first, the
   const card = src("src/components/AssistantLearnedCard.tsx");
   assert.match(card, /approveAssistantNote\.bind\(null, note\.id\)/);
   assert.match(card, /onConfirm=\{deleteAssistantNote\.bind\(null, note\.id\)\}/, "Drop asks first, like every removal");
+  // Review of #1156: a held CONFLICT is never approved from the chat (that would keep both contradictory entries) — it
+  // links to Settings' side-by-side choice; Keep/Drop only for status !== "conflict", and the status is selected.
+  assert.match(card, /canReview && note\.status === "conflict" && \([\s\S]*?href="\/settings\/assistant#learned"/);
+  assert.match(card, /canReview && note\.status !== "conflict" && \([\s\S]*?approveAssistantNote\.bind/);
+  assert.match(lib, /const SELECT = \{[^}]*status: true[^}]*\} as const;/);
 
   const page = src("src/app/(app)/settings/assistant/page.tsx");
   assert.ok(page.indexOf("<AssistantLearnedReview notes={learned} />") < page.indexOf("action={saveAssistantProfile}"), "first on the page");

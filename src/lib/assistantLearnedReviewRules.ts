@@ -5,7 +5,8 @@
  * The database half is lib/assistantLearnedReview.ts.
  */
 
-export type LearnedItem = { id: string; kind: string; name: string | null; description: string | null; content: string };
+/** status: "unreviewed", or "conflict" — held because it contradicts an approved entry; that choice is made in Settings. */
+export type LearnedItem = { id: string; kind: string; name: string | null; description: string | null; content: string; status?: string };
 
 /** At most this many in one brief: the rest wait for the next one, or Settings. */
 export const REVIEW_IN_BRIEF = 5;

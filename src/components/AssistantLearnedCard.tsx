@@ -21,7 +21,14 @@ export default function AssistantLearnedCard({ name, notes, canReview }: { name:
         {notes.map((note) => (
           <li key={note.id} className="flex flex-wrap items-center gap-2">
             <span className="min-w-0 flex-1 text-muted-foreground">{learnedLine(note)}</span>
-            {canReview && (
+            {/* It contradicts something already approved: approving it here would keep BOTH (review of #1156). Which one
+                stays is chosen side by side in Settings (resolveAssistantConflict), so no Keep/Drop here. */}
+            {canReview && note.status === "conflict" && (
+              <Link href="/settings/assistant#learned" className="btn-secondary btn-sm">
+                Contradicts what you approved — choose in Settings
+              </Link>
+            )}
+            {canReview && note.status !== "conflict" && (
               <span className="flex items-center gap-1.5">
                 <SaveForm action={approveAssistantNote.bind(null, note.id)} resetOnSuccess={false}>
                   <SaveButton className="btn-secondary btn-sm inline-flex items-center gap-1" title="Everyone's DAX uses it from now on.">
