@@ -128,7 +128,7 @@ export async function previewComposerEmail(
   const choice = String(recipient.choice ?? "").slice(0, 64);
   const files = (secureFiles?.files ?? []).slice(0, 20).map((file) => ({ name: String(file.name).slice(0, 200), sizeBytes: Number(file.sizeBytes) || 0, url: "#" }));
   const block = files.length ? secureLinksHtml(files, formatDate(secureLinkExpiry(new Date(), secureLinkDays(secureFiles?.days)))) : "";
-  const { html } = await composerHtml(user, String(bodyHtml ?? "").trim() + block, await getCompanyProfile(), { to, contactId, leadId, choice }, true);
+  const { html } = await composerHtml(user, String(bodyHtml ?? "").trim() + block, await getCompanyProfile(), { to, contactId, leadId, choice, reply: recipient.reply === true }, true);
   return { html };
 }
 
@@ -423,6 +423,9 @@ export async function saveSignatureDesign(formData: FormData) {
     if (!tenantId) refuse("No workspace attached to this sign-in — sign out and back in.");
     const design = parseSignatureDesign(
       JSON.stringify({
+        // Everything this form doesn't set is kept: the Email signatures pack's locks, team lines and short replies
+        // (saved by their own form, app/actions/emailSignatures.ts) must survive a design Save.
+        ...(await storedSignatureDesign(tenantId)),
         style: formData.get("style"),
         companyLine: String(formData.get("companyLine") ?? "").replace(/[\r\n]+/g, " "),
         footerLine: String(formData.get("footerLine") ?? "").replace(/[\r\n]+/g, " "),

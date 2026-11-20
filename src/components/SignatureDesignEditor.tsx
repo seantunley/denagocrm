@@ -12,6 +12,7 @@ import {
   type SignatureCompany,
   type SignatureDesign,
 } from "@/lib/signature";
+import type { SignatureExtras } from "@/lib/signaturePeople";
 import { drawSignatureBanner } from "@/lib/signatureBanner";
 
 /**
@@ -25,7 +26,8 @@ export default function SignatureDesignEditor({
   initial,
   canEdit,
 }: {
-  user: { name: string; email: string; mobile?: string | null; jobTitle?: string | null };
+  /** extras / teamLine: the person's own details and team line (the Email signatures pack), so the preview is theirs. */
+  user: { name: string; email: string; mobile?: string | null; jobTitle?: string | null; extras?: SignatureExtras; teamLine?: string };
   company: SignatureCompany;
   initial: SignatureDesign;
   canEdit: boolean;

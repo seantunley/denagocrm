@@ -104,6 +104,11 @@ async function loadWorkspaceLogo(tenantId: string, src: string): Promise<LoadedI
   //    into the app, matched by exact name — nothing is fetched or read from disk.
   const signature = signatureAsset(url.pathname);
   if (signature) return { content: signature, contentType: "image/png" };
+  // 0b. A person's signature photo (the Email signatures pack, lib/signatureSender.ts): read from storage, and only for a
+  //     member of THIS workspace who switched their photo on — the URL's host is never contacted.
+  const photoOf = /^\/api\/signature-photo\/([A-Za-z0-9_-]{6,64})$/.exec(url.pathname)?.[1];
+  // Loaded here, not at the top: signatureSender is server-only, and this file is also loaded outside a server render.
+  if (photoOf) return (await import("./signatureSender")).signaturePhotoBytes(tenantId, photoOf);
   // 1. This workspace's public brand-logo route. The same object the route would
   //    stream, rebuilt the same way (tenant folder + strictly matched asset name),
   //    read from storage — the URL's host is never contacted.

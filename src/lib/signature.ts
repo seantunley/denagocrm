@@ -4,6 +4,17 @@ import { inlineEmailStyles } from "./emailInlineStyles";
 import type { CompanyProfile } from "./companyBrand";
 import { escapeHtml } from "./escapeHtml";
 import { BANNER_HEIGHT, BANNER_WIDTH } from "./signatureBanner";
+import {
+  extrasHtml,
+  parseLocked,
+  parseTeamLines,
+  photoHtml,
+  qualificationsHtml,
+  shortSignature,
+  type SignatureExtras,
+  type SignatureField,
+  type TeamLine,
+} from "./signaturePeople";
 
 /**
  * Where the signature's static assets (the social glyphs) are served from.
@@ -70,12 +81,18 @@ export type SignatureDesign = {
    * plainer panel built from the logo in HTML.
    */
   bannerUrl: string;
+  /** The Email signatures pack (lib/signaturePeople.ts): details staff may NOT change themselves; the owner sets them. */
+  locked?: SignatureField[];
+  /** One extra line per team (workshop hours, a parts number); a person in several gets the first that is theirs. */
+  teams?: TeamLine[];
+  /** Replies carry the two-line short signature instead of the full one. */
+  shortReplies?: boolean;
 };
 
 export const SIGNATURE_DESIGN_KEY = "EMAIL_SIGNATURE";
 export const SIGNATURE_LINE_MAX = 160;
 /** What every workspace gets until its owner changes it. */
-export const DEFAULT_SIGNATURE_DESIGN: SignatureDesign = { style: "card", companyLine: "", footerLine: "", bannerUrl: "" };
+export const DEFAULT_SIGNATURE_DESIGN: SignatureDesign = { style: "card", companyLine: "", footerLine: "", bannerUrl: "", locked: [], teams: [], shortReplies: false };
 
 /** The stored setting, tolerant of anything: a bad value is the default design, never a broken signature. */
 export function parseSignatureDesign(raw: string | null | undefined): SignatureDesign {
@@ -89,6 +106,9 @@ export function parseSignatureDesign(raw: string | null | undefined): SignatureD
       footerLine: line(v?.footerLine),
       // Only a plain public https address reaches an <img src>.
       bannerUrl: /^https:\/\/[^\s"'<>]+$/i.test(banner) && banner.length <= 500 ? banner : "",
+      locked: parseLocked(v?.locked),
+      teams: parseTeamLines(v?.teams),
+      shortReplies: v?.shortReplies === true,
     };
   } catch {
     return DEFAULT_SIGNATURE_DESIGN;
@@ -151,8 +171,14 @@ export function buildSignature(user: {
   mobile?: string | null;
   jobTitle?: string | null;
   signatureHtml?: string | null;
+  /** The Email signatures pack (lib/signaturePeople.ts): their extra details, their team's line, and whether this is a reply. */
+  extras?: SignatureExtras;
+  teamLine?: string;
+  reply?: boolean;
 }, company: SignatureCompany = DEFAULT_SIGNATURE_COMPANY): string {
   if (user.signatureHtml?.trim()) return user.signatureHtml;
+  // A reply, when the owner chose short replies: two plain lines instead of the full signature.
+  if (user.reply && company.design?.shortReplies) return shortSignature(user, company, company.design.style === "card" ? CARD_ORANGE : "#ea580c");
   if (company.design?.style === "card") return cardSignature(user, company, company.design);
 
   const waDigits = (user.mobile ?? "").replace(/\D/g, "").replace(/^0/, "27");
@@ -240,12 +266,12 @@ export function buildSignature(user: {
 <table cellpadding="0" cellspacing="0" border="0" style="font-family:Arial,Helvetica,sans-serif;margin-top:24px;">
 ${logoRow}  <tr>
     <td style="padding:10px 2px 2px;">
-      <span style="font-size:15px;font-weight:bold;color:#0f172a;">${safeName}</span>
-      <span style="font-size:12px;color:#94a3b8;">&nbsp;·&nbsp;${safeJobTitle ? `${safeJobTitle}&nbsp;·&nbsp;` : ""}${escapeHtml(company.name)}</span>
+      ${photoHtml(user.extras, user.name, 56)}<span style="font-size:15px;font-weight:bold;color:#0f172a;">${safeName}</span>
+      <span style="font-size:12px;color:#94a3b8;">&nbsp;·&nbsp;${safeJobTitle ? `${safeJobTitle}&nbsp;·&nbsp;` : ""}${escapeHtml(company.name)}</span>${qualificationsHtml(user.extras)}
     </td>
   </tr>
   <tr>
-    <td style="padding:2px 2px;color:#475569;font-size:13px;">${contactBits}</td>
+    <td style="padding:2px 2px;color:#475569;font-size:13px;">${contactBits}${extrasHtml(user.extras, user.teamLine ?? "", "#ea580c")}</td>
   </tr>
 ${socialRow}${footerRow}</table>`;
 }
@@ -271,7 +297,7 @@ const CARD_FONT = "'Montserrat','Segoe UI',Helvetica,Arial,sans-serif";
  * an unset field removes its element.
  */
 function cardSignature(
-  user: { name: string; email: string; mobile?: string | null; jobTitle?: string | null },
+  user: { name: string; email: string; mobile?: string | null; jobTitle?: string | null; extras?: SignatureExtras; teamLine?: string },
   company: SignatureCompany,
   design: SignatureDesign,
 ): string {
@@ -336,10 +362,10 @@ function cardSignature(
   <tr>
     ${panel}
     <td class="sig-details" style="${divider}vertical-align:middle;">
-      <div style="font-size:28px;font-weight:800;color:#0b1220;line-height:1.1;letter-spacing:-0.3px;">${escapeHtml(user.name)}</div>
-      ${titleLine ? `<div style="padding-top:6px;font-size:13px;line-height:18px;letter-spacing:3.5px;color:#64748b;">${titleLine}</div>` : ""}
+      ${photoHtml(user.extras, user.name)}<div style="font-size:28px;font-weight:800;color:#0b1220;line-height:1.1;letter-spacing:-0.3px;">${escapeHtml(user.name)}</div>
+      ${titleLine ? `<div style="padding-top:6px;font-size:13px;line-height:18px;letter-spacing:3.5px;color:#64748b;">${titleLine}</div>` : ""}${qualificationsHtml(user.extras)}
       <table cellpadding="0" cellspacing="0" border="0" role="presentation" style="margin-top:10px;border-collapse:collapse;">${contacts}
-      </table>
+      </table>${extrasHtml(user.extras, user.teamLine ?? "", CARD_ORANGE)}
     </td>
   </tr>
 ${footerRow}</table>`;

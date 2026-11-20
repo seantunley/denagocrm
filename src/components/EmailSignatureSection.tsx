@@ -3,6 +3,7 @@ import { SaveForm, SaveButton } from "@/components/SaveForm";
 import SignatureDesignEditor from "@/components/SignatureDesignEditor";
 import { saveMyProfile } from "@/app/actions/settings";
 import { buildSignature, type SignatureCompany, type SignatureDesign } from "@/lib/signature";
+import type { SignatureExtras } from "@/lib/signaturePeople";
 
 /**
  * The email signature: the workspace design (the owner edits it), how it looks on this person's emails, and their own
@@ -15,6 +16,7 @@ export default function EmailSignatureSection({
   design,
   canEditDesign,
   bannersHref,
+  details,
 }: {
   user: { name: string; email: string; mobile: string | null; jobTitle: string | null; signatureHtml: string | null };
   company: SignatureCompany;
@@ -22,11 +24,13 @@ export default function EmailSignatureSection({
   canEditDesign: boolean;
   /** Where the owner manages banners; null when banners aren't available (the pack is off). */
   bannersHref: string | null;
+  /** The person's own details and team line, so the preview is their real signature (the Email signatures pack). */
+  details?: { extras?: SignatureExtras; teamLine?: string };
 }) {
   return (
     <div className="space-y-4">
       <SignatureDesignEditor
-        user={{ name: user.name, email: user.email, mobile: user.mobile, jobTitle: user.jobTitle }}
+        user={{ name: user.name, email: user.email, mobile: user.mobile, jobTitle: user.jobTitle, ...details }}
         company={company}
         initial={design}
         canEdit={canEditDesign}
@@ -37,6 +41,9 @@ export default function EmailSignatureSection({
           <Link href={bannersHref} className="text-primary hover:underline">Signature banners</Link>.
         </p>
       )}
+      {/* Custom HTML replaces the whole branded signature: the owner's alone (saveMyProfile refuses anyone else). */}
+      {/* Anyone who already has one still sees it, to clear it. */}
+      {(canEditDesign || Boolean(user.signatureHtml?.trim())) && (
       <details className="rounded-lg border border-border">
         <summary className="px-4 py-2.5 cursor-pointer text-sm text-muted-foreground">
           Advanced: use your own HTML instead{user.signatureHtml?.trim() ? " (in use on your emails)" : ""}
@@ -61,6 +68,7 @@ export default function EmailSignatureSection({
           </SaveForm>
         </div>
       </details>
+      )}
     </div>
   );
 }

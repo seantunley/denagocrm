@@ -48,6 +48,14 @@ model User {
   avatarMimeType    String?
   avatarUpdatedAt   DateTime?
   signatureHtml     String? // custom override; blank = branded template
+  /// Email signature details (the Email signatures pack, 2026-11-20). Each is shown only when set; which of them a
+  /// person may change themselves is the owner's choice (SignatureDesign.locked). Photo = the profile photo, opted in.
+  signatureQualifications String?
+  signatureDirectLine     String?
+  signatureWhatsapp       String?
+  signatureBookingUrl     String?
+  signatureHours          String?
+  signaturePhoto          Boolean @default(false)
   drawnSignatureRef String? // saved handwritten signature for countersigning documents
   createdAt         DateTime  @default(now())
 

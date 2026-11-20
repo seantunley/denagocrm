@@ -39,6 +39,7 @@ import { tenantOrigin } from "@/lib/tenantOrigin";
 import { bannerClickUrl, bannerHtml, bannerPosition } from "@/lib/signatureBanners";
 import { LEGAL_LINE_KEY, htmlWithLegalLine } from "@/lib/emailLegalLine";
 import { bannerForEmail, recordBannerSent } from "@/lib/signatureBannerStore";
+import { senderSignatureDetails } from "@/lib/signatureSender";
 import { threadableMessageId } from "@/lib/emailReply";
 
 /** Each attached quote is a PDF rendered during the send; a handful is plenty for one email. */
@@ -63,7 +64,14 @@ export async function tenantIdFor(userId: string): Promise<string | null> {
 }
 
 /** `choice`: the banner the sender picked in the composer — an id, "none", or blank for the default. */
-export type ComposerRecipient = { to?: string; contactId?: string | null; leadId?: string | null; choice?: string | null };
+export type ComposerRecipient = {
+  to?: string;
+  contactId?: string | null;
+  leadId?: string | null;
+  choice?: string | null;
+  /** Answering an email: the short signature when the owner chose short replies (the Email signatures pack). */
+  reply?: boolean;
+};
 
 /**
  * The composer email's HTML: the message, the sender's signature, and under it
@@ -90,7 +98,9 @@ export async function composerHtml(
   const marketing = banner ? bannerHtml(banner, preview ? banner.linkUrl : bannerClickUrl(origin, banner.token)) : "";
   // Under the signature, or — the owner's choice per banner — at the top of the email, above the message.
   const above = Boolean(banner) && bannerPosition(banner!.position) === "above";
-  const built = buildEmailHtml(bodyHtml, buildSignature(user, company) + (above ? "" : marketing));
+  // The sender's own details, team line and photo (the Email signatures pack; {} while it is off) — and short on a reply.
+  const details = await senderSignatureDetails(tenantId, user.id, design, origin).catch(() => ({}));
+  const built = buildEmailHtml(bodyHtml, buildSignature({ ...user, ...details, reply: recipient.reply === true }, company) + (above ? "" : marketing));
   const html = above ? built.replace(/<body[^>]*>/i, (open) => `${open}${marketing}`) : built;
   // The legal line is added to every email where it leaves (lib/email.ts). A preview never gets
   // there, so it is added here for the preview alone — or Preview would not be what Send sends.
@@ -358,7 +368,7 @@ export async function sendComposerForm(
     linksText = secureLinksText(lines, expiresLabel);
   }
   // The message (with its secure-link block, if any), the signature, and the signature banner for this sender and recipient.
-  const { html, tenantId: bannerTenantId, bannerId } = await composerHtml(user, messageHtml, profile, { to, contactId, leadId, choice });
+  const { html, tenantId: bannerTenantId, bannerId } = await composerHtml(user, messageHtml, profile, { to, contactId, leadId, choice, reply: Boolean(answering) });
 
   const result = await sendEmail({
     to,
