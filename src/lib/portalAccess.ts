@@ -1,4 +1,4 @@
-import { basePrisma } from "./db";
+import { basePrisma, prisma } from "./db";
 import { getPortalContact } from "./portal";
 import { isModuleEnabled } from "./modules/enabled";
 
@@ -180,9 +180,10 @@ export async function portalAllowedDocumentIds(
  */
 export async function portalOwnershipStarts(vehicleIds: string[]): Promise<Map<string, { ownedFrom: Date; reason: string }>> {
   if (vehicleIds.length === 0) return new Map();
-  const rows = await basePrisma.$queryRaw<Array<{ vehicleId: string; ownedFrom: Date; reason: string }>>`
-    SELECT "vehicleId", "ownedFrom", "reason" FROM "VehicleOwnership"
-    WHERE "vehicleId" = ANY(${vehicleIds}::text[]) AND "ownedUntil" IS NULL
-  `;
+  // The guarded client, in the portal's own workspace scope (as the page reads the vehicles themselves).
+  const rows = await prisma.vehicleOwnership.findMany({
+    where: { vehicleId: { in: vehicleIds }, ownedUntil: null },
+    select: { vehicleId: true, ownedFrom: true, reason: true },
+  });
   return new Map(rows.map((row) => [row.vehicleId, { ownedFrom: row.ownedFrom, reason: row.reason }]));
 }

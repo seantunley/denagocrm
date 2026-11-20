@@ -150,7 +150,7 @@ async function main() {
     const all = [...ids(), newPaper.id];
     check("after: the new owner sees their own paperwork and what stays with the vehicle — not the seller's", JSON.stringify(await seen([next.id], all)) === JSON.stringify(sorted(serviceBook.id, newPaper.id)));
     check("after: the previous owner keeps their own documents and the vehicle's from their time — not the buyer's", JSON.stringify(await seen([prev.id], all)) === JSON.stringify(sorted(oldService.id, serviceBook.id, sellersInvoice.id)));
-    const starts = await portalOwnershipStarts([sold.id]);
+    const starts = await runInTenantScope({ tenantId: A, system: false }, () => portalOwnershipStarts([sold.id]));
     check("after: the new owner's history starts on the transfer date", starts.get(sold.id)?.ownedFrom.getTime() === day("2026-01-01").getTime() && starts.get(sold.id)?.reason === "sold_privately");
     check("after: the vehicle is the new owner's (the portal's vehicle access follows it)", (await basePrisma.vehicle.findUniqueOrThrow({ where: { id: sold.id }, select: { contactId: true } })).contactId === next.id);
     // Undone: the paperwork goes back with the vehicle.
