@@ -25,7 +25,7 @@ test("gap 2: a big result ends at whole records and says how many were left out"
   assert.match(JSON.parse(fitObservation(rows(60), true, 2_000)).showing, /of 60\+$/, "the lookup itself had more: said so");
   // A single record that still doesn't fit is cut as before, rather than nothing shown.
   assert.match(fitObservation([{ body: "y".repeat(5_000) }], false, 1_000), /…\(cut\)$/);
-  assert.match(readFileSync("src/lib/assistant/context.ts", "utf8"), /const body = fitObservation\(results, truncated, budget\);/);
+  assert.match(readFileSync("src/lib/assistant/context.ts", "utf8"), /const body = fitObservation\(results, truncated, budget, leadingSummaries\(o\.output\.data\)\);/);
 });
 
 // Review of #1157: find_leads heads its list with { total, listed }, find_quotes with { matching } — counted as records,
