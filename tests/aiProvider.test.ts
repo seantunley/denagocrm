@@ -36,10 +36,9 @@ test("the model picker: only a model on offer is saved, and a Claude choice runs
   assert.match(rows, /chatGpt\.state === "connected" && aiChosen === "claude" && \(/);
   const action = readFileSync("src/app/actions/aiModel.ts", "utf8");
   assert.match(action, /const user = await requireTenantOwner\(\);[\s\S]*parseAiModelChoice\([\s\S]*if \(!choice\) refuse\(/);
-  for (const file of ["src/lib/aiText.ts", "src/lib/ai.ts", "src/lib/competitors.ts"]) {
-    assert.doesNotMatch(readFileSync(file, "utf8"), /model: ("claude-|RESEARCH_MODEL,|options\.model \?\?)/, `${file} sends a Claude model without asking which was chosen`);
-  }
-  assert.match(readFileSync("src/lib/aiText.ts", "utf8"), /model = await claudeModel\(model\);\s+return await askClaude\(input, model\);/);
+  // Jobs someone asks for take the chosen model; quick and automatic jobs keep their cheap one (aiResearchCost.test).
+  assert.match(readFileSync("src/lib/aiText.ts", "utf8"), /if \(!input\.quick\) model = await claudeModel\(model\);\s+return await askClaude\(input, model\);/);
+  assert.match(readFileSync("src/lib/ai.ts", "utf8"), /model: options\.model \?\? \(await claudeModel\("claude-opus-5"\)\),/);
 });
 
 test("a conversation becomes one prompt with the customer's words fenced as data", () => {

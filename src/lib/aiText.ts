@@ -69,7 +69,8 @@ export async function aiText(input: AiTextInput, chosen?: AiProvider | null): Pr
       return await askChatGpt(input, model);
     }
     model = input.claudeModel ?? "claude-haiku-4-5";
-    model = await claudeModel(model);
+    // Quick jobs (chatbot, screening, extraction) keep their cheap model, as quick ChatGPT jobs keep the quick one.
+    if (!input.quick) model = await claudeModel(model);
     return await askClaude(input, model);
   } catch (error) {
     const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");

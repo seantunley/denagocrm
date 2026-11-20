@@ -13,7 +13,7 @@ export const AI_PROVIDER_CHOICES: { id: AiProvider; label: string }[] = [
   { id: "claude", label: "Claude (pay-per-use Anthropic credit)" },
 ];
 
-/** The Claude model for everything Claude does. Unset = each job's own model, as before the picker. */
+/** The Claude model for the jobs someone asks for (quick and automatic jobs keep their own). Unset = each job's own model. */
 export const AI_CLAUDE_MODEL_KEY = "AI_CLAUDE_MODEL";
 
 // When a provider is added (Gemini): one more AiProvider, one more group here, one more branch in parseAiModelChoice.

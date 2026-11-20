@@ -227,9 +227,10 @@ export default async function platformIntegrationRows({ xAccountId }: { xAccount
         <p className="text-xs text-muted-foreground mb-4">
           The customer chatbot, invoice reading, the ✨ message check, voice-note replies, spam screening and 🔎 research
           run on the model chosen here. A ChatGPT model runs on your subscription, with no per-use cost, and is DAX&apos;s
-          model too; short jobs such as chatbot replies stay on ChatGPT&apos;s quick model ({CODEX_QUICK_MODEL}). A Claude
-          model is paid per use from Anthropic credit and runs everything Claude does. DAX always uses ChatGPT. If the
-          one chosen isn&apos;t set up, the other is used.
+          model too. A Claude model is paid per use from Anthropic credit. Either way, quick and automatic jobs (chatbot
+          replies, spam screening, the automatic lead research) stay on a quick, low-cost model ({CODEX_QUICK_MODEL} or
+          Claude Haiku); the model chosen here runs the jobs someone asks for. DAX always uses ChatGPT. If the one chosen
+          isn&apos;t set up, the other is used.
         </p>
         <SaveForm resetOnSuccess={false} action={saveAiModel} className="flex gap-2 items-end">
           <div className="flex-1">

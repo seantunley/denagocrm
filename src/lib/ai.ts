@@ -305,7 +305,8 @@ export async function aiResearch(
 
   try {
     const requestBody = {
-        model: await claudeModel(options.model ?? "claude-opus-5"),
+        // The automatic sweep names its cheap model; only the Research button (no model) takes the chosen one.
+        model: options.model ?? (await claudeModel("claude-opus-5")),
         // MAX_TOKENS IS SHARED WITH THE SEARCH, WHICH IS WHY 700 PRODUCED STUBS.
         //
         // The model's `server_tool_use` blocks — one per web search, up to
