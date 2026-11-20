@@ -62,6 +62,32 @@ test("a summary heading the list is kept whole and never counted as a record", (
   }
 });
 
+// Review of #1157: signing and tickets return ONE object holding the list ({ total, listed, requests: [...] } /
+// { open, …, tickets: [...] }) — still cut mid-JSON. The list inside is trimmed now, whole records, totals kept.
+test("one object holding the list: its list is trimmed to whole records, the totals kept, valid JSON, honest count", () => {
+  const request = (i: number) => ({
+    title: `Quote Q-${1000 + i} for signature`, for: `Customer ${i}`, status: "sent", sent: "2026-11-01",
+    signed: [], notSigned: [`Customer ${i}: not opened`, "Sales manager (approver): waiting"], openedNotSigned: [], lastReminder: null, link: `/signatures/sig-${i}`,
+  });
+  const signing = [{ total: 60, listed: 60, showing: "waiting", requests: Array.from({ length: 60 }, (_, i) => request(i)) }];
+  const out = fitObservation(signing, false, 7_000);
+  const parsed = JSON.parse(out) as { showing: string; results: [{ total: number; listed: number; requests: { link: string }[] }] };
+  assert.ok(out.length <= 7_000 && !out.endsWith("…(cut)"));
+  const kept = parsed.results[0].requests;
+  assert.equal(parsed.showing, `${kept.length} of 60 requests`);
+  assert.equal(parsed.results[0].total, 60, "the totals beside the list are kept");
+  assert.deepEqual(kept.map((r) => r.link), signing[0].requests.slice(0, kept.length).map((r) => r.link), "whole, in order");
+
+  const ticket = (i: number) => ({ case: `C-${i}`, subject: "Battery not charging after the service ".repeat(3), customer: `Customer ${i}`, status: "open", priority: "high", assignedTo: "nobody", lastMessage: "x".repeat(140), link: `/cases/${i}` });
+  const tickets = [{ open: 25, waitingOnUs: 9, overdue: 4, overdueMeans: "a customer has been waiting 24 hours or more", tickets: Array.from({ length: 25 }, (_, i) => ticket(i)) }];
+  const t = JSON.parse(fitObservation(tickets, true, 3_000)) as { showing: string; results: [{ open: number; tickets: unknown[] }] };
+  assert.equal(t.showing, `${t.results[0].tickets.length} of 25 tickets+`);
+  assert.equal(t.results[0].open, 25);
+
+  // A field that is a list of plain strings is not "the records"; nothing to trim → the documented cut.
+  assert.match(fitObservation([{ tags: Array.from({ length: 900 }, (_, i) => `tag-${i}`) }], false, 1_000), /…\(cut\)$/);
+});
+
 test("gap 1: a failed lookup says which one, what kind of failure, and what to do", () => {
   const timeout = new Error("t");
   timeout.name = "TimeoutError";
