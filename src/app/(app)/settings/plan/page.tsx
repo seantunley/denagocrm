@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { getActiveTenantId, requireTenantOwner } from "@/lib/auth";
 import { basePrisma } from "@/lib/db";
 import { formatZAR } from "@/lib/format";
-import { usageFor } from "@/lib/usage";
+import { chatGptUsageByJob, usageFor } from "@/lib/usage";
 import { METER_IDS, METERS, invoiceNumber, planAmounts, usageMonth, usedUnits } from "@/lib/usageMeters";
 import { SettingsWorkspace } from "@/components/settings-workspace";
 import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
@@ -18,13 +18,14 @@ export default async function PlanPage() {
   const tenantId = await getActiveTenantId();
   if (!tenantId) redirect("/settings");
   const month = usageMonth();
-  const [tenant, usage, invoices] = await Promise.all([
+  const [tenant, usage, invoices, chatGptJobs] = await Promise.all([
     basePrisma.tenant.findUniqueOrThrow({
       where: { id: tenantId },
       select: { planName: true, planMonthlyCents: true, planIncluded: true, planOverage: true, platformAi: true },
     }),
     usageFor(tenantId, month),
     basePrisma.tenantInvoice.findMany({ where: { tenantId }, orderBy: { number: "desc" }, take: 24 }),
+    chatGptUsageByJob(tenantId, month),
   ]);
   const included = planAmounts(tenant.planIncluded);
   const overage = planAmounts(tenant.planOverage);
@@ -64,6 +65,28 @@ export default async function PlanPage() {
             ))}
           </tbody>
         </table>
+      </div>
+
+      {/* What uses the ChatGPT subscription's allowance (Sean, 2026-11-20): when ChatGPT says it is over its limit,
+          this says which job used it. Counted, never billed. */}
+      <div className="card p-5">
+        <h3 className="font-semibold">ChatGPT use by job in {month}</h3>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Runs on your own ChatGPT subscription — not billed here. If ChatGPT says it is over its usage limit, this shows
+          what used it.
+        </p>
+        {chatGptJobs.length === 0 ? (
+          <p className="mt-2 text-sm text-muted-foreground">No ChatGPT use counted yet this month.</p>
+        ) : (
+          <ul className="mt-2 divide-y divide-border/50 text-sm">
+            {chatGptJobs.map((row) => (
+              <li key={row.job} className="flex items-center justify-between gap-3 py-2">
+                <span>{row.job}</span>
+                <span className="tabular-nums text-muted-foreground">{units(row.tokens / 1_000)} thousand tokens</span>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
 
       <div className="card p-5">

@@ -76,6 +76,7 @@ async function writeUp(words: string): Promise<Drafted> {
     return { ok: true, draft: plainDebrief(words), summarised: false };
   }
   const reply = await codexRespond({
+    job: "Call write-ups",
     instructions: DEBRIEF_INSTRUCTIONS,
     prompt: words,
     reasoningEffort: "low",

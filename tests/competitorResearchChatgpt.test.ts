@@ -23,7 +23,7 @@ test("research and discovery use ChatGPT (the default AI), and never reach Anthr
 test("daily change classification uses ChatGPT too", () => {
   const classify = fn("aiClassifyChange");
   assert.ok(classify.indexOf("if (await usesChatGpt())") < classify.indexOf("api.anthropic.com"));
-  assert.match(classify, /codexRespond\(\{ instructions: system, prompt: user, reasoningEffort: "low"/);
+  assert.match(classify, /codexRespond\(\{ job: "Competitor watch", instructions: system, prompt: user, reasoningEffort: "low"/);
 });
 
 test("briefs record the model that wrote them and drop ChatGPT's inline links", () => {

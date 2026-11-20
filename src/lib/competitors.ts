@@ -141,7 +141,7 @@ async function aiClassifyChange(input: {
     // On a connected ChatGPT subscription, as lead research is — and with no
     // fallback to Anthropic credit, for the same reason (lib/ai.ts aiResearch).
     if (await usesChatGpt()) {
-      const reply = await codexRespond({ instructions: system, prompt: user, reasoningEffort: "low", timeoutMs: 25000 });
+      const reply = await codexRespond({ job: "Competitor watch", instructions: system, prompt: user, reasoningEffort: "low", timeoutMs: 25000 });
       if ("error" in reply) {
         await logError("competitor-ai", "ChatGPT classification failed", safeCodexError(reply.error));
         return null;
@@ -423,6 +423,7 @@ async function callWithWebSearch(opts: {
     // Medium effort: the cron gives each call 90 seconds, and high effort runs
     // 50–80 seconds before the search is counted.
     const reply = await codexRespond({
+      job: "Competitor watch",
       instructions: opts.system,
       prompt: opts.user,
       webSearch: true,

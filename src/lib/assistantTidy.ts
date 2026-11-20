@@ -70,6 +70,7 @@ export async function runAssistantTidy(): Promise<number | null> {
 
   const entries: TidyEntry[] = notes.map((n) => ({ id: n.id, kind: n.kind, userId: n.userId, createdById: n.createdById, content: n.content, status: n.status }));
   const reply = await codexRespond({
+    job: "DAX nightly tidy",
     // Stripped and fenced like every other prompt: entries and questions are
     // data to tidy, never instructions to follow.
     instructions: `${TIDY_INSTRUCTIONS}\n${TIDY_DATA_RULE}`,

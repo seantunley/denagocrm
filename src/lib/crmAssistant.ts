@@ -733,7 +733,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       if (timeoutMs < MIN_CALL_MS) {
         return Promise.resolve({ error: "research budget spent" });
       }
-      return codexRespond({ instructions, prompt: planPrompt(step, insist), images, reasoningEffort: budget().planEffort, timeoutMs, cacheKey, preferModel: PLAN_MODEL });
+      return codexRespond({ job: "DAX", instructions, prompt: planPrompt(step, insist), images, reasoningEffort: budget().planEffort, timeoutMs, cacheKey, preferModel: PLAN_MODEL });
     });
   const planPrompt = (step: number, insist: boolean) =>
     [
@@ -862,6 +862,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   // Retried once on a passing fault; a retry starts the visible text afresh
   // (a new streamVisible), so the person never sees two half-answers joined.
   const answerReply = await withRetry(breakerKey, () => codexRespond({
+    job: "DAX",
     // Same for every question of this person's (so the provider's prompt cache
     // serves it) — and only then what differs, at the END, so a change there
     // doesn't invalidate the cached prefix before it. What it has learned

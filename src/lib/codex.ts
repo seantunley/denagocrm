@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import { basePrisma } from "./db";
 import { getSetting, putSetting, type SettingsTx } from "./settings";
 import { logError } from "./errorLog";
+import { recordChatGptUsage } from "./usage";
 import { currentTenantScope } from "./tenantScope";
 import {
   CODEX_DEFAULT_MODEL,
@@ -510,6 +511,11 @@ export function cacheIdentity(key: string): { sessionId: string; cacheKey: strin
  * answers is saved as the workspace's model.
  */
 export async function codexRespond(input: {
+  /**
+   * What this call is for ("DAX", "Lead research"…): its tokens are counted under it on the Plan page, so the owner
+   * can see what uses the subscription's allowance. Required, so no new caller goes uncounted.
+   */
+  job: string;
   instructions: string;
   prompt: string;
   /** Images to read with the prompt, as data: URLs (JPEG). Sent for this call only — never stored. */
@@ -639,6 +645,8 @@ export async function codexRespond(input: {
         `Was ${configured ?? `the default (${CODEX_DEFAULT_MODEL})`}. Refused: ${refusals.join(", ") || "retired, skipped"}.`,
       );
     }
+    // Counted on every answer, whoever asked (lib/usage: never billable, never throws).
+    await recordChatGptUsage(input.job, (parsed.usage?.inputTokens ?? 0) + (parsed.usage?.outputTokens ?? 0));
     return { text: parsed.text, incomplete: parsed.incomplete, usage: parsed.usage, model };
   }
 
@@ -656,6 +664,7 @@ export async function codexRespond(input: {
  */
 export async function testCodexConnection(): Promise<{ ok: true; reply: string } | { ok: false; error: string }> {
   const result = await codexRespond({
+    job: "Connection test",
     instructions: "You are a connectivity check. Answer in one short sentence.",
     prompt:
       "Search the web for the current population of Cape Town, South Africa, and state it with its source.",

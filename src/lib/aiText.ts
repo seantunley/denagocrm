@@ -5,6 +5,7 @@ import { CODEX_QUICK_MODEL } from "./codexProtocol";
 import { safeCodexError } from "./codexErrors";
 import { recordAiUsage } from "./systemHealth";
 import { logError } from "./errorLog";
+import { chatGptJobForScope } from "./usageMeters";
 import { AI_PROVIDER_KEY, chatTranscript, isOutOfCredit, pickAiProvider, type AiProvider } from "./aiProviderRules";
 
 /** This workspace's AI: its choice (ChatGPT unless set to Claude) when set up, else the other, else null. */
@@ -74,6 +75,7 @@ export async function aiText(input: AiTextInput, chosen?: AiProvider | null): Pr
 
 async function askChatGpt(input: AiTextInput, asked: string): Promise<AiTextResult> {
   const reply = await codexRespond({
+    job: chatGptJobForScope(input.scope),
     instructions: input.system,
     prompt: input.history ? chatTranscript(input.history) : input.prompt ?? "",
     images: input.images?.map((image) => `data:${image.mediaType};base64,${image.base64}`),

@@ -1,0 +1,84 @@
+name: Model prices
+
+# The AI usage meter is BILLABLE, and it is costed from src/lib/modelPrices.generated.ts. A hand-kept list priced
+# every new Claude model as Opus until someone added a row (Sean, 2026-11-20, from Scarlet's weekly price job).
+#
+# Weekly: regenerate that file from LiteLLM's public price list and, when a price changed or a model was added, open
+# (or update) a PR. Nothing reaches the meter without that PR being reviewed and merged.
+#
+# A PR opened with GITHUB_TOKEN does not start other workflows, so CI would not run on it. Set the MODEL_PRICES_TOKEN
+# secret (a token that can push and open PRs) for its checks to run by themselves. The repo setting "Allow GitHub
+# Actions to create and approve pull requests" must be on for the PR step either way.
+on:
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: model-prices
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: Refresh the AI price list
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      BRANCH: chore/model-prices
+      GH_TOKEN: ${{ secrets.MODEL_PRICES_TOKEN || github.token }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          token: ${{ secrets.MODEL_PRICES_TOKEN || github.token }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Refresh the price list
+        id: update
+        run: |
+          set -euo pipefail
+          node scripts/update-model-prices.mjs
+          if git diff --quiet -- src/lib/modelPrices.generated.ts; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Test the prices
+        if: steps.update.outputs.changed == 'true'
+        run: |
+          npm ci --ignore-scripts
+          node --import tsx --test tests/modelPrices.test.ts tests/usageBilling.test.ts
+
+      - name: Open or update the PR
+        if: steps.update.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -C "$BRANCH"
+          git add src/lib/modelPrices.generated.ts
+          git commit -m "chore: update AI model prices from LiteLLM"
+          git push --force origin "$BRANCH"
+          {
+            echo "Weekly refresh of the Claude list prices the **AI usage** meter is costed at (billable)."
+            echo
+            echo "Source: LiteLLM's public price file. Check the changes below against https://www.anthropic.com/pricing before merging."
+            echo
+            echo '```diff'
+            git diff HEAD~1 -- src/lib/modelPrices.generated.ts | tail -n +5
+            echo '```'
+          } > pr-body.md
+          if gh pr view "$BRANCH" --json state -q .state 2>/dev/null | grep -q OPEN; then
+            gh pr edit "$BRANCH" --body-file pr-body.md
+          else
+            gh pr create --base main --head "$BRANCH" --title "chore: update AI model prices" --body-file pr-body.md
+          fi
