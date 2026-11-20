@@ -10,6 +10,7 @@ import { firstStageOrders, stageContactAt } from "../../stageContact";
 import { getAccessibleLeadIds, hasAnyPermission } from "../../permissions";
 import { leadArgs } from "../../crmAssistantPlan";
 import { DAY, CANDIDATES, ToolOutput, User, fuzzy, dateKey, daysAgo, refused } from "../lookupKit";
+import { summary } from "../observationFit";
 
 /** The day a deal was won or lost (its lifecycle date, set once), or null while it is open. */
 export const closedOn = (lead: { status: string; wonAt: Date | null; lostAt: Date | null }) =>
@@ -149,13 +150,13 @@ export async function findLeads(user: User, raw: z.infer<typeof leadArgs>): Prom
   const moneyFmt = await getRegionalSettings();
   return {
     truncated: sorted.length > take || leads.length === CANDIDATES,
-    data: [{
+    data: [summary({
       total,
       listed: page.length,
       ...(status === "lost" ? { lostReasons } : {}),
       ...(closedSortAsked && !byClosed ? { note: `${status} deals have no closed date — listed ${sortBy === "oldest_contact" ? "longest without contact" : "newest"} first.` } : {}),
       ...(byClosed && status === "any" ? { note: "Won and lost deals only, most recently closed first." } : {}),
-    }, ...page.map(({ lead, lastContact }) => ({
+    }), ...page.map(({ lead, lastContact }) => ({
       id: lead.id,
       link: `/leads/${lead.id}`,
       lead: lead.title,

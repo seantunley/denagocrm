@@ -254,6 +254,15 @@ export function briefDueKey(now: Date, at: string): string | null {
  * What DAX is asked. Alerts held overnight are given as facts (their words, without the links) so the brief
  * leads with them instead of them arriving one by one at 08:00.
  */
+/**
+ * The brief's "since yesterday": the previous working day in Johannesburg — Friday on a Monday, so the weekend is in it.
+ * Given to catch_up EXPLICITLY (review of #1157): without it catch_up starts at the person's last question to DAX, and
+ * one asked at 06:30 would leave a 07:30 brief with only the last hour.
+ */
+export function briefSinceDay(now: Date): string {
+  return johannesburgDateKey(new Date(now.getTime() - (isJohannesburgMonday(now) ? 3 : 1) * 86_400_000));
+}
+
 export function briefQuestion(now: Date, heldOvernight: readonly string[], opts: { mondayStuck?: boolean; chatbotProblems?: string | null } = {}): string {
   const day = new Intl.DateTimeFormat("en-ZA", { weekday: "long", day: "numeric", month: "long", timeZone: "Africa/Johannesburg" }).format(now);
   const overnight = heldOvernight
@@ -262,10 +271,13 @@ export function briefQuestion(now: Date, heldOvernight: readonly string[], opts:
     .slice(0, 12);
   return [
     `My morning brief for today, ${day}. Short, in this order:`,
-    "1. My day — my meetings, tasks and deliveries today (use the daily brief).",
-    "2. What my customers did since yesterday — quotes opened or signed, messages still waiting for an answer.",
+    // daily_brief and catch_up between them hold parts 1–3; on production the brief rebuilt part 2 from find_quotes,
+    // find_leads and up to five lead_briefs, averaging 5.3 lookups (audit 2026-11-20, gap 3).
+    `Start with daily_brief and catch_up {"since":"${briefSinceDay(now)}"} together, in one step — between them they hold parts 1 to 3. Give catch_up exactly that since date.`,
+    "1. My day — my meetings, tasks and deliveries today (from the daily brief).",
+    "2. What my customers did since yesterday — quotes opened or signed, messages still waiting for an answer (from catch_up).",
     ...(overnight.length ? [`   Since last night: ${overnight.join(" · ")}`] : []),
-    "3. The three things that matter most today, each with one line on why.",
+    "3. The three things that matter most today, each with one line on why. Look closer (lead_brief) only at those three, and only when the daily brief and catch_up don't already say why.",
     "If the daily brief has a workshop section, add a short Workshop part after 2 — overdue services, stuck job cards, warranties running out — a line each, at most three of each. No workshop section, no Workshop part.",
     "If the daily brief has nurture reviews, add a short Nurture part: each parked deal with its link — why it was parked, what they wanted, the trigger, and \"review due today\" or how many days overdue — and offer to reactivate it. None, no Nurture part.",
     // Once a month (round 2 item 4): lost deals the customer came back to — on the first working day only.

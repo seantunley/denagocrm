@@ -22,7 +22,8 @@ test('"How many leads came in last month?" — a real count over the calendar mo
   assert.match(find, /\.\.\.\(status === "any" \? \(byClosed \? \{ status: \{ in: \["won", "lost"\] \} \} : \{\}\) : \{ status \}\)/);
   assert.match(find, /createdTo \? \{ lt: new Date\(new Date\(`\$\{args\.createdTo\}T00:00:00\+02:00`\)\.getTime\(\) \+ DAY\) \}/, "the whole last day counts");
   assert.match(find, /prisma\.lead\.count\(\{ where \}\)/, "the total isn't capped at the rows read");
-  assert.match(find, /data: \[\{\s*total,\s*listed: page\.length,/);
+  // The totals head the list as its marked summary (review of #1157: kept whole when trimmed, never counted as a lead).
+  assert.match(find, /data: \[summary\(\{\s*total,\s*listed: page\.length,/);
   // Lost deals: every lost reason across ALL the matches, from the same `where` as the total.
   assert.match(find, /status === "lost" \? prisma\.lead\.groupBy\(\{ by: \["lostReason"\], where, _count: \{ _all: true \} \}\)/);
   const plan = planInstructions({ today: "2026-10-05", userName: "Sean", stages: [], staff: [], activityTypes: [] });

@@ -12,6 +12,7 @@ import { splitListed } from "../assistantListedRules";
 import { type PriorTurn } from "../crmAssistantPlan";
 import { DAY, HISTORY_DAYS, ToolOutput, User } from "./lookupKit";
 import { when } from "./lookups/schedule";
+import { fitObservation, leadingSummaries } from "./observationFit";
 
 /** Turns this recent are "the conversation"; older ones are only reachable via recall. */
 export const CONVERSATION_WINDOW_MS = 3 * 60 * 60 * 1000;
@@ -280,9 +281,11 @@ export function observationText(o: Observation): string {
   // JSON. Cleaning folds fullwidth forms (NFKC), and a customer's fullwidth
   // ＂ and ＼ would otherwise become real quotes after stringify and forge
   // sibling fields ("status":"won", fake approved answers) inside the results.
-  const body = JSON.stringify({ truncated: o.output.truncated, results: cleanDeep(o.output.data) });
+  const { truncated, results } = { truncated: o.output.truncated, results: cleanDeep(o.output.data) };
   const budget = OBSERVATION_BUDGET[o.tool] ?? OBSERVATION_CHARS;
-  return `${o.tool} ${JSON.stringify(cleanDeep(o.args ?? {}))} →\n${body.length > budget ? `${body.slice(0, budget)}…(cut)` : body}`;
+  // Over budget: whole records and "showing N of M", not JSON cut mid-record (lib/assistant/observationFit).
+  const body = fitObservation(results, truncated, budget, leadingSummaries(o.output.data));
+  return `${o.tool} ${JSON.stringify(cleanDeep(o.args ?? {}))} →\n${body}`;
 }
 
 /** Every string in a value — object KEYS as well as values — cleaned, before it is serialised. */

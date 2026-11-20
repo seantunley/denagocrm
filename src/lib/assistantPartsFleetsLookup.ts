@@ -9,6 +9,7 @@ import { contactName, formatZAR } from "./format";
 import { fleetTypeLabel } from "./fleetTypes";
 import { CLOSED_JOB_STATUSES } from "./workshopRules";
 import type { fleetsArgs, partsArgs } from "./crmAssistantPlan";
+import { summary } from "./assistant/observationFit";
 
 /**
  * PARTS STOCK and FLEET ACCOUNTS (Sean, 2026-11-14: "DAX must have knowledge of those things, permission based").
@@ -63,7 +64,7 @@ export async function partsLookup(user: PermissionUser, args: z.infer<typeof par
   }));
   return {
     truncated: matching.length > shown.length,
-    data: [{ total: matching.length, listed: shown.length, note: "Stock on hand as the Parts page shows it." }, ...shown],
+    data: [summary({ total: matching.length, listed: shown.length, note: "Stock on hand as the Parts page shows it." }), ...shown],
     rows: shown.map((p) => ({ label: p.part, detail: [p.code, `${p.inStock} in stock${p.low ? " (low)" : ""}`, p.sellPrice].filter(Boolean).join(" · "), href: p.link })),
   };
 }
@@ -134,7 +135,7 @@ export async function fleetsLookup(user: PermissionUser, args: z.infer<typeof fl
   });
   return {
     truncated: total > shown.length,
-    data: [{ total, listed: shown.length, note: "Deals, job cards and customers are counted only where you may open them." }, ...shown],
+    data: [summary({ total, listed: shown.length, note: "Deals, job cards and customers are counted only where you may open them." }), ...shown],
     rows: shown.map((f) => ({ label: f.fleet, detail: [f.type, `${f.vehicles} vehicles`, `${f.openDeals} open deals`, `${f.openJobCards} open job cards`].filter(Boolean).join(" · "), href: f.link })),
   };
 }

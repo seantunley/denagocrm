@@ -13,6 +13,7 @@ import { loadBillToFleets, quoteBillTo } from "./quoteBillTo";
 import { xeroStatusLabel } from "./xeroInvoice";
 import { johannesburgDateKey } from "./activityDay";
 import { ciExactIdFilter } from "./ciExact";
+import { summary } from "./assistant/observationFit";
 
 /**
  * INVOICES (Sean, 2026-11-14: "DAX must have knowledge of those things, permission based") — what /invoices holds,
@@ -134,14 +135,14 @@ export async function invoicesLookup(user: PermissionUser, args: InvoicesArgs): 
   return {
     truncated: matches.length > page.length,
     data: [
-      {
+      summary({
         total: matches.length,
         listed: page.length,
         outstanding,
         ...(asked && !matches.length ? { noInvoice: `No invoice numbered "${args.number}" that this person can open.` } : {}),
         ...(ambiguous ? { ambiguous } : {}),
         note: "Invoices carry no due date in the CRM: 'days since invoiced' is the age, not days overdue. Owing = total less the deposit and payments recorded.",
-      },
+      }),
       ...page.map(({ quote, total, received, owing, who, issued, age }) => {
         const fmt = withCurrency(moneyFmt, quote.currency);
         return {
