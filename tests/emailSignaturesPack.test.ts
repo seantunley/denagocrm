@@ -16,6 +16,13 @@ test("the pack: optional, its page and the banners' settings page are its routes
   assert.deepEqual(pack.routePrefixes, ["/email-signatures", "/settings/signature-banners"]);
 });
 
+test("every existing workspace is granted the pack — it had signatures before; additive and re-runnable", () => {
+  const sql = src("prisma/migrations/20261120120000_grant_signatures_module/migration.sql");
+  assert.match(sql, /UPDATE "Tenant"\s+SET "modules" = CASE WHEN coalesce\("modules", ''\) = '' THEN 'signatures' ELSE "modules" \|\| ',signatures' END/);
+  assert.match(sql, /WHERE NOT \('signatures' = ANY \(string_to_array\(replace\(coalesce\("modules", ''\), ' ', ''\), ','\)\)\);/, "a workspace that already lists it is left alone");
+  assert.doesNotMatch(sql, /DELETE|DROP|TRUNCATE/i);
+});
+
 test("off: no banners on any email — the one check every sender path goes through; the signature itself is unchanged", () => {
   const store = src("src/lib/signatureBannerStore.ts");
   const fn = store.slice(store.indexOf("export async function bannersForSender"), store.indexOf("export async function bannersForSender") + 600);
