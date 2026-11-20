@@ -18,7 +18,9 @@ import { TENANT_CREDENTIAL_INTEGRATIONS } from "../src/lib/tenantCredentialField
 const src = (p: string) => readFileSync(p, "utf8").replace(/\r\n/g, "\n");
 
 test("one status vocabulary: Connected, Saved not checked, Using shared setup, Not set up — plus the two that need attention", () => {
-  assert.deepEqual(Object.values(STATE_LABEL), ["Connected", "Saved, not checked", "Using shared setup", "Not set up", "Reconnect needed", "Half set up"]);
+  // "Using original settings", not "shared" (Sean, 2026-11-20): only the founding workspace reaches that state, on its
+  // own values from before per-workspace storage — never another workspace's.
+  assert.deepEqual(Object.values(STATE_LABEL), ["Connected", "Saved, not checked", "Using original settings", "Not set up", "Reconnect needed", "Half set up"]);
   const s = (input: Partial<Parameters<typeof workspaceIntegrationState>[0]>) =>
     workspaceIntegrationState({ needsReauth: false, verified: false, ownStatus: "default", sharedInUse: false, ...input });
   assert.equal(s({ needsReauth: true, verified: true, ownStatus: "active" }), "reconnect", "broken beats last-seen-working");

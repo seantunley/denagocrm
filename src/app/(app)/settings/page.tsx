@@ -16,12 +16,11 @@ import {
 import { signatureCompanyFrom, buildSignature, parseSignatureDesign, SIGNATURE_DESIGN_KEY } from "@/lib/signature";
 import SignatureDesignEditor from "@/components/SignatureDesignEditor";
 import SendingDomainCheck from "@/components/settings/SendingDomainCheck";
-import { getSetting } from "@/lib/settings";
+import { getSetting, resolveIntegrationBundle } from "@/lib/settings";
 import { getCompanyProfile } from "@/lib/companyProfile";
 import { tenantOrigin } from "@/lib/tenantOrigin";
 import { AddUserForm, ChangePasswordForm } from "@/components/TeamForms";
 import {
-  saveSmtpSettings,
   saveServiceReminderSettings,
   createTemplate,
   updateTemplate,
@@ -33,14 +32,12 @@ import { EMAIL_OPEN_TRACKING_KEY, openTrackingOn } from "@/lib/emailOpenTracking
 import { EMAIL_HEADER_STYLES, parseEmailHeaderStyle, SIGNING_EMAIL_KINDS } from "@/lib/signing/emailTemplates";
 import TestEmailButton from "@/components/TestEmailButton";
 import ConfirmDelete from "@/components/ConfirmDelete";
-import ClearSecret from "@/components/ClearSecret";
 import ImportContactsForm from "@/components/ImportContactsForm";
 import PushToggle from "@/components/PushToggle";
 import SecurityPanel from "@/components/SecurityPanel";
 import PasskeyManager from "@/components/PasskeyManager";
 import OwnerUserControls from "@/components/OwnerUserControls";
 import { saveSessionPolicy } from "@/app/actions/security";
-import { saveImapSettings } from "@/app/actions/emails";
 import { clearErrorLog } from "@/app/actions/ai";
 import { basePrisma } from "@/lib/db";
 import { REGIONAL_KEYS } from "@/lib/settings";
@@ -171,6 +168,11 @@ export default async function SettingsPage({
   // (lib/signing/signingEmail.ts). The message editors read their own copies
   // (CustomerMessageEditors).
   const signingTenantId = isAdmin && tab === "email" ? await getActiveTenantId() : null;
+  // Outgoing and incoming mail are set in Settings → Integrations, per workspace (2026-11-20): the old forms here wrote
+  // a store only the founding workspace ever read. Shown here by the same rule the mail code reads them.
+  const [smtpMail, imapMail] = signingTenantId
+    ? await Promise.all([resolveIntegrationBundle(signingTenantId, "smtp"), resolveIntegrationBundle(signingTenantId, "imap")])
+    : [null, null];
   const signingOverrides = signingTenantId
     ? await basePrisma.appSetting.findMany({
         where: { tenantId: signingTenantId, key: { in: ["EMAIL_HEADER_STYLE", EMAIL_OPEN_TRACKING_KEY] } },
@@ -648,121 +650,40 @@ export default async function SettingsPage({
             <Row
               title="Email sending (SMTP)"
               status={
-                setting("SMTP_HOST") ? (
-                  <span className="badge bg-emerald-500/15 text-emerald-300">Connected</span>
+                smtpMail?.SMTP_HOST ? (
+                  <span className="badge bg-emerald-500/15 text-emerald-300">Set up</span>
                 ) : (
                   <span className="badge bg-amber-500/15 text-amber-300">Not set up</span>
                 )
               }
             >
               <p className="text-xs text-muted-foreground mb-4">
-                Used for all outgoing email. Works with any SMTP provider (your denagocpt.co.za
-                mailbox, Google Workspace, Resend, SendGrid).
+                Used for all outgoing email.{" "}
+                {smtpMail?.SMTP_FROM ? <>Sends as {smtpMail.SMTP_FROM}. </> : null}
+                Set it up, change it or test it in{" "}
+                <Link href="/settings/integrations" className="text-primary underline">Settings → Integrations → Outbound email</Link>.
               </p>
-              <SaveForm success="Outgoing mail settings saved" resetOnSuccess={false} action={saveSmtpSettings} className="grid md:grid-cols-2 gap-3 mb-3">
-                <div>
-                  <label className="label">SMTP host</label>
-                  <input name="host" className="input" defaultValue={setting("SMTP_HOST")} placeholder="mail.denagocpt.co.za" />
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="label">Port</label>
-                    <input name="port" className="input" defaultValue={setting("SMTP_PORT") || "587"} />
-                  </div>
-                  <div className="flex items-center gap-2 pt-6">
-                    <input
-                      type="checkbox"
-                      name="secure"
-                      id="secure"
-                      defaultChecked={setting("SMTP_SECURE") === "true"}
-                      className="h-4 w-4"
-                    />
-                    <label htmlFor="secure" className="text-sm text-muted-foreground">
-                      SSL (port 465)
-                    </label>
-                  </div>
-                </div>
-                <div>
-                  <label className="label">Username</label>
-                  <input name="user" className="input" defaultValue={setting("SMTP_USER")} placeholder="sales@denagocpt.co.za" />
-                </div>
-                <div>
-                  <label className="label">Password</label>
-                  {/* Never echo the stored secret — blank means "keep it" (see saveSmtpSettings). Clear = no-password config. */}
-                  <div className="flex gap-2">
-                    <input name="pass" type="password" autoComplete="new-password" className="input flex-1" placeholder={setting("SMTP_PASS") ? "•••••••• saved — leave blank to keep" : ""} />
-                    {setting("SMTP_PASS") ? <ClearSecret settingKey="SMTP_PASS" label="SMTP password" /> : null}
-                  </div>
-                </div>
-                <div className="md:col-span-2">
-                  <label className="label">From address</label>
-                  <input
-                    name="from"
-                    className="input"
-                    defaultValue={setting("SMTP_FROM")}
-                    placeholder={'"Denago Cape Town" <sales@denagocpt.co.za>'}
-                  />
-                </div>
-                <div className="md:col-span-2">
-                  <SaveButton className="btn-primary">Save email settings</SaveButton>
-                </div>
-              </SaveForm>
               <TestEmailButton />
-              {setting("SMTP_HOST") && <SendingDomainCheck />}
+              {smtpMail?.SMTP_HOST && <SendingDomainCheck />}
             </Row>
 
             <Row
               title="Incoming email (IMAP)"
               status={
-                setting("IMAP_HOST") ? (
-                  <span className="badge bg-emerald-500/15 text-emerald-300">Connected</span>
+                imapMail?.IMAP_HOST ? (
+                  <span className="badge bg-emerald-500/15 text-emerald-300">Set up</span>
                 ) : (
                   <span className="badge bg-amber-500/15 text-amber-300">Not set up</span>
                 )
               }
             >
               <p className="text-xs text-muted-foreground mb-4">
-                Customer replies land on their record automatically (checked every 30 minutes,
-                read-only — nothing is moved or marked in the mailbox). Unknown senders are left
-                alone. Usually the same details as SMTP with port 993.
+                Customer replies land on their record automatically (checked every 30 minutes, read-only — nothing is
+                moved or marked in the mailbox).{" "}
+                {imapMail?.IMAP_USER ? <>Reads {imapMail.IMAP_USER}. </> : null}
+                Set it up or change it in{" "}
+                <Link href="/settings/integrations" className="text-primary underline">Settings → Integrations → Inbound email</Link>.
               </p>
-              <SaveForm success="Incoming mail settings saved" resetOnSuccess={false} action={saveImapSettings} className="grid md:grid-cols-2 gap-3">
-                <div>
-                  <label className="label">IMAP host</label>
-                  <input name="host" className="input" defaultValue={setting("IMAP_HOST")} placeholder="mail.denagocpt.co.za" />
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="label">Port</label>
-                    <input name="port" className="input" defaultValue={setting("IMAP_PORT") || "993"} />
-                  </div>
-                  <div className="flex items-center gap-2 pt-6">
-                    <input
-                      type="checkbox"
-                      name="secure"
-                      id="imap-secure"
-                      defaultChecked={setting("IMAP_SECURE") !== "false"}
-                      className="h-4 w-4"
-                    />
-                    <label htmlFor="imap-secure" className="text-sm text-muted-foreground">SSL</label>
-                  </div>
-                </div>
-                <div>
-                  <label className="label">Username</label>
-                  <input name="user" className="input" defaultValue={setting("IMAP_USER")} placeholder="sales@denagocpt.co.za" />
-                </div>
-                <div>
-                  <label className="label">Password</label>
-                  {/* Never echo the stored secret — blank means "keep it" (see saveImapSettings). Clear = no-password config. */}
-                  <div className="flex gap-2">
-                    <input name="pass" type="password" autoComplete="new-password" className="input flex-1" placeholder={setting("IMAP_PASS") ? "•••••••• saved — leave blank to keep" : ""} />
-                    {setting("IMAP_PASS") ? <ClearSecret settingKey="IMAP_PASS" label="IMAP password" /> : null}
-                  </div>
-                </div>
-                <div className="md:col-span-2">
-                  <SaveButton className="btn-primary">Save incoming email</SaveButton>
-                </div>
-              </SaveForm>
             </Row>
 
             {automotiveOn && (

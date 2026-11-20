@@ -235,28 +235,8 @@ export async function sendTestEmail(
   });
 }
 
-// ---- SMTP settings ----
-
-export async function saveSmtpSettings(formData: FormData) {
-  return asActionResult(async () => {
-    await requireTenantOwner();
-    const entries: Record<string, string> = {
-      SMTP_HOST: String(formData.get("host") ?? "").trim(),
-      SMTP_PORT: String(formData.get("port") ?? "587").trim(),
-      SMTP_SECURE: formData.get("secure") === "on" ? "true" : "false",
-      SMTP_USER: String(formData.get("user") ?? "").trim(),
-      SMTP_FROM: String(formData.get("from") ?? "").trim(),
-    };
-    // The password field renders blank (never echoes the stored secret), so a
-    // blank submit means "keep the saved password" — only overwrite when provided.
-    const pass = String(formData.get("pass") ?? "").trim();
-    if (pass) entries.SMTP_PASS = pass;
-    for (const [key, value] of Object.entries(entries)) {
-      await putSetting(key, value);
-    }
-    revalidatePath("/settings");
-  });
-}
+// Outgoing and incoming mail (SMTP/IMAP) are set per workspace in Settings → Integrations (integrationFlow). The old
+// saveSmtpSettings / saveImapSettings wrote AppSetting, which only the founding workspace ever read (2026-11-20).
 
 export async function saveServiceReminderSettings(formData: FormData) {
   return asActionResult(async () => {
@@ -564,23 +544,4 @@ export async function previewSigningEmailTemplate(kind: string, formData: FormDa
     preview = { subject: rendered.subject, html: rendered.html };
   });
   return result.error ? { error: result.error } : preview;
-}
-
-/** Incoming-mail (IMAP) credentials — password encrypted at rest. */
-export async function saveImapSettings(formData: FormData) {
-  return asActionResult(async () => {
-    await requireTenantOwner();
-    const entries: Record<string, string> = {
-      IMAP_HOST: String(formData.get("host") ?? "").trim(),
-      IMAP_PORT: String(formData.get("port") ?? "993").trim(),
-      IMAP_SECURE: formData.get("secure") === "on" ? "true" : "false",
-      IMAP_USER: String(formData.get("user") ?? "").trim(),
-    };
-    // Blank password submit = keep the saved one (the field never echoes it back).
-    const pass = String(formData.get("pass") ?? "").trim();
-    if (pass) entries.IMAP_PASS = pass;
-    for (const [key, value] of Object.entries(entries)) {
-      await putSetting(key, value);
-    }
-  });
 }

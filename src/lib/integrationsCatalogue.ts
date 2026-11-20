@@ -51,7 +51,9 @@ export type IntegrationState = "connected" | "unverified" | "shared" | "not-set-
 export const STATE_LABEL: Record<IntegrationState, string> = {
   connected: "Connected",
   unverified: "Saved, not checked",
-  shared: "Using shared setup",
+  // Only the founding workspace can be here: its values from before workspaces had their own storage (AppSetting).
+  // They are its own, never another workspace's — "shared" read as borrowing (Sean, 2026-11-20).
+  shared: "Using original settings",
   "not-set-up": "Not set up",
   reconnect: "Reconnect needed",
   incomplete: "Half set up",
