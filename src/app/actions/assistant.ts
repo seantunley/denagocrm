@@ -25,6 +25,7 @@ import { splitFreeFees } from "@/lib/quoteFreeItems";
 import { CONFIRM_KEY, CUSTOMER_FIELDS, leadQuotesReply, QUOTE_ADD_MAX_FEES, QUOTE_ADD_MAX_FEE_RANDS, QUOTE_BUILD_MAX_LINES, STALE_CARD, type ActionCard } from "@/lib/assistantActions";
 import { editorDefaults, quoteFromLeadDefaults } from "@/lib/quoteFromLead";
 import { QUOTE_PDF_SOURCE } from "@/lib/assistantWhatsAppRules";
+import { confirmTransferCard } from "@/lib/assistantVehicleTransfer";
 import { tenantOrigin } from "@/lib/tenantOrigin";
 import { payableTotalCents } from "@/lib/pricing";
 import { formatZAR } from "@/lib/format";
@@ -570,6 +571,11 @@ export async function runAssistantAction(
         if ("repeated" in opened) return { ok: true, success: `Already opened as job card #${opened.number} — nothing was opened twice.`, href: `/jobcards/${opened.id}` };
         await logAudit({ action: "assistant.action_confirmed", summary: `Confirmed the assistant's proposal: open job card #${opened.number}`, user, contactId: vehicle.contactId, metadata: { kind: card.kind, ...cardRecords(card) } });
         return { ok: true, success: `Job card #${opened.number} opened. The customer has not been contacted.`, href: `/jobcards/${opened.id}` };
+      }
+      case "transfer_vehicle": {
+        // The transfer's own core (lib/assistantVehicleTransfer.ts): refused if the vehicle changed hands since. Nobody is contacted.
+        const done = await confirmTransferCard(user, card);
+        return done.ok ? done : { ok: false, error: done.error };
       }
       case "block_time": {
         // A personal calendar item. No assignee is passed, so it is the

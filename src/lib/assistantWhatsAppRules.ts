@@ -340,7 +340,7 @@ const CARD_EMOJI: Record<string, string> = {
   reschedule: "🔁", cancel_activity: "✖️", complete_activity: "✅", assign: "👤", stage: "➡️", lost: "❌", nurture: "🌱",
   quote: "🧾", quote_build: "🧾", quote_add: "🧾", quote_change: "🧾", quote_pdf: "📄", schedule: "⏰", watch: "👀",
   create_customer: "🆕", create_lead: "🆕", update_customer: "✏️", attach_file: "📎", record_payment: "💰",
-  schedule_delivery: "🚚", job_card: "🔧", plan: "📋",
+  schedule_delivery: "🚚", job_card: "🔧", plan: "📋", transfer_vehicle: "🔑",
 };
 export const cardEmoji = (kind: unknown) => CARD_EMOJI[String(kind)] ?? "✳️";
 

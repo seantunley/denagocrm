@@ -9,6 +9,7 @@ import { customerVehicles, workshopOverview } from "../../workshopContext";
 import { vehicleArgs } from "../../crmAssistantPlan";
 import { DAY, ToolOutput, User, fuzzy, refused } from "../lookupKit";
 import { when } from "./schedule";
+import { vehicleOwnershipLookup } from "./vehicleOwnership";
 
 /** Demo vehicles and their bookings, stock units, or customers' own vehicles. */
 export async function vehicles(user: User, raw: z.infer<typeof vehicleArgs>): Promise<ToolOutput> {
@@ -86,6 +87,12 @@ export async function vehicles(user: User, raw: z.infer<typeof vehicleArgs>): Pr
   if (args.kind === "workshop") {
     const overview = await workshopOverview(user, { take: args.limit ?? 8, stuckDays: args.stuckDays ?? 5 });
     return overview ? { truncated: false, rows: overview.rows, data: [overview.data] } : refused("the workshop");
+  }
+  // Who owned it when (warranty-transfer-brief.md, PR 3) — lookups/vehicleOwnership.ts, behind the same grant.
+  if (args.kind === "ownership") {
+    return (await hasAnyPermission(user, "vehicles.view_all", "vehicles.view_owned"))
+      ? vehicleOwnershipLookup(user, { search: args.search, limit: take })
+      : refused("customer vehicles");
   }
   if (!(await hasAnyPermission(user, "vehicles.view_all", "vehicles.view_owned"))) return refused("customer vehicles");
   return customerVehicles(user, { search: args.search, limit: take });

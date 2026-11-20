@@ -72,6 +72,7 @@ import { getDefaultPipeline, listPipelineStages } from "./pipelines";
 import { ACTION_INSTRUCTIONS, CHECK_BACK_RULE, CHOICE_INSTRUCTIONS, JOB_CARD_RULE, LEAD_QUOTES_MAX, MAX_ACTIONS, logCallDetail, unlinkedOpenQuotesWhere, newCustomerDetail, type NewCustomer, CUSTOMER_FIELDS, customerChangesText, type CustomerChange, type CustomerField, type FileTarget, matchQuoteRow, quoteAddText, quoteBuildText, quoteChangeText, settledAnswer, withoutSetUpClaims, type ActionCard, type ProposedAction, type QuoteBuildLine, type QuoteChange } from "./assistantActions";
 import { resolveCatalogueProduct } from "./catalogueLookup";
 import { completeActivityText } from "./assistantCompleteActivity";
+import { buildTransferCard, VEHICLE_TRANSFER_RULE } from "./assistantVehicleTransfer";
 import { futureActivityRefusal, isFutureDay } from "./activityDay";
 import { TASK_INSTRUCTIONS, keepIds, taskBlock, type TaskView } from "./assistantTaskRules";
 import { listedBlock, listedRecords, type ListedSlot } from "./assistantListedRules";
@@ -864,6 +865,8 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
   const soul = stripInvisible(soulText(profile, company?.name ?? "", user.name || "a colleague"));
   // Job cards are Automotive's: a workspace without it is never told it can open one.
   const jobCards = proposes && modules.has("automotive") ? JOB_CARD_RULE : "";
+  // Vehicle transfers are Automotive's too (lib/assistantVehicleTransfer.ts).
+  const transfers = proposes && modules.has("automotive") ? VEHICLE_TRANSFER_RULE : "";
   // Retried once on a passing fault; a retry starts the visible text afresh
   // (a new streamVisible), so the person never sees two half-answers joined.
   const answerReply = await withRetry(breakerKey, () => codexRespond({
@@ -880,6 +883,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
       REPLY_FORMAT,
       STATE_INSTRUCTIONS,
       tasksOn ? TASK_INSTRUCTIONS : "",
+      transfers,
       // Plans are confirmed on their card in the CRM chat (assistantPlan); nowhere else is offered one.
       proposes && source === "chat" ? PLAN_INSTRUCTIONS : "",
       LEARN_INSTRUCTIONS,
@@ -1477,6 +1481,13 @@ export async function resolveActions(
         title: `Update ${name}'s details`, changes, detail: customerChangesText(changes),
         ...(p.reason ? { reason: p.reason } : {}),
       });
+      continue;
+    }
+    if (p.type === "transfer_vehicle") {
+      // A vehicle that changed hands (lib/assistantVehicleTransfer.ts): every check the transfer makes, made now.
+      const built = await buildTransferCard(user, p, index);
+      if ("problem" in built) problems.push(built.problem);
+      else cards.push(built.card);
       continue;
     }
     if (p.type === "job_card") {

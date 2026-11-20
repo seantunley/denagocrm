@@ -218,11 +218,21 @@ export async function transferVehicleOwnership(
       if (odometerKm != null) {
         await tx.mileageLog.create({ data: { tenantId, vehicleId, km: odometerKm, note: "Odometer at transfer to new owner", recordedAt: date } });
       }
+      // ANYTHING ALREADY SCHEDULED FOR THE OLD OWNER ABOUT THIS VEHICLE IS CANCELLED (PR 3): a service-due, recall or
+      // warranty journey queued or waiting for them. New reminders go to the new owner — they are addressed from
+      // Vehicle.contactId when they run. The vehicle's id in the run's context is how a run names its vehicle.
+      const stopped = await tx.$executeRaw`
+        UPDATE "JourneyRun"
+        SET "status" = 'cancelled', "completedAt" = now(), "lastError" = 'The vehicle was transferred to a new owner'
+        WHERE "tenantId" = ${tenantId}
+          AND ("contactId" = ${vehicle.contactId} OR ("entityType" = 'contact' AND "entityId" = ${vehicle.contactId}))
+          AND "status" IN ('queued', 'running', 'waiting', 'blocked')
+          AND "context"::text LIKE ${`%${vehicleId}%`}`;
       const fromName = previous ? contactName(previous) : "the previous owner";
       await logAuditStrict(
         {
           action: "vehicle.transferred",
-          summary: `Transferred ${vehicle.model} from ${fromName} to ${contactName(newOwner)} on ${date.toISOString().slice(0, 10)} — ${OWNERSHIP_REASON_LABELS[reason]}${warranty === "carried" ? "" : warranty === "pending" ? " (warranty transfer awaiting approval)" : " (warranty did not transfer)"}${fleet && !fleetId ? "; left its fleet" : ""}`,
+          summary: `Transferred ${vehicle.model} from ${fromName} to ${contactName(newOwner)} on ${date.toISOString().slice(0, 10)} — ${OWNERSHIP_REASON_LABELS[reason]}${warranty === "carried" ? "" : warranty === "pending" ? " (warranty transfer awaiting approval)" : " (warranty did not transfer)"}${fleet && !fleetId ? "; left its fleet" : ""}${stopped ? `; ${stopped} reminder${stopped === 1 ? "" : "s"} for the previous owner cancelled` : ""}`,
           contactId: newContactId,
           entityType: "Vehicle",
           entityId: vehicleId,
