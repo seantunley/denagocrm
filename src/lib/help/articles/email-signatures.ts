@@ -32,7 +32,7 @@ export const emailSignatureArticles: HelpArticle[] = [
           "**A line for each team**: shown under the signature of everyone in that team, for example the workshop's hours or the parts number. Someone in two teams gets the first line that is theirs.",
           "**Short signature on replies**: replies get two plain lines (name, title, company, phone and email) instead of the full signature, so long threads don't repeat it. New emails keep the full one.",
           "**Your team**: open a person to edit their signature in the same editor, any detail included.",
-          "**Workspace design**: the layout everyone's signature uses.",
+          "**Workspace design**: the layout everyone's signature uses: Card, Classic, Modern, Compact or Minimal. All of them use your workspace's accent colour (orange if none is set). Check the preview: a logo made for a dark background suits the Card design best.",
           "**Own HTML**: only the owner can set a custom HTML signature. Anyone who already has one can still clear it.",
         ],
       },
