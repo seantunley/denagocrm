@@ -262,10 +262,13 @@ export function briefQuestion(now: Date, heldOvernight: readonly string[], opts:
     .slice(0, 12);
   return [
     `My morning brief for today, ${day}. Short, in this order:`,
-    "1. My day — my meetings, tasks and deliveries today (use the daily brief).",
-    "2. What my customers did since yesterday — quotes opened or signed, messages still waiting for an answer.",
+    // daily_brief and catch_up between them hold parts 1–3; on production the brief rebuilt part 2 from find_quotes,
+    // find_leads and up to five lead_briefs, averaging 5.3 lookups (audit 2026-11-20, gap 3).
+    "Start with daily_brief and catch_up together, in one step — between them they hold parts 1 to 3.",
+    "1. My day — my meetings, tasks and deliveries today (from the daily brief).",
+    "2. What my customers did since yesterday — quotes opened or signed, messages still waiting for an answer (from catch_up).",
     ...(overnight.length ? [`   Since last night: ${overnight.join(" · ")}`] : []),
-    "3. The three things that matter most today, each with one line on why.",
+    "3. The three things that matter most today, each with one line on why. Look closer (lead_brief) only at those three, and only when the daily brief and catch_up don't already say why.",
     "If the daily brief has a workshop section, add a short Workshop part after 2 — overdue services, stuck job cards, warranties running out — a line each, at most three of each. No workshop section, no Workshop part.",
     "If the daily brief has nurture reviews, add a short Nurture part: each parked deal with its link — why it was parked, what they wanted, the trigger, and \"review due today\" or how many days overdue — and offer to reactivate it. None, no Nurture part.",
     // Once a month (round 2 item 4): lost deals the customer came back to — on the first working day only.

@@ -105,6 +105,7 @@ import { vehicles } from "./assistant/lookups/vehicles";
 import { deliveries } from "./assistant/lookups/deliveries";
 import { documents } from "./assistant/lookups/documents";
 import { quietContext, planContext, personContext, recentTurns, withListed, pageTarget, pageContext, Observation, observationText } from "./assistant/context";
+import { lookupFailedNote } from "./assistant/observationFit";
 export { personContext, describePerson, assistantTurnsToday, pageHint, pageTarget, pageContext, assistantHistory, cleanDeep } from "./assistant/context";
 export type { PageTarget } from "./assistant/context";
 
@@ -703,7 +704,7 @@ export async function askCrm(user: User, asked: string, page?: string | null, op
           return out;
         })).catch(async (error: unknown): Promise<ToolOutput> => {
           await logError("crm-assistant", `lookup ${s.tool} failed`, error instanceof Error ? error.name : "unknown");
-          return { truncated: false, rows: [], data: [{ note: "That lookup failed — say so if it matters." }] };
+          return { truncated: false, rows: [], data: [lookupFailedNote(s.tool, error)] };
         }),
       ),
     );
