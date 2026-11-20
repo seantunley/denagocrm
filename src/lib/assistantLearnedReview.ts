@@ -36,10 +36,10 @@ const SELECT = { id: true, kind: true, name: true, description: true, content: t
  */
 export async function briefReviewSection(tenantId: string, user: Person): Promise<string> {
   if (!(await ownsWorkspace(tenantId, user))) return "";
-  const where = { tenantId, status: "unreviewed" };
+  // The workspace named in each call itself (tenantAccessRatchet), not through a shared variable.
   const [items, total] = await Promise.all([
-    basePrisma.assistantNote.findMany({ where, orderBy: { createdAt: "asc" }, take: REVIEW_IN_BRIEF, select: SELECT }),
-    basePrisma.assistantNote.count({ where }),
+    basePrisma.assistantNote.findMany({ where: { tenantId, status: "unreviewed" }, orderBy: { createdAt: "asc" }, take: REVIEW_IN_BRIEF, select: SELECT }),
+    basePrisma.assistantNote.count({ where: { tenantId, status: "unreviewed" } }),
   ]);
   if (!items.length) return "";
   await putWorkspaceSetting(tenantId, reviewOfferKey(user.id), JSON.stringify({ ids: items.map((i) => i.id), at: new Date().toISOString() }));
@@ -78,14 +78,15 @@ export async function decide(tenantId: string, user: Person, ids: string[], verd
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`assistant-notes:${tenantId}`})::bigint)`;
     const notes = await tx.assistantNote.findMany({ where: { tenantId, id: { in: ids }, status: "unreviewed" }, select: SELECT });
     if (!notes.length) return [];
-    const where = { tenantId, id: { in: notes.map((n) => n.id) }, status: "unreviewed" };
+    const found = notes.map((n) => n.id);
     if (verdict === "drop") {
-      await tx.assistantNote.deleteMany({ where });
+      await tx.assistantNote.deleteMany({ where: { tenantId, id: { in: found }, status: "unreviewed" } });
     } else {
       const now = new Date();
+      const approved = { status: "approved", conflictsWithId: null, reviewedById: user.id, reviewedAt: now, lastConfirmedAt: now };
       // As Approve in Settings: a fact's "why it was flagged" goes; a playbook keeps its description.
-      await tx.assistantNote.updateMany({ where: { ...where, kind: "playbook" }, data: { status: "approved", conflictsWithId: null, reviewedById: user.id, reviewedAt: now, lastConfirmedAt: now } });
-      await tx.assistantNote.updateMany({ where: { ...where, kind: { not: "playbook" } }, data: { status: "approved", conflictsWithId: null, description: null, reviewedById: user.id, reviewedAt: now, lastConfirmedAt: now } });
+      await tx.assistantNote.updateMany({ where: { tenantId, id: { in: found }, status: "unreviewed", kind: "playbook" }, data: approved });
+      await tx.assistantNote.updateMany({ where: { tenantId, id: { in: found }, status: "unreviewed", kind: { not: "playbook" } }, data: { ...approved, description: null } });
     }
     return notes;
   });
