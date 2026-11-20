@@ -11,7 +11,7 @@
 /** A link token: what /api/track/s/<token> accepts. */
 export const SIGNATURE_LINK_REF = /^[A-Za-z0-9_-]{24,64}$/;
 
-export const SIGNATURE_LINK_KINDS = ["website", "whatsapp", "booking", "facebook", "instagram", "privacy", "link"] as const;
+export const SIGNATURE_LINK_KINDS = ["website", "whatsapp", "booking", "facebook", "instagram", "privacy", "contact", "link"] as const;
 export type SignatureLinkKind = (typeof SIGNATURE_LINK_KINDS)[number];
 
 export const SIGNATURE_LINK_KIND_LABELS: Record<SignatureLinkKind, string> = {
@@ -21,6 +21,7 @@ export const SIGNATURE_LINK_KIND_LABELS: Record<SignatureLinkKind, string> = {
   facebook: "Facebook",
   instagram: "Instagram",
   privacy: "Privacy policy",
+  contact: "Save my contact",
   link: "Other links",
 };
 
@@ -36,6 +37,7 @@ export function signatureLinkKind(url: string, known: { website?: string; bookin
   if (host === "wa.me" || host.endsWith("whatsapp.com")) return "whatsapp";
   if (host.endsWith("facebook.com") || host === "fb.com") return "facebook";
   if (host.endsWith("instagram.com")) return "instagram";
+  if (/^https:\/\/[^/]+\/api\/contact-card\/[^/?#]+$/i.test(url)) return "contact";
   const same = (other?: string | null) => Boolean(other) && url.replace(/\/$/, "") === String(other).replace(/\/$/, "");
   if (same(known.bookingUrl)) return "booking";
   if (same(known.privacyUrl)) return "privacy";

@@ -7,6 +7,7 @@ import { senderTeamIds } from "./signatureBannerStore";
 import { teamLineFor, type SignatureExtras } from "./signaturePeople";
 import type { SignatureDesign } from "./signature";
 import { withoutPackExtras } from "./signatureDesigns";
+import { contactCardLinks } from "./contactCardServer";
 
 /*
  * What a sender's signature carries beyond name, title, mobile and email (the Email signatures pack, 2026-11-20): their
@@ -57,6 +58,8 @@ export async function senderSignatureDetails(
       hours: person.signatureHours,
       cta: person.signatureCta,
       photoUrl: person.signaturePhoto && person.avatarRef ? `${origin.replace(/\/$/, "")}${signaturePhotoPath(userId)}` : null,
+      // "Save my contact", when the owner switched it on: a signed public link (and QR code) to their contact card.
+      ...contactCardLinks(tenantId, userId, design.contactCard, origin),
     },
     teamLine,
   };
