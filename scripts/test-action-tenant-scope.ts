@@ -150,6 +150,8 @@ async function seedFixture(): Promise<Fixture> {
   await basePrisma.appSetting.create({
     data: { tenantId, key: "ANTHROPIC_API_KEY", value: encryptValue("sk-ant-invalid-probe-key") },
   });
+  // And Claude CHOSEN: a key alone no longer turns the AI on (#1154 — never slide onto per-use credit).
+  await basePrisma.appSetting.create({ data: { tenantId, key: "AI_PROVIDER", value: "claude" } });
 
   // WITH A `jti`, AND THE MATCHING UserSession ROW — unlike #515, deliberately.
   //
