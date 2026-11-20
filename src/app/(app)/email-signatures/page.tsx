@@ -8,6 +8,7 @@ import { listActingTenantStaff, listActingTenantTeams } from "@/lib/tenantActor"
 import { parseSignatureDesign, signatureCompanyFrom, SIGNATURE_DESIGN_KEY } from "@/lib/signature";
 import { teamLineFor } from "@/lib/signaturePeople";
 import { senderSignatureDetails, signatureAccent } from "@/lib/signatureSender";
+import { signatureLinkReport } from "@/lib/signatureLinkStore";
 import { PageHeader } from "@/components/page-header";
 import EmailSignatureSection from "@/components/EmailSignatureSection";
 import EmailSignatureDetails, { type SignaturePerson } from "@/components/EmailSignatureDetails";
@@ -88,6 +89,8 @@ export default async function EmailSignaturesPage() {
         shortReplies={design.shortReplies === true}
         legalLine={isOwner ? cleanLegalLine(await getWorkspaceSetting(tenantId, LEGAL_LINE_KEY)) : ""}
         privacyUrl={design.legal?.privacyUrl ?? ""}
+        trackLinks={design.trackLinks === true}
+        clicks={isOwner ? await signatureLinkReport(tenantId).catch(() => null) : null}
         staff={others.map(asPerson)}
       />
       {/* The design is the owner's; anyone else sees this only to clear an old HTML signature of their own. */}

@@ -3229,6 +3229,29 @@ model SignatureBannerLink {
 
 /// One click on a banner. `communicationId` is the sent email it came from,
 /// when that is known. No IP address or browser string is kept.
+/// A link in someone's email signature, counted (the Email signatures pack, item 11): their website, WhatsApp, booking
+/// or social link goes out as /api/track/s/<token> and is sent on to `url`. One row per person per address; the count
+/// lives on the row. Only while the owner has "Count clicks on signature links" on.
+model SignatureLink {
+  id          String    @id @default(cuid())
+  tenantId    String
+  userId      String
+  /// website | whatsapp | booking | facebook | instagram | privacy | link
+  kind        String
+  url         String
+  token       String    @unique
+  clickCount  Int       @default(0)
+  /// The last click counted: a second fetch within moments (mail scanners fetch twice) is the same click.
+  lastClickAt DateTime?
+  /// Clicks counted today, capped, so a scanner hammering one link can't run the count up.
+  clickDay    String?
+  dayClicks   Int       @default(0)
+  createdAt   DateTime  @default(now())
+
+  @@unique([tenantId, userId, url])
+  @@index([tenantId, userId])
+}
+
 model SignatureBannerClick {
   id              String          @id @default(cuid())
   tenantId        String

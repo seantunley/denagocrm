@@ -40,6 +40,7 @@ import { bannerClickUrl, bannerHtml, bannerPosition } from "@/lib/signatureBanne
 import { LEGAL_LINE_KEY, htmlWithLegalLine } from "@/lib/emailLegalLine";
 import { bannerForEmail, recordBannerSent } from "@/lib/signatureBannerStore";
 import { senderSignatureDetails, signatureAccent } from "@/lib/signatureSender";
+import { trackSignatureLinks } from "@/lib/signatureLinkStore";
 import { threadableMessageId } from "@/lib/emailReply";
 
 /** Each attached quote is a PDF rendered during the send; a handful is plenty for one email. */
@@ -100,7 +101,15 @@ export async function composerHtml(
   const above = Boolean(banner) && bannerPosition(banner!.position) === "above";
   // The sender's own details, team line and photo (the Email signatures pack; {} while it is off) — and short on a reply.
   const details = await senderSignatureDetails(tenantId, user.id, design, origin).catch(() => ({}));
-  const built = buildEmailHtml(bodyHtml, buildSignature({ ...user, ...details, reply: recipient.reply === true }, company) + (above ? "" : marketing));
+  const signature = buildSignature({ ...user, ...details, reply: recipient.reply === true }, company);
+  // Its web links counted when the owner has that on (the Email signatures pack, item 11) — on a real send, never a preview.
+  const counted = preview
+    ? signature
+    : await trackSignatureLinks(
+        { tenantId, userId: user.id, origin, on: design.trackLinks, known: { website: company.website, bookingUrl: "extras" in details ? details.extras?.bookingUrl : null, privacyUrl: design.legal?.privacyUrl } },
+        signature,
+      );
+  const built = buildEmailHtml(bodyHtml, counted + (above ? "" : marketing));
   const html = above ? built.replace(/<body[^>]*>/i, (open) => `${open}${marketing}`) : built;
   // The legal line is added to every email where it leaves (lib/email.ts). A preview never gets
   // there, so it is added here for the preview alone — or Preview would not be what Send sends.

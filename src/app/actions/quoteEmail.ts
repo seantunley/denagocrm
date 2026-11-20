@@ -19,6 +19,7 @@ import { deliverQuoteEmail, quotePdfFileName } from "@/lib/quoteEmail";
 import { emitQuoteJourneyEvent } from "@/lib/leadJourneyEvents";
 import { emailWithBanner, recordBannerSent } from "@/lib/signatureBannerStore";
 import { senderSignatureDetails, signatureAccent } from "@/lib/signatureSender";
+import { trackSignatureLinks } from "@/lib/signatureLinkStore";
 import { tenantOrigin } from "@/lib/tenantOrigin";
 import { getSetting, getRegionalSettings } from "@/lib/settings";
 import { withCurrency } from "@/lib/currencyRules";
@@ -124,7 +125,17 @@ async function signQuoteEmail(
     // never a reply, so it always carries the full signature.
     const details = await senderSignatureDetails(tenantId, user.id, design, origin).catch(() => ({}));
     return {
-      html: email.html ? placeSignatureInEmail(email.html, buildSignature({ ...person, ...details }, company), SENDER_SIGNATURE_SLOT) : email.html,
+      html: email.html
+        ? placeSignatureInEmail(
+            email.html,
+            // Its web links counted when the owner has that on (the Email signatures pack, item 11).
+            await trackSignatureLinks(
+              { tenantId, userId: user.id, origin, on: design.trackLinks, known: { website: company.website, bookingUrl: "extras" in details ? details.extras?.bookingUrl : null, privacyUrl: design.legal?.privacyUrl } },
+              buildSignature({ ...person, ...details }, company),
+            ),
+            SENDER_SIGNATURE_SLOT,
+          )
+        : email.html,
       text: `${email.text.trimEnd()}\n\n${signatureText(person, profile.name)}`,
     };
   } catch (err) {

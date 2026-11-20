@@ -139,6 +139,7 @@ export async function saveSignatureRules(formData: FormData) {
       teams: teamLines,
       shortReplies: formData.get("shortReplies") === "on",
       legal: { privacyUrl: String(formData.get("legalPrivacyUrl") ?? "") },
+      trackLinks: formData.get("trackLinks") === "on",
     }));
     // A privacy link that isn't a full https address would be dropped quietly by the parser: say so instead.
     const privacyTyped = String(formData.get("legalPrivacyUrl") ?? "").trim();

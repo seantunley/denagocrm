@@ -96,6 +96,8 @@ export type SignatureDesign = {
   shortReplies?: boolean;
   /** The privacy policy link under every signature, set once by the owner (the rest of the small print is the email legal line). */
   legal?: SignatureLegal;
+  /** Count clicks on the signature's web links (lib/signatureLinks.ts). Off unless the owner switches it on. */
+  trackLinks?: boolean;
 };
 
 export const SIGNATURE_DESIGN_KEY = "EMAIL_SIGNATURE";
@@ -104,6 +106,7 @@ export const SIGNATURE_LINE_MAX = 160;
 export const DEFAULT_SIGNATURE_DESIGN: SignatureDesign = {
   style: "card", companyLine: "", footerLine: "", bannerUrl: "", locked: [], teams: [], shortReplies: false,
   legal: { privacyUrl: "" },
+  trackLinks: false,
 };
 
 /** The stored setting, tolerant of anything: a bad value is the default design, never a broken signature. */
@@ -122,6 +125,7 @@ export function parseSignatureDesign(raw: string | null | undefined): SignatureD
       teams: parseTeamLines(v?.teams),
       shortReplies: v?.shortReplies === true,
       legal: parseLegal(v?.legal),
+      trackLinks: v?.trackLinks === true,
     };
   } catch {
     return DEFAULT_SIGNATURE_DESIGN;

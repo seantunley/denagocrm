@@ -23,6 +23,7 @@ export const emailSignatureArticles: HelpArticle[] = [
           "**Photo**: your profile photo. Add it in **Settings → My account** first, then tick **Show the profile photo on the signature**. The photo travels inside the email, so it shows even when the reader's mail app blocks pictures.",
         ],
       },
+      { type: "p", text: "Above the preview, switch between **Computer**, **Phone** and **Dark mode** to see how it looks in each. **Send myself a test** sends a real email with your saved signature to your own address, so you can check it in Outlook, Gmail or on your phone." },
       { type: "p", text: "Your name, job title and mobile come from **Settings → My account**. A detail with a padlock is **set by the workspace owner**: you can see it but not change it." },
       { type: "h", text: "For the workspace owner" },
       {
@@ -33,6 +34,7 @@ export const emailSignatureArticles: HelpArticle[] = [
           "**A line for each team**: shown under the signature of everyone in that team, for example the workshop's hours or the parts number. Someone in two teams gets the first line that is theirs.",
           "**Short signature on replies**: replies get two plain lines (name, title, company, phone and email) instead of the full signature, so long threads don't repeat it. New emails keep the full one.",
           "**Small print**: a line at the foot of every email (for example your registration and VAT numbers, or a confidentiality notice), and a privacy policy link under everyone's signature. Both are optional. The line is the same one you can set on Signature banners.",
+          "**Count clicks on signature links**: off until you tick it. Website, WhatsApp, booking, social and privacy links on emails sent from then on go through the CRM first, and **Signature link clicks** shows which ones customers use, by link and by person. Phone numbers and email addresses aren't counted.",
           "**Your team**: open a person to edit their signature in the same editor, any detail included. People missing a job title or mobile are listed at the top, because a signature leaves out an empty line. Each person adds those in Settings → My account.",
           "**Workspace design**: the layout everyone's signature uses: Card, Classic, Modern, Compact or Minimal. All of them use your workspace's accent colour (orange if none is set). Check the preview: a logo made for a dark background suits the Card design best.",
           "**Own HTML**: only the owner can set a custom HTML signature. Anyone who already has one can still clear it.",

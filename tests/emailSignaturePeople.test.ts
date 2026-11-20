@@ -98,7 +98,7 @@ test("the rules are stored on the design and survive a design save", () => {
 
 test("server: the pack gates every write; locks are checked on the server; writes name the workspace", () => {
   const actions = src("src/app/actions/emailSignatures.ts");
-  assert.equal(actions.match(/if \(!\(await isModuleEnabled\("signatures"\)\)\) refuse\(/g)?.length, 3);
+  assert.equal(actions.match(/if \(!\(await isModuleEnabled\("signatures"\)\)\) refuse\(/g)?.length, (actions.match(/^export async function/gm) ?? []).length, "every action");
   assert.match(actions, /detailsFrom\(formData, design\.locked \?\? \[\], owner\)/, "a person's own save respects the locks");
   assert.match(actions, /export async function saveStaffSignatureDetails[\s\S]*?requireTenantOwner\(\)[\s\S]*?tenantMember\.findFirst\(\{ where: \{ tenantId, userId \}/, "owner only, and only someone in this workspace");
   assert.match(actions, /export async function saveSignatureRules[\s\S]*?requireTenantOwner\(\)[\s\S]*?listActingTenantTeams\(\)/, "owner only; only this workspace's teams");
@@ -126,7 +126,7 @@ test("the page: everyone edits their own signature; the owner also gets the desi
   assert.match(page, /\{\(isOwner \|\| Boolean\(me\.signatureHtml\?\.trim\(\)\)\) && \(/, "the design is the owner's; staff see it only to clear old HTML");
   assert.match(page, /designPreview=\{isOwner\}/);
   const ui = src("src/components/EmailSignatureDetails.tsx");
-  assert.match(ui, /Your signature[\s\S]*?editor\(me, saveMySignatureDetails, "Save my signature", isOwner\)/);
+  assert.match(ui, /Your signature[\s\S]*?editor\(me, saveMySignatureDetails, "Save my signature", isOwner(, sendMySignatureTest)?\)/);
   assert.match(ui, /\{isOwner && \(\s*<section[\s\S]*?Rules for everyone/);
   assert.match(ui, /\{isOwner && staff\.length > 0 && \(/);
   assert.match(ui, /saveStaffSignatureDetails\.bind\(null, person\.id\)/);

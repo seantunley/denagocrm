@@ -5,6 +5,7 @@ import type { ActionResult } from "@/lib/actionResultTypes";
 import type { SignatureCompany } from "@/lib/signature";
 import Link from "next/link";
 import { LEGAL_LINE_MAX } from "@/lib/emailLegalLine";
+import { SIGNATURE_LINK_KIND_LABELS, type SignatureLinkKind } from "@/lib/signatureLinks";
 import {
   SIGNATURE_FIELDS, SIGNATURE_FIELD_LABELS, TEAM_LINE_MAX, missingBasics, type SignatureField, type TeamLine,
 } from "@/lib/signaturePeople";
@@ -35,6 +36,8 @@ export default function EmailSignatureDetails({
   shortReplies,
   legalLine,
   privacyUrl,
+  trackLinks,
+  clicks,
   staff,
 }: {
   me: SignaturePerson;
@@ -47,6 +50,9 @@ export default function EmailSignatureDetails({
   /** The workspace's email legal line (lib/emailLegalLine.ts). */
   legalLine: string;
   privacyUrl: string;
+  trackLinks: boolean;
+  /** The owner's click report (lib/signatureLinkStore.ts); null for everyone else. */
+  clicks: { byKind: { kind: SignatureLinkKind; clicks: number }[]; byPerson: Record<string, number>; total: number } | null;
   staff: SignaturePerson[];
 }) {
   const lineFor = (teamId: string) => teamLines.find((row) => row.teamId === teamId)?.line ?? "";
@@ -110,6 +116,17 @@ export default function EmailSignatureDetails({
                 </span>
               </span>
             </label>
+            <label className="flex items-start gap-2 text-sm">
+              <input type="checkbox" name="trackLinks" defaultChecked={trackLinks} className="mt-1 accent-primary" />
+              <span>
+                Count clicks on signature links
+                <span className="block text-xs text-muted-foreground">
+                  Website, WhatsApp, booking, social and privacy links on emails sent from now on go through the CRM first, so
+                  you can see which ones customers use. Phone numbers and email addresses aren&apos;t counted: they open an app
+                  on the customer&apos;s device, and going through a web page first would break them.
+                </span>
+              </span>
+            </label>
             <fieldset className="space-y-2">
               <legend className="text-sm font-medium">A line for each team</legend>
               {teams.length === 0 ? (
@@ -153,6 +170,41 @@ export default function EmailSignatureDetails({
             </fieldset>
             <SaveButton className="btn-primary btn-sm">Save rules</SaveButton>
           </SaveForm>
+        </section>
+      )}
+
+      {isOwner && clicks && (
+        <section className="card space-y-3 p-5">
+          <h2 className="text-base font-semibold">Signature link clicks</h2>
+          {!trackLinks && clicks.total === 0 ? (
+            <p className="text-xs text-muted-foreground">Not counting yet. Tick “Count clicks on signature links” under Rules for everyone.</p>
+          ) : (
+            <>
+              <p className="text-xs text-muted-foreground">
+                Clicks since counting began{trackLinks ? "" : " (counting is now off)"}. Banner clicks are on Signature banners.
+              </p>
+              <div className="grid gap-4 lg:grid-cols-2">
+                <table className="w-full text-sm">
+                  <thead><tr className="text-left text-xs text-muted-foreground"><th className="py-1 font-medium">Link</th><th className="py-1 text-right font-medium">Clicks</th></tr></thead>
+                  <tbody>
+                    {clicks.byKind.filter((row) => row.clicks > 0).map((row) => (
+                      <tr key={row.kind} className="border-t border-border/60"><td className="py-1">{SIGNATURE_LINK_KIND_LABELS[row.kind]}</td><td className="py-1 text-right tabular-nums">{row.clicks}</td></tr>
+                    ))}
+                    {clicks.total === 0 && <tr className="border-t border-border/60"><td className="py-1 text-muted-foreground" colSpan={2}>No clicks yet.</td></tr>}
+                  </tbody>
+                </table>
+                <table className="w-full text-sm">
+                  <thead><tr className="text-left text-xs text-muted-foreground"><th className="py-1 font-medium">Person</th><th className="py-1 text-right font-medium">Clicks</th></tr></thead>
+                  <tbody>
+                    {[me, ...staff].filter((p) => (clicks.byPerson[p.id] ?? 0) > 0).sort((a, b) => (clicks.byPerson[b.id] ?? 0) - (clicks.byPerson[a.id] ?? 0)).map((p) => (
+                      <tr key={p.id} className="border-t border-border/60"><td className="py-1">{p.name}</td><td className="py-1 text-right tabular-nums">{clicks.byPerson[p.id]}</td></tr>
+                    ))}
+                    {clicks.total === 0 && <tr className="border-t border-border/60"><td className="py-1 text-muted-foreground" colSpan={2}>No clicks yet.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
         </section>
       )}
 

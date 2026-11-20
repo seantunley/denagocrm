@@ -91,6 +91,12 @@ export async function resolveSignatureBannerTenant(
   return row ? { tenantId: row.tenantId } : null;
 }
 
+/** Owning tenant of a counted email-signature link's token (lib/signatureLinks.ts). A tracking id: it only counts a click. */
+export async function resolveSignatureLinkTenant(token: string): Promise<{ tenantId: string | null } | null> {
+  const row = await basePrisma.signatureLink.findUnique({ where: { token }, select: { tenantId: true } });
+  return row ? { tenantId: row.tenantId } : null;
+}
+
 /**
  * Owning tenant of a secure file link (lib/secureLinks.ts). The link's value is
  * a credential — it opens a customer's document — so, like a signing link, it
