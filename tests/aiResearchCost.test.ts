@@ -60,7 +60,8 @@ test("THE SWEEP USES THE CHEAP MODEL; THE BUTTON KEEPS THE DEEP ONE", () => {
 
   // The default a caller gets without options is still the deep research —
   // somebody pressing Research on a lead asked for it.
-  assert.match(code, /model: options\.model \?\? "claude-opus-5"/);
+  // (Or the Claude model chosen in Settings — the sweep's own model is never replaced by it.)
+  assert.match(code, /model: options\.model \?\? \(await claudeModel\("claude-opus-5"\)\)/);
   assert.match(code, /max_uses: options\.maxSearches \?\? 8/);
 
   const manual = stripComments(src("src/app/actions/ai.ts"));

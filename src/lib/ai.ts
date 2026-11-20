@@ -4,8 +4,8 @@ import { logError } from "./errorLog";
 import { recordAiUsage } from "./systemHealth";
 import { inheritedTenantId } from "./tenantWrite";
 import { codexRespond } from "./codex";
-import { aiProvider, aiText } from "./aiText";
-import { aiFailureText } from "./aiProviderRules";
+import { aiProvider, aiText, claudeModel } from "./aiText";
+import { aiFailureText, isModelGone } from "./aiProviderRules";
 import {
   CHATGPT_RESEARCH_FORMAT_NOTE,
   corporateDomain,
@@ -16,7 +16,7 @@ import {
 import { getCompanyProfile } from "./companyProfile";
 import type { CronSliceContext } from "./tenantCron";
 
-/** The workspace has an AI: ChatGPT connected, or a Claude key (lib/aiText). */
+/** The workspace has an AI: ChatGPT connected, or Claude chosen with a key (lib/aiProviderRules pickAiProvider). */
 export async function isAiConfigured(): Promise<boolean> {
   return (await aiProvider()) !== null;
 }
@@ -305,7 +305,8 @@ export async function aiResearch(
 
   try {
     const requestBody = {
-        model: options.model ?? "claude-opus-5",
+        // The automatic sweep names its cheap model; only the Research button (no model) takes the chosen one.
+        model: options.model ?? (await claudeModel("claude-opus-5")),
         // MAX_TOKENS IS SHARED WITH THE SEARCH, WHICH IS WHY 700 PRODUCED STUBS.
         //
         // The model's `server_tool_use` blocks — one per web search, up to
@@ -378,6 +379,14 @@ export async function aiResearch(
       const res = await callApi({ ...requestBody, messages });
       if (!res.ok) {
         const text = await res.text().catch(() => "");
+        // The Claude model chosen in Settings has been withdrawn: the job's own model, once (lib/aiText does the same).
+        const jobModel = options.model ?? "claude-opus-5";
+        if (requestBody.model !== jobModel && isModelGone(res.status, text)) {
+          await logError("ai-research", `Claude model ${requestBody.model} isn't offered any more — used ${jobModel}. Choose another in Settings → Integrations.`);
+          requestBody.model = jobModel;
+          attempt--;
+          continue;
+        }
         await logError("ai-research", `Anthropic API ${res.status}`, text.slice(0, 300));
         // Out of credit arrives as a 400 invalid_request_error, not a 402, so
         // the status alone cannot tell it apart from a malformed request.
