@@ -2281,6 +2281,36 @@
       ]
     }
   },
+  "VehicleOwnership.VehicleOwnership_tenantId_contactId_fkey": {
+    "table": "VehicleOwnership",
+    "constraint": "VehicleOwnership_tenantId_contactId_fkey",
+    "columns": [
+      "tenantId",
+      "contactId"
+    ],
+    "references": {
+      "table": "Contact",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
+  "VehicleOwnership.VehicleOwnership_tenantId_vehicleId_fkey": {
+    "table": "VehicleOwnership",
+    "constraint": "VehicleOwnership_tenantId_vehicleId_fkey",
+    "columns": [
+      "tenantId",
+      "vehicleId"
+    ],
+    "references": {
+      "table": "Vehicle",
+      "columns": [
+        "tenantId",
+        "id"
+      ]
+    }
+  },
   "VendorDelivery.VendorDelivery_tenantId_purchaseOrderId_fkey": {
     "table": "VendorDelivery",
     "constraint": "VendorDelivery_tenantId_purchaseOrderId_fkey",

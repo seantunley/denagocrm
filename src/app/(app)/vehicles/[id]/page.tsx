@@ -29,13 +29,18 @@ import { hasPermission } from "@/lib/permissions";
 import CustomFieldsCard from "@/components/custom-fields/CustomFieldsCard";
 import ChecklistCard from "@/components/checklists/ChecklistCard";
 import { runsForHost, templatesForHostRecord } from "@/lib/checklists/store";
+import VehicleOwnershipSection from "@/components/VehicleOwnershipSection";
+import { currentOwnershipWarranty } from "@/lib/vehicleOwnership";
 
 export default async function VehicleDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ transfer?: string }>;
 }) {
   const { id } = await params;
+  const { transfer } = await searchParams;
   const vehicle = await prisma.vehicle.findUnique({
     where: { id },
     include: {
@@ -64,6 +69,8 @@ export default async function VehicleDetailPage({
     : [[], []];
   const due = computeDue(vehicle);
   const path = `/vehicles/${vehicle.id}`;
+  // Whether the warranty covers the CURRENT owner (a transfer under a "no" or "needs approval" rule may not).
+  const ownerWarranty = checklistTenantId ? await currentOwnershipWarranty(checklistTenantId, vehicle.id) : "carried";
 
   return (
     <EntityDetailShell
@@ -263,6 +270,8 @@ export default async function VehicleDetailPage({
         </div>
 
         <div className="space-y-6">
+          {/* Who owned it when, and Transfer to new owner (warranty-transfer-brief.md). */}
+          <VehicleOwnershipSection user={currentUser} vehicle={vehicle} openTransfer={transfer === "1"} />
           <div className="card">
             <h2 className="font-semibold mb-4">Mileage log</h2>
             <form action={addMileage.bind(null, vehicle.id)} className="flex gap-2 mb-4">
@@ -414,6 +423,14 @@ export default async function VehicleDetailPage({
                     {w.expiryDate ? ` · ${formatDate(w.expiryDate)}` : ""}
                   </span>
                 </div>
+                {ownerWarranty !== "carried" && (
+                  <p className="mb-3 rounded-md bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+                    {ownerWarranty === "pending"
+                      ? "The warranty transfer to the current owner is awaiting approval"
+                      : "The warranty did not transfer to the current owner"}{" "}
+                    — see Ownership.
+                  </p>
+                )}
                 <form action={addWarrantyClaim.bind(null, vehicle.id)} className="flex gap-2 mb-4">
                   <input
                     name="description"

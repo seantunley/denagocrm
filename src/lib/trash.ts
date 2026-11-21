@@ -6,6 +6,7 @@ import { TenantScopeError } from "./tenantGuard";
 import { deleteFile } from "./storage";
 import { logError } from "./errorLog";
 import { type CustomEntity } from "./customFields";
+import { contactKeptBecause } from "./contactKeep";
 
 export const TRASH_RETENTION_DAYS = 60;
 
@@ -366,15 +367,22 @@ export async function purgeTrash(): Promise<number> {
           SELECT "id", "tenantId" FROM ${Prisma.raw(`"${table}"`)}
           WHERE "id" IN (${Prisma.join(staleIds)}) AND "deletedAt" < ${cutoff}
           FOR UPDATE`);
-        // PAPERWORK KEEPS ITS RECORD (2026-11-21): a record that a filed document, a generated document or a signature
-        // request names stays in the trash, restorable, rather than being deleted for good — the chain of documents
-        // holds. (The database refuses those deletes anyway; this keeps them out of the sweep instead of failing it.)
+        // Everything restored meanwhile: nothing to do (and no empty IN () list for the checks below).
+        if (locked.length === 0) return { count: 0 };
         const kept = new Set<string>();
+        // BOTH RULES RUN (review of #1170). PAPERWORK KEEPS ITS RECORD: a record that a filed document, a generated
+        // document or a signature request names stays in the trash, restorable, rather than being deleted for good — the
+        // chain of documents holds. (The database refuses those deletes anyway; this keeps them out of the sweep.)
         for (const [paper, column] of PAPERWORK[model] ?? []) {
           const named = await tx.$queryRaw<{ id: string }[]>(Prisma.sql`
             SELECT DISTINCT ${Prisma.raw(`"${column}"`)} AS "id" FROM ${Prisma.raw(`"${paper}"`)}
             WHERE ${Prisma.raw(`"${column}"`)} IN (${Prisma.join(locked.map((r) => r.id))})`);
           for (const r of named) kept.add(r.id);
+        }
+        // AND a customer with a sale (a vehicle now or before, a won deal, an accepted quote) or paperwork is never
+        // deleted for good (lib/contactKeep.ts) — one trashed before that rule existed stays in the trash instead.
+        if (model === "contact") {
+          for (const r of locked) if (!kept.has(r.id) && (await contactKeptBecause(r.tenantId, r.id))) kept.add(r.id);
         }
         const ids = locked.map((r) => r.id).filter((id) => !kept.has(id));
         if (ids.length === 0) return { count: 0 };

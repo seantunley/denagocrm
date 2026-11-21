@@ -6,6 +6,7 @@ import { contactName, formatDate } from "@/lib/format";
 import { claimColors, claimStatuses } from "@/lib/warranty";
 import { hasPermission } from "@/lib/permissions";
 import { requireWarrantyClaimReadAccess } from "@/lib/warrantyAccess";
+import { withClaimant } from "@/lib/warrantyClaimant";
 import {
   deleteWarrantyClaimFromPage,
   setWarrantyClaimStatus,
@@ -33,11 +34,13 @@ export default async function WarrantyClaimPage({ params }: { params: Promise<{ 
   const access = await requireWarrantyClaimReadAccess(id);
   if (!access) notFound();
   const { user } = access;
-  const claim = await prisma.warrantyClaim.findUnique({
+  const loaded = await prisma.warrantyClaim.findUnique({
     where: { id },
     include: { vehicle: { include: { contact: true } } },
   });
-  if (!claim) notFound();
+  if (!loaded) notFound();
+  // The claimant (owner when it was logged), not whoever owns the vehicle now (warranty-transfer-brief.md).
+  const claim = await withClaimant(loaded);
   const canManage = await hasPermission(user, "warranty.manage");
 
   const [jobCard, openedBy] = await Promise.all([
@@ -76,7 +79,7 @@ export default async function WarrantyClaimPage({ params }: { params: Promise<{ 
         <div className="card space-y-2 text-sm lg:col-span-1">
           <h2 className="font-semibold mb-2">Details</h2>
           <p><span className="text-slate-400">Vehicle: </span><Link href={`/vehicles/${claim.vehicleId}`} className="text-orange-400 hover:underline">{claim.vehicle.model}</Link></p>
-          <p><span className="text-slate-400">Owner: </span><Link href={`/contacts/${owner.id}`} className="text-orange-400 hover:underline">{contactName(owner)}</Link></p>
+          <p><span className="text-slate-400">Claimant: </span><Link href={`/contacts/${owner.id}`} className="text-orange-400 hover:underline">{contactName(owner)}</Link></p>
           {jobCard && (
             <p><span className="text-slate-400">Job card: </span><Link href={`/jobcards/${jobCard.id}`} className="text-orange-400 hover:underline">JC-{jobCard.number}</Link> <span className="text-xs text-slate-500">({jobCard.status})</span></p>
           )}
