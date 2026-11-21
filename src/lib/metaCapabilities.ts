@@ -1,5 +1,6 @@
 import "server-only";
-import { getSetting, putSetting, resolveTenantCredential } from "./settings";
+import { getSetting, putSetting } from "./settings";
+import { metaPageCredential } from "./metaPage";
 import { currentTenantScope } from "./tenantScope";
 
 /**
@@ -69,22 +70,25 @@ export async function pageCapabilities(): Promise<PageCapabilities> {
  */
 export async function refreshPageCapabilities(): Promise<PageCapabilities> {
   try {
-    const token = await resolveTenantCredential(
-      currentTenantScope()?.tenantId ?? null,
-      "META_PAGE_ACCESS_TOKEN",
-    );
-    if (!token) return UNKNOWN;
+    const credential = await metaPageCredential(currentTenantScope()?.tenantId ?? null);
+    if (!credential) return UNKNOWN;
 
-    const res = await fetch(`${GRAPH}/me/permissions?access_token=${encodeURIComponent(token)}`, {
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!res.ok) return UNKNOWN;
-    const body = (await res.json()) as { data?: Array<{ permission?: string; status?: string }> };
-
-    // "declined" and "expired" both appear in this list. Only "granted" counts.
-    const granted = (body.data ?? [])
-      .filter((row) => row.status === "granted" && row.permission)
-      .map((row) => String(row.permission));
+    let granted: string[];
+    if (credential.kind === "connected") {
+      // What the business granted when it pressed Connect Facebook (lib/metaConnect.ts) — a Page token has no
+      // permissions list of its own to ask.
+      granted = credential.scopes;
+    } else {
+      const res = await fetch(`${GRAPH}/me/permissions?access_token=${encodeURIComponent(credential.userToken)}`, {
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!res.ok) return UNKNOWN;
+      const body = (await res.json()) as { data?: Array<{ permission?: string; status?: string }> };
+      // "declined" and "expired" both appear in this list. Only "granted" counts.
+      granted = (body.data ?? [])
+        .filter((row) => row.status === "granted" && row.permission)
+        .map((row) => String(row.permission));
+    }
 
     const checkedAt = new Date();
     await putSetting(GRANTED_KEY, granted.join(","));

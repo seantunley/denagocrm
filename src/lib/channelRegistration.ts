@@ -2,6 +2,7 @@ import "server-only";
 import { basePrisma } from "./db";
 import { logError } from "./errorLog";
 import { resolveIntegrationBundle, resolveTenantCredential } from "./settings";
+import { connectedMetaEndpoints, metaPageCredential } from "./metaPage";
 import type { ChannelKind } from "./channelTenant";
 import {
   metaEndpointsFrom,
@@ -147,9 +148,19 @@ export async function reconcileTenantChannels(
     // created, would otherwise never discover the second endpoint and its
     // inbound events would be discarded indefinitely.
     const discoveryAllowed = opts.force || (opts.allowDiscovery ?? true);
-    const needsMeta = opts.force || (await missingMetaChannels(tenantId)).length > 0;
-    if (needsMeta && discoveryAllowed) {
-      const pageToken = await resolveTenantCredential(tenantId, "META_PAGE_ACCESS_TOKEN");
+    const meta = await metaPageCredential(tenantId);
+    if (meta?.kind === "connected") {
+      // CONNECT FACEBOOK names its Page and Instagram account itself (lib/metaConnect.ts): no discovery, and — what
+      // matters — never the no-token path below, which would read "no System User token" as "no Meta endpoints" and
+      // retire the connected Page's rows.
+      const connected = connectedMetaEndpoints(meta);
+      endpoints.push(...connected);
+      for (const channel of META_CHANNELS) {
+        const keep = connected.filter((e) => e.channel === channel).map((e) => e.externalId);
+        outcomes.push(...(await retireEndpoints(tenantId, channel, keep, { store })));
+      }
+    } else if (opts.force || ((await missingMetaChannels(tenantId)).length > 0 && discoveryAllowed)) {
+      const pageToken = meta?.kind === "system-user" ? meta.userToken : null;
       const discovery = await metaEndpointsFrom(pageToken, { fetch: fetchImpl, timeoutMs: opts.timeoutMs });
       if (discovery.ok) {
         endpoints.push(...discovery.endpoints);
