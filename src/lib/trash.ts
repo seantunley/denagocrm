@@ -362,7 +362,7 @@ export async function purgeTrash(): Promise<number> {
         // that rule existed stays in the trash, restorable, instead.
         const kept = new Set<string>();
         if (model === "contact") {
-          for (const r of locked) if (await contactKeptBecause(tx, r.tenantId, r.id)) kept.add(r.id);
+          for (const r of locked) if (await contactKeptBecause(r.tenantId, r.id)) kept.add(r.id);
         }
         const ids = locked.map((r) => r.id).filter((id) => !kept.has(id));
         if (ids.length === 0) return { count: 0 };

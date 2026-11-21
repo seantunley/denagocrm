@@ -323,7 +323,7 @@ export async function deleteContact(id: string, formData: FormData) {
     const contact = await prisma.$transaction(async (tx) => {
       const held = await tx.$queryRaw<{ tenantId: string | null }[]>`SELECT "tenantId" FROM "Contact" WHERE "id" = ${id} FOR UPDATE`;
       if (held.length !== 1) refuse("That contact could not be found.");
-      const kept = await contactKeptBecause(tx, held[0].tenantId, id);
+      const kept = await contactKeptBecause(held[0].tenantId, id);
       if (kept) refuse(kept);
       return softDeleteRecord("contact", id, reason, user.name, tx);
     });

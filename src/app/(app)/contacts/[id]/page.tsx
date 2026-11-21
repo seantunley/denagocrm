@@ -132,7 +132,7 @@ export default async function ContactDetailPage({
     },
   });
   if (!contact) notFound();
-  const keptBecause = canDeleteContact ? await contactKeptBecause(prisma, contact.tenantId, contact.id) : null;
+  const keptBecause = canDeleteContact ? await contactKeptBecause(contact.tenantId, contact.id) : null;
   // Xero from the customer too: a delivered invoice leaves the Deliveries board, and
   // one that never went to Xero must still be sendable from somewhere.
   const canSendXero =
