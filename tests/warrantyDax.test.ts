@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { currentOwnersCertificate, linkedDocumentIds, wantsCertificate, MAX_CERTIFICATES_SENT } from "../src/lib/assistantWarrantyCertificateRules";
+import { linkedDocumentIds, wantsCertificate, MAX_CERTIFICATES_SENT } from "../src/lib/assistantWarrantyCertificateRules";
+import { CERTIFICATE_NOT_CURRENT, certificateFingerprint, certificateState } from "../src/lib/warrantyCertificateState";
 import { vehicleArgs } from "../src/lib/crmAssistantPlan";
 import { selfKnowledge } from "../src/lib/assistantSoul";
 import { SIGNING_EMAILS } from "../src/lib/signing/emailTemplates";
@@ -63,19 +64,36 @@ test("to the owner: only on a Send behind a Confirm — consent-checked, the edi
   assert.doesNotMatch(code("src/lib/warrantyCertificateStore.ts"), /sendEmail|sendWarrantyCertificate/);
 });
 
-test("after a transfer, the previous owner's certificate is never sent or offered as the new owner's", () => {
-  const oldOwners = { id: "doc1", contactId: "anna" };
-  assert.equal(currentOwnersCertificate([oldOwners], "ben"), null, "Ben now owns it: Anna's certificate isn't his");
-  assert.equal(currentOwnersCertificate([oldOwners], "anna"), oldOwners);
-  assert.equal(currentOwnersCertificate([{ id: "doc2", contactId: null }], "ben"), null, "a de-identified owner's neither");
-  // Every reader applies it: the email send, DAX's lookup, DAX's WhatsApp send, and the vehicle page's Send button.
+test("a certificate is sent or offered only while it names the owner now and states the warranty as it is now", () => {
+  const delivered = new Date("2026-11-21T00:00:00");
+  const anna = {
+    contactId: "anna", model: "Nomad XL", vin: "VIN1", color: "White", purchaseDate: delivered, warrantyMonths: null,
+    warrantyParts: [{ part: "Battery", months: 60 }, { part: "Cart", months: 24 }, { part: "Chassis", months: null }],
+    warrantyStartsAt: delivered, contact: { firstName: "Anna", lastName: "Smit" },
+  };
+  // Issued: stamped with what it was made from.
+  const cert = { contactId: "anna", issuedFrom: certificateFingerprint(anna) };
+  assert.equal(certificateState(cert, anna), "current");
+  // Review case: Cart extended 2 → 3 years. The old PDF says 2, so it can't go out with a 3-year email.
+  const extended = { ...anna, warrantyParts: [{ part: "Battery", months: 60 }, { part: "Cart", months: 36 }, { part: "Chassis", months: null }] };
+  assert.equal(certificateState(cert, extended), "out_of_date");
+  assert.equal(certificateState(cert, { ...anna, warrantyStartsAt: new Date("2026-12-01T00:00:00") }), "out_of_date", "start date moved");
+  assert.equal(certificateState(cert, { ...anna, contact: { firstName: "Anna", lastName: "Botha" } }), "out_of_date", "owner's name changed");
+  // Reissued: current again, with the same body and PDF terms.
+  assert.equal(certificateState({ contactId: "anna", issuedFrom: certificateFingerprint(extended) }, extended), "current");
+  // Transferred to Ben: Anna's certificate isn't his, and a certificate from before stamping is never current.
+  assert.equal(certificateState(cert, { ...anna, contactId: "ben", contact: { firstName: "Ben" } }), "previous_owner");
+  assert.equal(certificateState({ contactId: "anna", issuedFrom: null }, anna), "out_of_date");
+  assert.match(CERTIFICATE_NOT_CURRENT.out_of_date, /Reissue it first/);
+
+  // Issuing stamps it; every reader checks it: the email send, DAX's lookup, DAX's WhatsApp send, the vehicle page.
+  assert.match(code("src/lib/warrantyCertificateStore.ts"), /issuedFrom: certificateFingerprint\(vehicle\),/);
+  assert.match(code("prisma/migrations/20261121140000_document_issued_from/migration.sql"), /ADD COLUMN IF NOT EXISTS "issuedFrom" TEXT/);
   const send = code("src/app/actions/warrantyCertificateSend.ts");
-  assert.match(send, /const certificate = currentOwnersCertificate\(vehicle\.documents, c\.id\);\s*if \(!certificate\) return refuse\(REISSUE_FOR_OWNER\);/);
+  assert.match(send, /const state = certificateState\(certificate, vehicle\);\s*if \(state !== "current"\) return refuse\(CERTIFICATE_NOT_CURRENT\[state\]\);/);
   const lookup = code("src/lib/assistant/lookups/vehicleWarranty.ts");
-  assert.match(lookup, /const certificate = currentOwnersCertificate\(v\.documents, v\.contactId\);/);
-  assert.match(lookup, /only a previous owner's is filed — a new one must be issued for the current owner/);
-  assert.match(code("src/lib/assistantWarrantyCertificate.ts"), /if \(!vehicle \|\| !currentOwnersCertificate\(\[doc\], vehicle\.contactId\)\) continue;/);
-  const card = code("src/components/VehicleWarrantyParts.tsx");
-  assert.match(card, /const previousOwners = !!certificate && certificate\.contactId !== vehicle\.contactId;/);
-  assert.match(card, /\{certificate && !previousOwners && \(/, "no Send for a previous owner's certificate");
+  assert.match(lookup, /const certificate = state === "current" \? filed : null;/);
+  assert.match(code("src/lib/assistantWarrantyCertificate.ts"), /if \(!vehicle \|\| certificateState\(doc, vehicle\) !== "current"\) continue;/);
+  assert.match(code("src/app/(app)/vehicles/[id]/page.tsx"), /state: certificateState\(filedCertificate, vehicle\)/);
+  assert.match(code("src/components/VehicleWarrantyParts.tsx"), /\{current && \(/, "Send only for a current certificate");
 });

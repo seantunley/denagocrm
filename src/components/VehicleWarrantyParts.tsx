@@ -7,6 +7,7 @@ import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import { formatDate } from "@/lib/format";
 import { johannesburgDateKey } from "@/lib/activityDay";
 import { parseTerms, termLabel, type PartCover } from "@/lib/warrantyParts";
+import type { CertificateState } from "@/lib/warrantyCertificateState";
 
 const STATUS: Record<PartCover["status"], { label: string; className: string }> = {
   active: { label: "Covered", className: "bg-emerald-500/15 text-emerald-300" },
@@ -25,16 +26,18 @@ export default function VehicleWarrantyParts({
   canManage,
   certificate,
 }: {
-  vehicle: { id: string; contactId: string; warrantyParts: unknown; warrantyStartsAt: Date | null; purchaseDate: Date | null };
+  vehicle: { id: string; warrantyParts: unknown; warrantyStartsAt: Date | null; purchaseDate: Date | null };
   cover: PartCover[];
   parts: readonly string[];
   canManage: boolean;
   /** The latest filed certificate (lib/warrantyCertificateStore.ts), if any. */
-  certificate?: { id: string; createdAt: Date; contactId: string | null } | null;
+  certificate?: { id: string; createdAt: Date; state: CertificateState } | null;
 }) {
   const start = vehicle.warrantyStartsAt ?? vehicle.purchaseDate;
   // After a transfer the filed certificate still names the previous owner: it is never sent as the new owner's.
-  const previousOwners = !!certificate && certificate.contactId !== vehicle.contactId;
+  // Out of date (warranty edited) too: never sent until it's reissued (lib/warrantyCertificateState.ts).
+  const previousOwners = certificate?.state === "previous_owner";
+  const current = certificate?.state === "current";
   return (
     <div className="mb-4 space-y-2">
       {cover.length === 0 ? (
@@ -65,14 +68,14 @@ export default function VehicleWarrantyParts({
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
           {certificate ? (
             <a href={`/api/files/${certificate.id}`} target="_blank" rel="noreferrer" className="text-orange-400 hover:underline">
-              {previousOwners ? "Previous owner's certificate" : "Warranty certificate"} · {formatDate(certificate.createdAt)}
+              {previousOwners ? "Previous owner's certificate" : current ? "Warranty certificate" : "Out-of-date certificate"} · {formatDate(certificate.createdAt)}
             </a>
           ) : (
             <span>No certificate filed yet.</span>
           )}
           {canManage && cover.length > 0 && (
             <div className="flex flex-wrap items-center gap-2">
-              {certificate && !previousOwners && (
+              {current && (
                 // Only on this click, behind a Confirm: emailed to the owner with the PDF, through the consent check.
                 <ConfirmActionDialog
                   trigger={<button type="button" className="btn-secondary btn-sm">Send to owner</button>}

@@ -8,7 +8,7 @@ import { WARRANTY_READ } from "../../warrantyAccess";
 import { computeWarranty, warrantyLabels } from "../../warranty";
 import { termLabel, vehicleCover } from "../../warrantyParts";
 import { CERTIFICATE_TAG } from "../../warrantyCertificate";
-import { currentOwnersCertificate } from "../../assistantWarrantyCertificateRules";
+import { CERTIFICATE_NOT_CURRENT, certificateState } from "../../warrantyCertificateState";
 import { type ToolOutput, type User, fuzzy, refused } from "../lookupKit";
 
 const day = (d: Date | null | undefined) => (d ? johannesburgDateKey(d) : null);
@@ -43,7 +43,7 @@ export async function vehicleWarranty(user: User, args: { search?: string; limit
       purchaseDate: true, warrantyMonths: true, warrantyParts: true, warrantyStartsAt: true,
       product: { select: { name: true } },
       contact: { select: { firstName: true, lastName: true, company: true, isCompany: true } },
-      documents: { where: { tag: CERTIFICATE_TAG, deletedAt: null, replacedById: null }, orderBy: { createdAt: "desc" }, take: 1, select: { id: true, createdAt: true, contactId: true } },
+      documents: { where: { tag: CERTIFICATE_TAG, deletedAt: null, replacedById: null }, orderBy: { createdAt: "desc" }, take: 1, select: { id: true, createdAt: true, contactId: true, issuedFrom: true } },
     },
   });
   const page = found.slice(0, take);
@@ -52,8 +52,10 @@ export async function vehicleWarranty(user: User, args: { search?: string; limit
     truncated: found.length > take,
     data: page.map((v) => {
       const overall = computeWarranty(v, now);
-      // A previous owner's certificate is never offered as this owner's.
-      const certificate = currentOwnersCertificate(v.documents, v.contactId);
+      // Only a certificate for the owner now, made from the warranty as it is now, is offered as the certificate.
+      const filed = v.documents[0];
+      const state = filed ? certificateState(filed, v) : null;
+      const certificate = state === "current" ? filed : null;
       return {
         vehicle: v.model, link: `/vehicles/${v.id}`, vin: v.vin, reg: v.regNumber, colour: v.color,
         owner: contactName(v.contact), ownerLink: `/contacts/${v.contactId}`, product: v.product?.name ?? null,
@@ -62,8 +64,8 @@ export async function vehicleWarranty(user: User, args: { search?: string; limit
         cover: vehicleCover(v, now).map((c) => ({ part: c.part, cover: termLabel(c.months), until: day(c.until), status: c.status })),
         certificate: certificate
           ? { link: `/api/files/${certificate.id}`, issued: day(certificate.createdAt) }
-          : v.documents.length > 0
-            ? "only a previous owner's is filed — a new one must be issued for the current owner"
+          : state && state !== "current"
+            ? `not current, don't offer it: ${CERTIFICATE_NOT_CURRENT[state]}`
             : "none filed yet",
       };
     }),
