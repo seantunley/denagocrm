@@ -109,6 +109,14 @@ async function loadWorkspaceLogo(tenantId: string, src: string): Promise<LoadedI
   const photoOf = /^\/api\/signature-photo\/([A-Za-z0-9_-]{6,64})$/.exec(url.pathname)?.[1];
   // Loaded here, not at the top: signatureSender is server-only, and this file is also loaded outside a server render.
   if (photoOf) return (await import("./signatureSender")).signaturePhotoBytes(tenantId, photoOf);
+  // 0c. A person's "Save my contact" QR code (lib/contactCardServer.ts): drawn here from the signed card link — only a
+  //     token of THIS workspace — so the email carries the picture and the URL's host is never contacted.
+  const qrToken = /^\/api\/contact-card\/([A-Za-z0-9_.-]{20,200})\/qr$/.exec(url.pathname)?.[1];
+  if (qrToken) {
+    const card = await import("./contactCardServer");
+    if (card.verifyContactCardToken(qrToken)?.tenantId !== tenantId) return null;
+    return { content: await card.contactQrPng(`${url.origin}${card.contactCardPath(qrToken)}`), contentType: "image/png" };
+  }
   // 1. This workspace's public brand-logo route. The same object the route would
   //    stream, rebuilt the same way (tenant folder + strictly matched asset name),
   //    read from storage — the URL's host is never contacted.

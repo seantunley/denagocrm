@@ -140,6 +140,8 @@ export async function saveSignatureRules(formData: FormData) {
       shortReplies: formData.get("shortReplies") === "on",
       legal: { privacyUrl: String(formData.get("legalPrivacyUrl") ?? "") },
       trackLinks: formData.get("trackLinks") === "on",
+      // "off" (or anything unknown) is dropped by the parser: no contact card.
+      contactCard: String(formData.get("contactCard") ?? ""),
     }));
     // A privacy link that isn't a full https address would be dropped quietly by the parser: say so instead.
     const privacyTyped = String(formData.get("legalPrivacyUrl") ?? "").trim();
@@ -156,7 +158,7 @@ export async function saveSignatureRules(formData: FormData) {
     });
     await logAudit({
       action: "email_signature.rules_saved",
-      summary: `Email signature rules: ${next.locked?.length ? `${next.locked.length} detail(s) locked` : "staff may change all their details"}, ${next.teams?.length ?? 0} team line(s), short replies ${next.shortReplies ? "on" : "off"}`,
+      summary: `Email signature rules: ${next.locked?.length ? `${next.locked.length} detail(s) locked` : "staff may change all their details"}, ${next.teams?.length ?? 0} team line(s), short replies ${next.shortReplies ? "on" : "off"}, save my contact ${next.contactCard ?? "off"}`,
       user,
     });
     revalidatePath("/email-signatures");

@@ -18,6 +18,7 @@ import {
 import { Button, buttonVariants } from "@/components/ui/button";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { renameDocument, moveDocument, replaceDocument } from "@/app/actions/documents";
+import { moveDocumentToLibrary } from "@/app/actions/libraryCategories";
 import { isPersonLabel } from "@/lib/documentLabels";
 import RecordContextMenu from "@/components/RecordContextMenu";
 
@@ -39,6 +40,8 @@ export type MoveTargets = {
   quotes: { id: string; label: string }[];
   /** The workspace's document types — what a document can be labelled as by hand (lib/documentLabels). */
   documentTypes?: string[];
+  /** The Library's categories, offered to "Move to the Library" — present only for someone who manages the Library. */
+  libraryCategories?: string[];
 };
 
 const input =
@@ -193,6 +196,21 @@ export function ManageDocumentDialog({
             </select>
             <SaveButton className={buttonVariants({ size: "sm", variant: "outline" })} pendingLabel="Moving…">Move</SaveButton>
           </SaveForm>
+
+          {/* A brochure or price list filed on a record by mistake: into the Library, under a category. Never paperwork
+              the CRM filed itself (signed copies, invoices…), which stays on its record (actions/libraryCategories.ts). */}
+          {targets.libraryCategories && targets.libraryCategories.length > 0 && isPersonLabel(doc.tag) && (
+            <SaveForm action={moveDocumentToLibrary.bind(null, doc.id)} className="space-y-2 border-t border-border pt-3">
+              <label className="block text-xs font-medium text-muted-foreground">
+                Move to the Library (a brochure, price list…) — this copy goes to the Trash
+              </label>
+              <select name="category" className={input} defaultValue="" required>
+                <option value="" disabled>Choose a category…</option>
+                {targets.libraryCategories.map((category) => <option key={category} value={category}>{category}</option>)}
+              </select>
+              <SaveButton className={buttonVariants({ size: "sm", variant: "outline" })} pendingLabel="Moving…">Move to the Library</SaveButton>
+            </SaveForm>
+          )}
 
           <SaveForm action={replaceDocument.bind(null, doc.id)} className="space-y-2 border-t border-border pt-3">
             <label className="block text-xs font-medium text-muted-foreground">
