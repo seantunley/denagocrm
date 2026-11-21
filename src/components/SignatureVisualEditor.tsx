@@ -42,6 +42,18 @@ export function withDarkMode(html: string): string {
 }
 
 /**
+ * A signature preview's links open in a new tab, as a mail app opens them. Followed inside the little frame, a click on
+ * the logo or website loaded that site there — which sites refuse, so the preview turned into a grey "refused" page
+ * (Sean, 2026-11-20). The frame needs `PREVIEW_SANDBOX` for the new tab to open.
+ */
+export function previewDocument(html: string): string {
+  const base = '<base target="_blank">';
+  return /<head>/i.test(html) ? html.replace(/<head>/i, `<head>${base}`) : `${base}${html}`;
+}
+/** No scripts; same origin so the frame can be sized to its content; links may open a normal tab. */
+export const PREVIEW_SANDBOX = "allow-same-origin allow-popups allow-popups-to-escape-sandbox";
+
+/**
  * The visual signature editor (item 2 of email-signature-improvements.md — "a visual editor in place of raw HTML"):
  * the details on the left, the signature they make on the right, redrawn as you type by the same function the send
  * uses. A detail shows on the signature only when filled in; a detail the owner locked is shown greyed with a padlock
@@ -89,7 +101,7 @@ export default function SignatureVisualEditor({
   const built = buildEmailHtml("", buildSignature({ ...person, signatureHtml: null, extras, teamLine }, company));
   // Item 7: how it looks on a phone, and in a mail app that darkens emails (which flips the colours but not pictures).
   const [view, setView] = useState<"computer" | "phone" | "dark">("computer");
-  const preview = view === "dark" ? withDarkMode(built) : built;
+  const preview = previewDocument(view === "dark" ? withDarkMode(built) : built);
 
   return (
     <div className="grid gap-5 lg:grid-cols-2">
@@ -176,7 +188,7 @@ export default function SignatureVisualEditor({
         {/* As a mail app shows it: a frame the page's styles can't reach, no scripts. */}
         <iframe
           title={`${person.name}'s signature`}
-          sandbox="allow-same-origin"
+          sandbox={PREVIEW_SANDBOX}
           srcDoc={preview}
           onLoad={(e) => {
             const doc = e.currentTarget.contentDocument;
