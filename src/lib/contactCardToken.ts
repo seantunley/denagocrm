@@ -6,9 +6,13 @@ import crypto from "node:crypto";
  * signature in an old email keeps working); the card route decides whether the card is still offered.
  */
 
-/** A key of its own, derived from SESSION_SECRET (as lib/domainCheck.ts does): it can never sign or verify a session. */
+/**
+ * A key of its own, derived from CONTACT_CARD_SECRET, else SESSION_SECRET (as lib/domainCheck.ts does): it can never
+ * sign or verify a session. Cards in sent emails are signed with it for good, so before rotating SESSION_SECRET set
+ * CONTACT_CARD_SECRET to its OLD value — or every "Save my contact" link already sent stops working (review of #1165).
+ */
 function cardKey(): Buffer | null {
-  const secret = process.env.SESSION_SECRET;
+  const secret = process.env.CONTACT_CARD_SECRET || process.env.SESSION_SECRET;
   if (!secret) return null;
   return Buffer.from(crypto.hkdfSync("sha256", Buffer.from(secret, "utf8"), Buffer.alloc(0), Buffer.from("denago:contact-card:v1", "utf8"), 32));
 }
