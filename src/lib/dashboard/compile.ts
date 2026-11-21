@@ -93,6 +93,8 @@ export type ScopeContext = {
   userId: string;
   accessibleIds: string[] | null;
   permissions: ReadonlySet<string>;
+  /** The workspace's modules, for a column that belongs to one (SourceField.module). Absent: no such column resolves. */
+  modules?: ReadonlySet<string>;
   /**
    * May this viewer use this source AT ALL — `canUseSource`, which is module AND
    * permission.
@@ -220,10 +222,11 @@ export function resolveField(
   if (!field) return null;
   // Reuse the catalogue's own gate rather than re-testing `field.permission`
   // here, so the editor's "which fields may I offer" answer and the compiler's
-  // "which fields may I emit" answer can never drift apart. `modules` is not
-  // consulted by canUseField — the source's own module gate is checked before a
-  // card is rendered at all.
-  if (!canUseField(field, { permissions: ctx.permissions, modules: new Set<string>() })) return null;
+  // "which fields may I emit" answer can never drift apart. The source's own
+  // module gate is checked before a card is rendered at all; `modules` here is for
+  // a COLUMN that belongs to a module (a vehicle's warranty), so a saved card
+  // stops showing it once that module is switched off.
+  if (!canUseField(field, { permissions: ctx.permissions, modules: ctx.modules ?? new Set<string>() })) return null;
   // A composite is several columns joined for display. It cannot answer a
   // question about any one of them, so it is select-only — see SourceField.paths.
   if (field.paths && use !== "select") return null;
@@ -775,7 +778,7 @@ export async function scopeContext(source: SourceDef): Promise<ScopeContext> {
         break;
     }
   }
-  return { userId: user.id, accessibleIds, permissions: access.permissions, usable: true };
+  return { userId: user.id, accessibleIds, permissions: access.permissions, modules: access.modules, usable: true };
 }
 
 /* ── running ──────────────────────────────────────────────────────── */

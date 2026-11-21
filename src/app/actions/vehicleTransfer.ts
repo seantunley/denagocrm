@@ -7,6 +7,7 @@ import { getActiveTenantId, requireTenantOwner } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { prisma } from "@/lib/db";
 import { putWorkspaceSetting } from "@/lib/settings";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import { hasPermission, requireContactAccess, requireVehicleAccess } from "@/lib/permissions";
 import { decideWarrantyTransfer, transferVehicleOwnership, undoLastTransfer } from "@/lib/vehicleOwnership";
 import { sendEmail } from "@/lib/email";
@@ -91,6 +92,8 @@ export async function transferVehicle(vehicleId: string, formData: FormData) {
         actor: { id: user.id, name: user.name },
       });
       revalidate(vehicleId, result.fromContactId, result.toContactId);
+      // Warranty module off: no warranty wording.
+      if (!(await isModuleEnabled("warranty"))) return { success: "Transferred. The vehicle's history went with it." };
       return {
         success:
           result.warranty === "carried"
@@ -184,6 +187,7 @@ export async function saveWarrantyTransferRule(formData: FormData) {
   return withActingStaffScope(() =>
     asActionResult(async () => {
       const user = await requireTenantOwner();
+      if (!(await isModuleEnabled("warranty"))) refuse("The Warranty module is off for this workspace.");
       const tenantId = await tenant();
       const rule = parseWarrantyTransferRule(text(formData, "rule", 20));
       await putWorkspaceSetting(tenantId, WARRANTY_TRANSFER_KEY, rule);

@@ -6,6 +6,7 @@ import { TenantScopeError } from "./tenantGuard";
 import { deleteFile } from "./storage";
 import { logError } from "./errorLog";
 import { type CustomEntity } from "./customFields";
+import { contactKeptBecause } from "./contactKeep";
 
 export const TRASH_RETENTION_DAYS = 60;
 
@@ -308,6 +309,15 @@ export async function purgeTrash(): Promise<number> {
     product: "Product",
   };
 
+  // The paperwork that keeps a record out of the purge: [table, the column naming the record]. A fixed whitelist — they
+  // interpolate as raw SQL identifiers.
+  const PAPERWORK: Partial<Record<TrashModel, Array<[string, string]>>> = {
+    contact: [["Document", "contactId"], ["DocInstance", "contactId"], ["SignatureRequest", "contactId"]],
+    lead: [["DocInstance", "leadId"]],
+    quote: [["Document", "quoteId"], ["DocInstance", "quoteId"], ["SignatureRequest", "quoteId"]],
+    jobCard: [["Document", "jobCardId"], ["SignatureRequest", "jobCardId"]],
+  };
+
   // children before parents so FK cascades behave predictably
   for (const model of ["quote", "jobCard", "vehicle", "lead", "contact", "product"] as TrashModel[]) {
     const entity = customEntityFor[model];
@@ -357,7 +367,24 @@ export async function purgeTrash(): Promise<number> {
           SELECT "id", "tenantId" FROM ${Prisma.raw(`"${table}"`)}
           WHERE "id" IN (${Prisma.join(staleIds)}) AND "deletedAt" < ${cutoff}
           FOR UPDATE`);
-        const ids = locked.map((r) => r.id);
+        // Everything restored meanwhile: nothing to do (and no empty IN () list for the checks below).
+        if (locked.length === 0) return { count: 0 };
+        const kept = new Set<string>();
+        // BOTH RULES RUN (review of #1170). PAPERWORK KEEPS ITS RECORD: a record that a filed document, a generated
+        // document or a signature request names stays in the trash, restorable, rather than being deleted for good — the
+        // chain of documents holds. (The database refuses those deletes anyway; this keeps them out of the sweep.)
+        for (const [paper, column] of PAPERWORK[model] ?? []) {
+          const named = await tx.$queryRaw<{ id: string }[]>(Prisma.sql`
+            SELECT DISTINCT ${Prisma.raw(`"${column}"`)} AS "id" FROM ${Prisma.raw(`"${paper}"`)}
+            WHERE ${Prisma.raw(`"${column}"`)} IN (${Prisma.join(locked.map((r) => r.id))})`);
+          for (const r of named) kept.add(r.id);
+        }
+        // AND a customer with a sale (a vehicle now or before, a won deal, an accepted quote) or paperwork is never
+        // deleted for good (lib/contactKeep.ts) — one trashed before that rule existed stays in the trash instead.
+        if (model === "contact") {
+          for (const r of locked) if (!kept.has(r.id) && (await contactKeptBecause(r.tenantId, r.id))) kept.add(r.id);
+        }
+        const ids = locked.map((r) => r.id).filter((id) => !kept.has(id));
         if (ids.length === 0) return { count: 0 };
         // The workspaces the purged rows belong to — children cascading with them are in the same ones.
         const tenants = [...new Set(locked.map((r) => r.tenantId).filter((t): t is string => Boolean(t)))];
@@ -420,8 +447,10 @@ export async function purgeTrash(): Promise<number> {
         return (tx as any)[model].deleteMany({ where: { id: { in: ids } } });
       });
       purged += res.count;
-    } catch {
-      // parent + children + custom values roll back together; nothing purged
+    } catch (err) {
+      // Parent + children + custom values roll back together; nothing purged. Logged, never swallowed: a silent catch
+      // here hid a purge that failed every night from 2026-07-27 to 2026-11-21 (see the migration of that date).
+      await logError("trash-purge", err, `${model}: purge failed; the records were left in the trash and will be retried on the next sweep.`, { tenantId: null });
       continue;
     }
 

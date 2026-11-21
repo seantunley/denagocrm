@@ -4,6 +4,8 @@ import ConfirmDelete from "@/components/ConfirmDelete";
 import { deleteLibraryDocument } from "@/app/actions/library";
 import { NewVersionForm } from "@/components/LibraryUploader";
 import { formatDateTime } from "@/lib/format";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
+import { setLibraryCategory } from "@/app/actions/libraryCategories";
 
 type Version = {
   id: string;
@@ -34,16 +36,33 @@ export default function LibraryItemActions({
   name,
   versions,
   canManage,
+  category = null,
+  categories = [],
 }: {
   documentId: string;
   name: string;
   /** Newest first. */
   versions: Version[];
   canManage: boolean;
+  /** Its category now, and the workspace's list to change it to (lib/libraryCategories.ts). */
+  category?: string | null;
+  categories?: readonly string[];
 }) {
   const latest = versions[0];
+  // A category that has since left the list stays selectable as itself, so saving doesn't drop it.
+  const options = category && !categories.includes(category) ? [category, ...categories] : categories;
   return (
     <div className="space-y-3 border-t border-border pt-3">
+      {canManage && options.length > 0 && (
+        <SaveForm action={setLibraryCategory.bind(null, documentId)} success="Category saved" resetOnSuccess={false} className="flex items-center gap-2">
+          <label className="text-xs text-muted-foreground" htmlFor={`category-${documentId}`}>Category</label>
+          <select id={`category-${documentId}`} name="category" defaultValue={category ?? ""} className="input !w-auto !py-1">
+            <option value="">No category</option>
+            {options.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
+        </SaveForm>
+      )}
       {canManage && (
         <div className="flex flex-wrap items-center gap-2">
           <ModalTrigger

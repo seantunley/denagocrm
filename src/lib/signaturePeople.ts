@@ -29,7 +29,16 @@ export type SignatureExtras = {
   hours?: string | null;
   cta?: string | null;
   photoUrl?: string | null;
+  /** Dated lines on now (lib/signatureNotices.ts): "On leave until 5 January…", holiday hours. */
+  notices?: string[];
+  /** "Save my contact" (lib/contactCardServer.ts): their signed card link, and its QR code when the owner chose one. */
+  contactCardUrl?: string | null;
+  contactQrUrl?: string | null;
 };
+
+/** The dated lines, bold, in the signature's colour. Shared by the full and the short signature. */
+const noticeLines = (notices: readonly string[] | undefined, accent: string) =>
+  (notices ?? []).map((n) => n.trim()).filter(Boolean).map((n) => `<strong style="color:${accent};">${escapeHtml(n)}</strong>`);
 
 /** One line under the signature for everyone in a team — the workshop's hours, a parts number. */
 export type TeamLine = { teamId: string; line: string };
@@ -89,8 +98,8 @@ export function whatsappLink(number: string | null | undefined): string {
 }
 
 /**
- * The extra lines under the contact details, in the signature's own type: direct line, WhatsApp and booking link on
- * one line, working hours on the next, the team's line last. "" when there is nothing to show — an unset detail
+ * The extra lines under the contact details, in the signature's own type: direct line, WhatsApp, booking link and
+ * "Save my contact" on one line, working hours on the next, the team's line, then the contact QR code. "" when there is nothing to show — an unset detail
  * removes its part, never leaves an empty one.
  */
 export function extrasHtml(extras: SignatureExtras | undefined, teamLine: string, accent: string): string {
@@ -99,16 +108,25 @@ export function extrasHtml(extras: SignatureExtras | undefined, teamLine: string
   const direct = e.directLine?.trim();
   const wa = whatsappLink(e.whatsapp);
   const booking = e.bookingUrl?.trim();
+  const card = /^https?:\/\/[^\s"'<>]+$/i.test(e.contactCardUrl ?? "") ? e.contactCardUrl!.trim() : "";
+  const qr = /^https?:\/\/[^\s"'<>]+$/i.test(e.contactQrUrl ?? "") ? e.contactQrUrl!.trim() : "";
   const reach = [
     direct ? `Direct ${link(`tel:${direct.replace(/[^\d+]/g, "")}`, escapeHtml(direct))}` : "",
     wa ? link(wa, "WhatsApp me") : "",
     booking ? link(booking, "Book a time with me") : "",
+    card ? link(card, "Save my contact") : "",
   ].filter(Boolean).join("&nbsp;&nbsp;·&nbsp;&nbsp;");
   const lines = [
+    // First: a dated line is the one thing the reader needs to see today.
+    ...noticeLines(e.notices, accent),
     reach,
     e.hours?.trim() ? escapeHtml(e.hours.trim()) : "",
     teamLine.trim() ? escapeHtml(teamLine.trim()) : "",
     e.cta?.trim() ? `<span style="color:${accent};font-weight:bold;">${escapeHtml(e.cta.trim())}</span>` : "",
+    // For a customer reading on a computer: they point their phone's camera at it. Linked too, for one reading on a phone.
+    card && qr
+      ? `<a href="${escapeHtml(card)}" style="text-decoration:none;"><img src="${escapeHtml(qr)}" alt="QR code: save my contact" width="88" height="88" style="display:inline-block;vertical-align:middle;border:0;" /></a>&nbsp;&nbsp;<span style="font-size:12px;color:#64748b;">Scan with your phone to save my contact</span>`
+      : "",
   ].filter(Boolean);
   return lines.length
     ? `<div style="padding-top:8px;font-size:13px;line-height:20px;color:#475569;">${lines.join("<br />")}</div>`
@@ -159,7 +177,7 @@ export function missingBasics(person: { jobTitle?: string | null; mobile?: strin
  * times. Name · title · company, then phone · email.
  */
 export function shortSignature(
-  user: { name: string; email: string; mobile?: string | null; jobTitle?: string | null },
+  user: { name: string; email: string; mobile?: string | null; jobTitle?: string | null; extras?: SignatureExtras },
   company: { name: string; switchboard: string },
   accent: string,
 ): string {
@@ -173,5 +191,6 @@ export function shortSignature(
 <table cellpadding="0" cellspacing="0" border="0" role="presentation" style="font-family:Arial,Helvetica,sans-serif;margin-top:16px;">
   <tr><td style="font-size:13px;line-height:19px;color:#0f172a;"><strong>${first}</strong></td></tr>
   ${second ? `<tr><td style="font-size:13px;line-height:19px;color:#475569;">${second}</td></tr>` : ""}
+  ${noticeLines(user.extras?.notices, accent).map((line) => `<tr><td style="font-size:13px;line-height:19px;">${line}</td></tr>`).join("")}
 </table>`;
 }

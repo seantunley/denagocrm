@@ -28,12 +28,15 @@ test("never transferred: the owner sees all of it, exactly as before", () => {
   assert.equal(claimsSince(claims, null).length, 2);
 });
 
-test("the new owner: their own services and claims in full; earlier services as date, what and odometer only", () => {
+test("the new owner: their own services and claims in full; earlier services as date and odometer only", () => {
   const from = historyFrom(transfer);
   assert.equal(from?.getTime(), d("2026-01-01").getTime());
   const split = splitServices(services, from);
   assert.deepEqual(split.own.map((s) => s.id), ["s2"]);
-  assert.deepEqual(split.earlier, [{ id: "s1", serviceDate: d("2025-06-01"), summary: "1,000 km service", km: 1000 }], "no notes, no technician");
+  assert.deepEqual(split.earlier, [{ id: "s1", serviceDate: d("2025-06-01"), km: 1000 }], "nothing typed: no summary, notes or technician");
+  // Review of #1168: a summary typed for the seller — name, phone, amount — never reaches the buyer.
+  const leaky = [{ id: "s0", serviceDate: d("2025-05-01"), summary: "Repair for John Smith 082 555 0101, R9,850 paid on his account", km: 900 }];
+  assert.doesNotMatch(JSON.stringify(splitServices(leaky, from).earlier), /John|082|9,850|account/);
   assert.deepEqual(claimsSince(claims, from).map((c) => c.id), ["c2"], "the previous owner's claim is not shown");
 });
 
@@ -63,8 +66,8 @@ test("the portal: one document rule for the list and the download, by ownership 
   const home = code("src/app/portal/page.tsx");
   assert.match(home, /const services = splitServices\(vehicle\.serviceRecords, from\);/);
   assert.match(home, /const claims = claimsSince\(vehicle\.warrantyClaims, from\)\.slice\(0, 3\);/);
-  const earlier = home.slice(home.indexOf("Services before you owned it"), home.indexOf("{claims.length > 0"));
-  assert.doesNotMatch(earlier, /details|performedBy|jobCard|price|contactName/, "the summary carries no notes, names or prices");
+  const earlier = home.slice(home.indexOf("Services before you owned it"), home.indexOf("{warrantyOn && claims.length > 0"));
+  assert.doesNotMatch(earlier, /details|summary|performedBy|jobCard|price|contactName/, "nothing typed for the previous owner");
   assert.doesNotMatch(home, /vehicle\.serviceRecords\.slice|vehicle\.warrantyClaims\.map/, "nothing reads the uncut history");
 });
 

@@ -33,6 +33,9 @@ export type WorkshopVehicle = {
   regNumber: string | null;
   purchaseDate: Date | null;
   warrantyMonths: number | null;
+  /** The vehicle's own warranty parts (lib/warrantyParts.ts), from warrantyStartsAt. */
+  warrantyParts?: unknown;
+  warrantyStartsAt?: Date | null;
   serviceIntervalKm: number | null;
   serviceIntervalMonths: number | null;
   /** Newest first. */
@@ -62,7 +65,7 @@ export function jobFacts(j: OpenJob, now: Date) {
 function verdicts(v: WorkshopVehicle, now: Date) {
   return {
     due: computeDue(v, now),
-    battery: analyzeBattery(v.batteryChecks, { purchaseDate: v.purchaseDate, warrantyMonths: v.warrantyMonths, now }),
+    battery: analyzeBattery(v.batteryChecks, { ...v, now }),
     warranty: computeWarranty(v, now),
   };
 }
@@ -72,7 +75,7 @@ function verdicts(v: WorkshopVehicle, now: Date) {
  * the last services, the battery trend, and each open job card and claim;
  * otherwise just the verdicts, so a list of fifteen stays small.
  */
-export function vehicleWorkshop(v: WorkshopVehicle, now: Date, full: boolean) {
+export function vehicleWorkshop(v: WorkshopVehicle, now: Date, full: boolean, warrantyOn = true) {
   const { due, battery, warranty } = verdicts(v, now);
   const compact = {
     service: dueLabels[due.status],
@@ -83,8 +86,8 @@ export function vehicleWorkshop(v: WorkshopVehicle, now: Date, full: boolean) {
     ...(due.daysRemaining != null ? { serviceDaysLeft: due.daysRemaining } : {}),
     ...(due.kmRemaining != null ? { serviceKmLeft: due.kmRemaining } : {}),
     battery: battery.latestSoh == null ? battery.headline : `${battery.headline} (${battery.latestSoh}% state of health)`,
-    warranty: warrantyLabels[warranty.status],
-    warrantyUntil: day(warranty.expiryDate),
+    // The Warranty module off: DAX says nothing about cover.
+    ...(warrantyOn ? { warranty: warrantyLabels[warranty.status], warrantyUntil: day(warranty.expiryDate) } : {}),
     ...(v.jobCards ? { openJobCards: v.jobCards.total } : {}),
     ...(v.warrantyClaims ? { openWarrantyClaims: v.warrantyClaims.total } : {}),
   };
@@ -100,7 +103,7 @@ export function vehicleWorkshop(v: WorkshopVehicle, now: Date, full: boolean) {
     lastBatteryCheck: day(v.batteryChecks[0]?.checkedAt),
     ...(battery.degradationPerMonth != null ? { batteryHealthLostPerMonthPct: battery.degradationPerMonth } : {}),
     ...(battery.projectedMonthsToWarning != null ? { monthsUntilBatteryWarning: battery.projectedMonthsToWarning } : {}),
-    ...(battery.warrantyEligible ? { batteryWarrantyClaimCandidate: true } : {}),
+    ...(warrantyOn && battery.warrantyEligible ? { batteryWarrantyClaimCandidate: true } : {}),
     ...(v.jobCards ? listed(v.jobCards, v.jobCards.list.map((j) => jobFacts(j, now)), "jobCardList") : {}),
     ...(v.warrantyClaims
       ? listed(
@@ -120,7 +123,7 @@ export type FleetVehicle = WorkshopVehicle & { owner: string | null };
  * ending within 30 days, battery replacement candidates. Each list has its total
  * and the first `take`. Job cards are loaded separately (their own access rule).
  */
-export function workshopSummary(vehicles: FleetVehicle[], now: Date, take: number) {
+export function workshopSummary(vehicles: FleetVehicle[], now: Date, take: number, warrantyOn = true) {
   const rows = vehicles.map((v) => ({ v, ...verdicts(v, now) }));
   const who = (v: FleetVehicle) => ({ vehicle: v.model, reg: v.regNumber, owner: v.owner, link: `/vehicles/${v.id}` });
   const list = <T>(items: T[], shape: (item: T) => object) => ({ total: items.length, top: items.slice(0, take).map(shape) });
@@ -146,7 +149,7 @@ export function workshopSummary(vehicles: FleetVehicle[], now: Date, take: numbe
   return {
     servicesOverdue: list(services.filter((r) => r.due.status === "overdue"), serviceRow),
     servicesDueSoon: list(services.filter((r) => r.due.status === "due_soon"), serviceRow),
-    warrantiesEnding: list(ending, (r) => ({ ...who(r.v), warrantyUntil: day(r.warranty.expiryDate), daysLeft: r.warranty.daysRemaining })),
+    ...(warrantyOn ? { warrantiesEnding: list(ending, (r) => ({ ...who(r.v), warrantyUntil: day(r.warranty.expiryDate), daysLeft: r.warranty.daysRemaining })) } : {}),
     batteryReplacementCandidates: list(batteries, (r) => ({ ...who(r.v), stateOfHealthPct: r.battery.latestSoh, lastCheck: day(r.v.batteryChecks[0]?.checkedAt) })),
   };
 }

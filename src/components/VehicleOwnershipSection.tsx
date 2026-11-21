@@ -3,6 +3,7 @@ import { contactName } from "@/lib/format";
 import { getAccessibleContactIds, hasPermission, type PermissionUser } from "@/lib/permissions";
 import { ownershipHistory, undoBlockedBecause, warrantyTransferRule } from "@/lib/vehicleOwnership";
 import { coverRemaining } from "@/lib/vehicleTransferRules";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import TransferVehicleDialog from "@/components/TransferVehicleDialog";
 import VehicleOwnershipPanel from "@/components/VehicleOwnershipPanel";
 
@@ -32,11 +33,13 @@ export default async function VehicleOwnershipSection({
 }) {
   const tenantId = vehicle.tenantId;
   if (!tenantId) return null;
-  const [entries, canTransfer, canDecideWarranty, canCreateContact] = await Promise.all([
+  const [entries, canTransfer, canDecideWarranty, canCreateContact, warrantyOn] = await Promise.all([
     ownershipHistory(tenantId, vehicle.id),
     hasPermission(user, "vehicles.transfer"),
     hasPermission(user, "warranty.manage"),
     hasPermission(user, "contacts.create"),
+    // The Warranty module (its own switch): off, no warranty line on the transfer or the ownership history.
+    isModuleEnabled("warranty"),
   ]);
   const current = entries.find((e) => !e.ownedUntil);
   let transferButton = null;
@@ -63,7 +66,7 @@ export default async function VehicleOwnershipSection({
         canCreateContact={canCreateContact}
         earliest={day(current?.ownedFrom ?? new Date(0))}
         today={day(new Date())}
-        cover={coverRemaining(vehicle)}
+        cover={warrantyOn ? coverRemaining(vehicle) : null}
         rule={rule}
         documents={vehicle.documents.map((d) => ({ id: d.id, label: d.fileName }))}
         openOnArrival={openTransfer}
@@ -76,6 +79,7 @@ export default async function VehicleOwnershipSection({
       entries={entries}
       canTransfer={canTransfer}
       canDecideWarranty={canDecideWarranty}
+      showWarranty={warrantyOn}
       undoBlocked={undoBlocked}
       transferButton={transferButton}
     />

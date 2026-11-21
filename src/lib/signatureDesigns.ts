@@ -31,6 +31,7 @@ export function withoutPackExtras(design: SignatureDesign): SignatureDesign {
     shortReplies: false,
     legal: { privacyUrl: "" },
     trackLinks: false,
+    contactCard: undefined,
   };
 }
 

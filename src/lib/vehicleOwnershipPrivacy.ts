@@ -2,8 +2,8 @@
  * Who sees what of a vehicle's history after it changes hands (warranty-transfer-brief.md, PR 2). Pure.
  *
  * - The NEW OWNER (in the portal): the vehicle, its warranty, the services and claims from their own ownership onward,
- *   and a summary of earlier services (date, what was done, odometer) — never the previous owner's name, contact
- *   details, invoices, prices or the service notes.
+ *   and earlier services as date and odometer only — never the previous owner's name, contact details, invoices,
+ *   prices, or anything typed on their services.
  * - The PREVIOUS OWNER: loses the vehicle from the transfer (Vehicle.contactId moves); keeps what is theirs.
  * - STAFF: everything, with the owner at the time named on each record.
  *
@@ -19,20 +19,23 @@ export function historyFrom(current: OwnershipStart | null | undefined): Date | 
 }
 
 export type PortalService = { id: string; serviceDate: Date; summary: string; km: number | null };
+/** A service from before the new owner's time: when, and the odometer. Nothing typed — see splitServices. */
+export type EarlierService = { id: string; serviceDate: Date; km: number | null };
 
 /**
- * A new owner's service history: theirs in full, earlier ones as a summary only (date, what, odometer). The portal never
- * shows a service's notes, technician, job card or price, before or after.
+ * A new owner's service history: theirs with its summary; earlier ones as the date and odometer ONLY. The summary is
+ * free text staff typed for the previous owner — it can hold their name, number or a price — so it never reaches the
+ * buyer (review of #1168). The portal never shows a service's notes, technician, job card or price, before or after.
  */
 export function splitServices<T extends { id: string; serviceDate: Date; summary: string; km: number | null }>(
   records: readonly T[],
   from: Date | null,
-): { own: PortalService[]; earlier: PortalService[] } {
+): { own: PortalService[]; earlier: EarlierService[] } {
   const strip = (r: T): PortalService => ({ id: r.id, serviceDate: r.serviceDate, summary: r.summary, km: r.km });
   if (!from) return { own: records.map(strip), earlier: [] };
   return {
     own: records.filter((r) => r.serviceDate >= from).map(strip),
-    earlier: records.filter((r) => r.serviceDate < from).map(strip),
+    earlier: records.filter((r) => r.serviceDate < from).map((r) => ({ id: r.id, serviceDate: r.serviceDate, km: r.km })),
   };
 }
 

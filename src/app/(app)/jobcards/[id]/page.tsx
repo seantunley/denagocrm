@@ -86,6 +86,7 @@ import { getRecordLabels } from "@/lib/recordLabelsServer";
 import ChecklistCard from "@/components/checklists/ChecklistCard";
 import { runsForHost, templatesForHostRecord } from "@/lib/checklists/store";
 import { getRegionalSettings } from "@/lib/settings";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 
 /**
  * One collapsible step in the job's flow. The current stage is expanded; done
@@ -228,6 +229,7 @@ export default async function JobCardDetailPage({
   const pendingApprovals = jobCard.approvals.filter((a) => a.status === "pending").length;
 
   const moneyFmt = await getRegionalSettings();
+  const warrantyOn = await isModuleEnabled("warranty");
   return (
     <div className="space-y-6">
       <Link href="/jobcards" className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground"><ArrowLeft className="size-3.5" />Back to {midSentence(labels.jobcard.many)}</Link>
@@ -871,18 +873,20 @@ export default async function JobCardDetailPage({
               </div>
             )
           )}
-          <SaveForm success="Warranty updated" resetOnSuccess={false} action={setJobWarranty.bind(null, jobCard.id)} className="card space-y-2">
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Warranty recovery</p>
-            <label className="flex items-center gap-2 text-sm text-slate-300">
-              <input type="checkbox" name="underWarranty" defaultChecked={jobCard.underWarranty} className="h-4 w-4" />
-              Work is under warranty
-            </label>
-            <div>
-              <label className="label" htmlFor="warrantyRecovered">Recovered ({currencySymbol(moneyFmt)})</label>
-              <input id="warrantyRecovered" name="warrantyRecovered" inputMode="decimal" className="input tabular-nums" defaultValue={jobCard.warrantyRecoveredCents ? (jobCard.warrantyRecoveredCents / 100).toFixed(2) : ""} placeholder="Labour + parts recovered" />
-            </div>
-            <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
-          </SaveForm>
+          {warrantyOn && (
+            <SaveForm success="Warranty updated" resetOnSuccess={false} action={setJobWarranty.bind(null, jobCard.id)} className="card space-y-2">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Warranty recovery</p>
+              <label className="flex items-center gap-2 text-sm text-slate-300">
+                <input type="checkbox" name="underWarranty" defaultChecked={jobCard.underWarranty} className="h-4 w-4" />
+                Work is under warranty
+              </label>
+              <div>
+                <label className="label" htmlFor="warrantyRecovered">Recovered ({currencySymbol(moneyFmt)})</label>
+                <input id="warrantyRecovered" name="warrantyRecovered" inputMode="decimal" className="input tabular-nums" defaultValue={jobCard.warrantyRecoveredCents ? (jobCard.warrantyRecoveredCents / 100).toFixed(2) : ""} placeholder="Labour + parts recovered" />
+              </div>
+              <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
+            </SaveForm>
+          )}
           <SaveForm success="Comeback recorded" resetOnSuccess={false} action={setComeback.bind(null, jobCard.id)} className="card space-y-2">
             <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Comeback / repeat repair</p>
             <p className="text-xs text-muted-foreground">Link this job to the earlier one it&apos;s a repeat of, on the same vehicle.</p>

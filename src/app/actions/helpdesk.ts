@@ -28,9 +28,10 @@ import {
 import {
   STATUS_VALUES,
   PRIORITY_VALUES,
-  TICKET_TYPES,
+  ticketTypesOffered,
   statusMeta,
 } from "@/lib/helpdesk-constants";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 
 function str(formData: FormData, key: string): string {
   return String(formData.get(key) ?? "").trim();
@@ -205,7 +206,8 @@ export async function createTicket(formData: FormData): Promise<ActionResult> {
     if (subject.length < 3 || description.length < 5) {
       throw new ActionRefusal("A ticket needs a subject and a short description.");
     }
-    const type = TICKET_TYPES.includes(str(formData, "type") as (typeof TICKET_TYPES)[number]) ? str(formData, "type") : "support";
+    const offered = ticketTypesOffered(await isModuleEnabled("warranty")) as readonly string[];
+    const type = offered.includes(str(formData, "type")) ? str(formData, "type") : "support";
     const priority = PRIORITY_VALUES.includes(str(formData, "priority")) ? str(formData, "priority") : "normal";
     const mailboxId = str(formData, "mailboxId") || null;
     const vehicleId = str(formData, "vehicleId") || null;

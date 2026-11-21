@@ -52,6 +52,8 @@ export default async function PortalHome() {
   // When the automotive pack is switched off the portal must drop all
   // vehicle/service/warranty UI too, even while the portal itself stays on.
   const automotiveOn = await isModuleEnabled("automotive");
+  // And the Warranty module, its own switch (it needs Automotive): off, no cover or warranty requests are shown.
+  const warrantyOn = await isModuleEnabled("warranty");
   const regional = await getRegionalSettings();
 
   const [accessibleContacts, fleets, vehicles, quotes, notifications, caseCounts] = await Promise.all([
@@ -166,7 +168,7 @@ export default async function PortalHome() {
         <div>
           <Eyebrow>{brand.branded ? `Your ${brand.displayName} garage` : "Your garage"}</Eyebrow>
           <h1 className="mt-2 text-3xl font-semibold tracking-[-0.045em] sm:text-4xl">Hello, {contact.firstName}</h1>
-          <p className="mt-2 max-w-xl text-sm leading-6 text-slate-400">{automotiveOn ? "Everything about your vehicles, service, warranty, quotes and deliveries—kept together and easy to follow." : "Your quotes, documents and support—kept together and easy to follow."}</p>
+          <p className="mt-2 max-w-xl text-sm leading-6 text-slate-400">{automotiveOn ? `Everything about your vehicles, service, ${warrantyOn ? "warranty, " : ""}quotes and deliveries—kept together and easy to follow.` : "Your quotes, documents and support—kept together and easy to follow."}</p>
         </div>
           <form action={portalLogout}><Button variant="outline" size="sm" className="border-white/10 bg-white/[0.035]"><LogOut className="size-3.5" />Sign out</Button></form>
         </div>
@@ -235,7 +237,7 @@ export default async function PortalHome() {
 
       {automotiveOn && (
       <section className="space-y-3">
-        <div><Eyebrow>Your garage</Eyebrow><h2 className="mt-1 text-lg font-semibold">Vehicles, service and warranty</h2></div>
+        <div><Eyebrow>Your garage</Eyebrow><h2 className="mt-1 text-lg font-semibold">{warrantyOn ? "Vehicles, service and warranty" : "Vehicles and service"}</h2></div>
         {vehicles.length === 0 ? (
           <div className="card text-sm text-slate-400">No carts are currently available in your portal.</div>
         ) : vehicles.map((vehicle) => {
@@ -255,7 +257,7 @@ export default async function PortalHome() {
                 </div>
                 <div className="flex gap-2 flex-wrap">
                   <span className={`badge ${dueColors[due.status]}`}>Service: {dueLabels[due.status]}{due.nextDueDate ? ` · ${formatDate(due.nextDueDate, regional)}` : ""}</span>
-                  <span className={`badge ${warrantyColors[warranty.status]}`}>{warrantyLabels[warranty.status]}{warranty.expiryDate ? ` · ${formatDate(warranty.expiryDate, regional)}` : ""}</span>
+                  {warrantyOn && <span className={`badge ${warrantyColors[warranty.status]}`}>{warrantyLabels[warranty.status]}{warranty.expiryDate ? ` · ${formatDate(warranty.expiryDate, regional)}` : ""}</span>}
                 </div>
               </div>
               {services.own.length > 0 && (
@@ -274,14 +276,16 @@ export default async function PortalHome() {
                   <ul className="space-y-1.5">
                     {services.earlier.slice(0, 10).map((record) => (
                       <li key={record.id} className="text-sm flex justify-between gap-3 text-slate-400">
-                        <span>{record.summary}</span>
-                        <span className="shrink-0">{record.km != null ? `${record.km.toLocaleString()} km · ` : ""}{formatDate(record.serviceDate, regional)}</span>
+                        {/* Date and odometer only: anything typed was for the previous owner (lib/vehicleOwnershipPrivacy.ts). */}
+                        <span>Serviced {formatDate(record.serviceDate, regional)}</span>
+                        <span className="shrink-0">{record.km != null ? `${record.km.toLocaleString()} km` : ""}</span>
                       </li>
                     ))}
                   </ul>
                 </div>
               )}
-              {claims.length > 0 && (
+              {/* Only this owner's claims (claimsSince), and only with the Warranty module on. */}
+              {warrantyOn && claims.length > 0 && (
                 <div className="border-t border-slate-800 pt-3">
                   <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Warranty requests</p>
                   <ul className="space-y-1.5">
@@ -324,7 +328,7 @@ export default async function PortalHome() {
         </div>
         )}
         <div className="card flex flex-col justify-between gap-4">
-          <div><h2 className="font-semibold">Need help?</h2><p className="text-sm text-slate-400 mt-2">Open a support, warranty, delivery or document request and track the conversation.</p></div>
+          <div><h2 className="font-semibold">Need help?</h2><p className="text-sm text-slate-400 mt-2">{`Open a support, ${warrantyOn ? "warranty, " : ""}delivery or document request and track the conversation.`}</p></div>
           <Link href="/portal/support" className="btn-primary text-center">Open support</Link>
         </div>
       </section>

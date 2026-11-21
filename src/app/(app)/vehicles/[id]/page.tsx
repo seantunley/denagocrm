@@ -25,7 +25,11 @@ import { computeWarranty, warrantyColors, warrantyLabels, claimColors, claimStat
 import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { StatusPill } from "@/components/visual-system";
 import { requireUser } from "@/lib/auth";
-import { hasPermission } from "@/lib/permissions";
+import { hasAnyPermission, hasPermission } from "@/lib/permissions";
+import { WARRANTY_READ } from "@/lib/warrantyAccess";
+import VehicleWarrantyParts from "@/components/VehicleWarrantyParts";
+import { WARRANTY_PARTS_KEY, parsePartList, vehicleCover } from "@/lib/warrantyParts";
+import { getWorkspaceSetting } from "@/lib/settings";
 import CustomFieldsCard from "@/components/custom-fields/CustomFieldsCard";
 import ChecklistCard from "@/components/checklists/ChecklistCard";
 import { runsForHost, templatesForHostRecord } from "@/lib/checklists/store";
@@ -61,6 +65,13 @@ export default async function VehicleDetailPage({
   if (!vehicle) notFound();
   const currentUser = await requireUser();
   const canManageChecklists = await hasPermission(currentUser, "vehicles.manage");
+  // The Warranty module on, and the warranty grant (lib/warrantyAccess.ts): its cover, claims and battery hint.
+  const canSeeWarranty = await hasAnyPermission(currentUser, ...WARRANTY_READ);
+  // Its warranty part by part, and who may change it (lib/warrantyParts.ts).
+  const canManageWarranty = canSeeWarranty && (await hasPermission(currentUser, "warranty.manage"));
+  const warrantyPartList = canManageWarranty && vehicle.tenantId
+    ? parsePartList(await getWorkspaceSetting(vehicle.tenantId, WARRANTY_PARTS_KEY))
+    : [];
   const checklistTenantId = vehicle.tenantId ?? "";
   const [conditionTemplates, conditionRuns] = canManageChecklists && checklistTenantId
     ? await Promise.all([
@@ -148,7 +159,7 @@ export default async function VehicleDetailPage({
           </p>
           <p className="text-xs text-slate-400 mt-1">
             Purchased {formatDate(vehicle.purchaseDate)}
-            {vehicle.warrantyMonths ? ` · ${vehicle.warrantyMonths} mo warranty` : ""}
+            {canSeeWarranty && vehicle.warrantyMonths ? ` · ${vehicle.warrantyMonths} mo warranty` : ""}
           </p>
         </div>
       </div>
@@ -319,11 +330,8 @@ export default async function VehicleDetailPage({
                   : s >= 60
                     ? "bg-amber-500/15 text-amber-300"
                     : "bg-red-500/15 text-red-300";
-            const analysis = analyzeBattery(checks, {
-              purchaseDate: vehicle.purchaseDate,
-              warrantyMonths: vehicle.warrantyMonths,
-              now: new Date(),
-            });
+            // The Battery part's own cover when the vehicle has parts.
+            const analysis = analyzeBattery(checks, { ...vehicle, now: new Date() });
             const chartPoints = checks
               .filter((c) => c.stateOfHealth != null)
               .map((c) => ({ soh: c.stateOfHealth as number }))
@@ -349,7 +357,7 @@ export default async function VehicleDetailPage({
                       {analysis.projectedMonthsToWarning != null && (
                         <span className="badge bg-amber-500/15 text-amber-300">~{analysis.projectedMonthsToWarning} mo to 60%</span>
                       )}
-                      {analysis.warrantyEligible && (
+                      {canSeeWarranty && analysis.warrantyEligible && (
                         <span className="badge bg-sky-500/15 text-sky-300">⚠ Warranty claim eligible</span>
                       )}
                       {analysis.replacementOpportunity && (
@@ -419,7 +427,7 @@ export default async function VehicleDetailPage({
             );
           })()}
 
-          {(() => {
+          {canSeeWarranty && (() => {
             const w = computeWarranty(vehicle);
             const claims = vehicle.warrantyClaims;
             return (
@@ -431,6 +439,7 @@ export default async function VehicleDetailPage({
                     {w.expiryDate ? ` · ${formatDate(w.expiryDate)}` : ""}
                   </span>
                 </div>
+                <VehicleWarrantyParts vehicle={vehicle} cover={vehicleCover(vehicle, new Date())} parts={warrantyPartList} canManage={canManageWarranty} />
                 {ownerWarranty !== "carried" && (
                   <p className="mb-3 rounded-md bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
                     {ownerWarranty === "pending"

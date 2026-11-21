@@ -37,8 +37,8 @@ export default function TransferVehicleDialog({
   /** The first allowed transfer date: the day the current ownership began ("YYYY-MM-DD"). */
   earliest: string;
   today: string;
-  /** "14 months and 3 days of cover left (until …)". */
-  cover: string;
+  /** "14 months and 3 days of cover left (until …)"; null with the Warranty module off — no warranty line at all. */
+  cover: string | null;
   rule: WarrantyTransferRule;
   /** Documents on this vehicle that can be the proof of sale. */
   documents: { id: string; label: string }[];
@@ -61,10 +61,10 @@ export default function TransferVehicleDialog({
         <input type="hidden" name="currentOwnerId" value={currentOwnerId} />
         <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm">
           <p>
-            Currently owned by <strong>{currentOwner}</strong>. The vehicle&apos;s services, claims, job cards and documents stay
-            with it; nothing is moved or copied.
+            Currently owned by <strong>{currentOwner}</strong>. The vehicle&apos;s services, {cover !== null ? "claims, " : ""}job cards and
+            documents stay with it; nothing is moved or copied.
           </p>
-          <p className="mt-1 text-muted-foreground">Warranty: {cover}. {ruleLine}</p>
+          {cover !== null && <p className="mt-1 text-muted-foreground">Warranty: {cover}. {ruleLine}</p>}
         </div>
 
         <fieldset className="space-y-2">

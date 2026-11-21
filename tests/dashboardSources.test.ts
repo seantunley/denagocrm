@@ -431,8 +431,17 @@ test("a viewer without leads.view_all is not offered the lead value field", () =
 
 test("an ungated field is available to anyone who reached the source at all", () => {
   for (const { field } of everyField()) {
-    if (field.permission) continue;
+    if (field.permission || field.module) continue;
     assert.equal(canUseField(field, access([])), true, "a field with no extra gate must not need one");
+  }
+});
+
+test("a column that belongs to a module (a vehicle's warranty) is offered only while that module is on", () => {
+  const gated = everyField().filter(({ field }) => field.module === "warranty").map(({ field }) => field);
+  assert.deepEqual(gated.map((f) => f.key).sort(), ["underWarranty", "warrantyMonths"]);
+  for (const field of gated) {
+    assert.equal(canUseField(field, { permissions: new Set(), modules: new Set(["automotive"]) }), false, field.key);
+    assert.equal(canUseField(field, { permissions: new Set(), modules: new Set(["automotive", "warranty"]) }), true, field.key);
   }
 });
 

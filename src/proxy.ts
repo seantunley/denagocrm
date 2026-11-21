@@ -38,6 +38,11 @@ const PUBLIC_PATHS = [
   "/verify",
   "/api/verify",
   "/api/track", // campaign open/click tracking
+  // "Save my contact" in email signatures (lib/contactCardServer.ts): a customer's phone opens the card with no
+  // account. The token is signed (not guessable), the card holds only what the signature already shows, and it is
+  // served only while the person is in the workspace and the owner has it on. Not throttled, like /api/track: mail
+  // apps fetch signature pictures (the QR code) through shared image proxies.
+  "/api/contact-card",
   // Secure file links (lib/secureLinks.ts): a customer with no account opens a
   // file sent as an expiring, recallable link. The page hands over nothing; the
   // download is a POST that checks the link every time. See both routes' headers.

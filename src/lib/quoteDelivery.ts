@@ -23,9 +23,11 @@ import { signedDeliveryNote } from "@/lib/deliveryNoteSigning";
 import { signedPdfIsSafeToDelete } from "@/lib/signing/blobReferences";
 import { staffActor } from "@/lib/signing/events";
 import { DELIVERY_NOTE } from "@/lib/signing/subject";
+import { addMonths } from "date-fns";
 import { holdSubjectRequests, recordSubjectWithdrawn, withdrawOpenSubjectRequests } from "@/lib/signing/subjectRequests";
 import type { PermissionUser } from "@/lib/permissions";
 import { financeDeliveryRefusal, financeDeliveryRefusalInTx } from "@/lib/dealFinance";
+import { vehicleWarrantyFrom } from "@/lib/warrantyParts";
 
 /**
  * THE ONE DELIVERY. Both "Mark delivered" on the Deliveries board and "Complete
@@ -89,7 +91,7 @@ export async function deliverQuote(input: {
 
   const units = await prisma.stockUnit.findMany({
     where: { soldQuoteId: quoteId, tenantId, deletedAt: null },
-    include: { product: { select: { name: true } } },
+    include: { product: { select: { name: true, warrantyTerms: true } } },
     orderBy: { createdAt: "asc" },
   });
   const outstanding = units.filter((unit) => !(DELIVERED_STOCK_STATUSES as readonly string[]).includes(unit.status));
@@ -236,9 +238,8 @@ export async function deliverQuote(input: {
 
   const deliveredAt = new Date();
   const warrantyMonths = Math.max(0, input.warrantyMonths ?? 12);
-  const warrantyEndAt = warrantyMonths
-    ? new Date(deliveredAt.getFullYear(), deliveredAt.getMonth() + warrantyMonths, deliveredAt.getDate())
-    : null;
+  // Clamped to the month's last day, as every warranty date is (lib/warranty.ts).
+  const warrantyEndAt = warrantyMonths ? addMonths(deliveredAt, warrantyMonths) : null;
 
   /*
    * NOTHING ABOVE THIS POINT WRITES. Everything below either commits together
@@ -400,6 +401,8 @@ export async function deliverQuote(input: {
             color: unit.color,
             purchaseDate: deliveredAt,
             warrantyMonths: warrantyMonths || null,
+            // The product's warranty in parts, from the delivery day (lib/warrantyParts.ts).
+            ...vehicleWarrantyFrom(unit.product.warrantyTerms, deliveredAt),
             notes: `Created automatically from stock unit ${unit.stockNumber ?? unit.id}`,
             contactId: contact!.id,
             productId: unit.productId,
