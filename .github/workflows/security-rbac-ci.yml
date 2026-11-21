@@ -402,6 +402,12 @@ jobs:
         # still run; another workspace can't take it offline and is untouched; publishing again restores it.
         run: npm run test:flow-offline
 
+      - name: Vehicle transfer -- one current owner always, history and warranty dates untouched, undo, other workspace refused
+        # warranty-transfer-brief.md (2026-11-20): every vehicle has exactly one current owner (trigger + one-open-row
+        # index); a transfer closes one row and opens one; two at once can't both land; claims keep their claimant;
+        # undo is refused once the new owner has a service; deleting a previous owner leaves the vehicle's history.
+        run: npm run test:vehicle-transfer
+
       - name: DAX lost deals still alive -- quotes only for those who may open them
         # Review of #950, with enforcement on: a salesperson who may open a deal but not its quotes gets no quote
         # number or quote view from lost_alive; one with quote access, and the owner, do; the other workspace nothing.

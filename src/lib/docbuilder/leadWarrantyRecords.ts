@@ -9,6 +9,7 @@ import { logoDataUri } from "@/lib/signing/render";
 import { publishedBuilderTemplateFor } from "./published";
 import { buildLeadContext, buildWarrantyContext } from "./leadWarrantyContext";
 import type { MergeContext } from "./merge";
+import { withClaimant } from "../warrantyClaimant";
 
 export type BoundRecord = { ctx: MergeContext; label: string; contactId: string | null };
 
@@ -28,18 +29,20 @@ export async function loadLeadForDoc(leadId: string): Promise<BoundRecord | null
 }
 
 export async function loadWarrantyClaimForDoc(claimId: string): Promise<BoundRecord | null> {
-  const claim = await prisma.warrantyClaim.findUnique({
+  const loaded = await prisma.warrantyClaim.findUnique({
     where: { id: claimId },
     include: { vehicle: { include: { contact: true } } },
   });
-  if (!claim) return null;
+  if (!loaded) return null;
+  // The claimant (owner when it was logged), not whoever owns the vehicle now (warranty-transfer-brief.md).
+  const claim = await withClaimant(loaded);
   // WarrantyClaim.jobCardId has no relation, so the parts are a separate
   // tenant-scoped read rather than an include.
   const parts = claim.jobCardId
     ? await prisma.jobCardItem.findMany({ where: { jobCardId: claim.jobCardId } })
     : [];
   const ctx = buildWarrantyContext(claim, parts, new Date(), await getRegionalSettings());
-  return { ctx, label: ctx.tokens["claim.number"], contactId: claim.vehicle.contactId };
+  return { ctx, label: ctx.tokens["claim.number"], contactId: claim.contactId ?? claim.vehicle.contactId };
 }
 
 /**

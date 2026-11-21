@@ -178,19 +178,18 @@ export async function remindService(_prev: RemindResult, formData: FormData): Pr
 export async function updateVehicle(id: string, formData: FormData) {
   return withActingStaffScope(async () => {
     await requireVehicleAccess(id, "vehicles.manage");
-    const data = vehicleData(formData);
+    // The owner is never changed here (warranty-transfer-brief.md): a change of owner is a TRANSFER, with a record of
+    // who owned it when (app/actions/vehicleTransfer.ts). This used to overwrite contactId silently.
+    const { contactId: submittedOwner, ...data } = vehicleData(formData);
     if (!data.model) throw new Error("Model is required");
-    // #15: reassigning the vehicle to a DIFFERENT contact requires access to that
-    // destination contact too — authorizing only the vehicle would let a user move
-    // it onto a customer they can't otherwise access.
     // A trashed vehicle isn't editable: the filtered findUnique hides it (returns
     // null) and the filtered update would refuse it anyway — surface a clean error
     // rather than a P2025 for owner / view_all callers whose access isn't scoped to
     // active records.
     const current = await prisma.vehicle.findUnique({ where: { id }, select: { contactId: true } });
     if (!current) throw new Error("This vehicle is in the trash — restore it before editing.");
-    if (data.contactId && data.contactId !== current.contactId) {
-      await requireContactAccess(data.contactId, "vehicles.manage");
+    if (submittedOwner && submittedOwner !== current.contactId) {
+      throw new Error("Editing a vehicle can't change its owner. Use Transfer to new owner on the vehicle's page — a data-entry mistake is the reason \"Correction\".");
     }
     await prisma.vehicle.update({ where: { id }, data });
     revalidatePath("/vehicles");

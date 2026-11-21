@@ -9,6 +9,8 @@
  * - Part names come from the workspace's own list (Settings-editable dropdown, never free text).
  */
 
+import { addMonths } from "date-fns";
+
 export type WarrantyTerm = { part: string; months: number | null };
 export type PartStatus = "active" | "expired" | "lifetime";
 export type PartCover = WarrantyTerm & { until: Date | null; status: PartStatus };
@@ -82,10 +84,13 @@ export function termsFromForm(form: FormData, parts: readonly string[]): { ok: t
   return { ok: true, terms };
 }
 
-/** The day cover on a part ends: the same calendar day `months` later. Null for life. */
+/**
+ * The day cover on a part ends: the same calendar day `months` later, clamped to the month's last day (31 Jan + 1 month
+ * = 28/29 Feb, never 3 Mar). The same date-fns addMonths the single-term warranty (lib/warranty.ts) uses. Null for life.
+ */
 export function termEnd(start: Date, months: number | null): Date | null {
   if (months == null) return null;
-  return new Date(start.getFullYear(), start.getMonth() + months, start.getDate());
+  return addMonths(start, months);
 }
 
 /** Each part's cover on `now`, from the vehicle's start date. */

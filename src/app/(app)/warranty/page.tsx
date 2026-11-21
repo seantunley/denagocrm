@@ -14,11 +14,15 @@ import {
   requireAnyPermission,
 } from "@/lib/permissions";
 
-import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { getActiveTenantId, isTenantOwner } from "@/lib/auth";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { getWorkspaceSetting } from "@/lib/settings";
 import { WARRANTY_PARTS_KEY, parsePartList } from "@/lib/warrantyParts";
 import { saveWarrantyPartList } from "@/app/actions/warrantyParts";
+import { saveWarrantyTransferRule } from "@/app/actions/vehicleTransfer";
+import { withClaimants } from "@/lib/warrantyClaimant";
+import { warrantyTransferRule } from "@/lib/vehicleOwnership";
+import { WARRANTY_TRANSFER_LABELS, WARRANTY_TRANSFER_RULES } from "@/lib/vehicleTransferRules";
 
 export const dynamic = "force-dynamic";
 
@@ -29,11 +33,8 @@ export default async function WarrantyPage() {
     hasPermission(user, "warranty.manage"),
   ]);
   const vehicleScope = vehicleIds === null ? {} : { id: { in: vehicleIds } };
-  // The owner names the parts a warranty can cover (lib/warrantyParts.ts).
-  const tenantId = await getActiveTenantId();
-  const partList = tenantId && (await isTenantOwner()) ? parsePartList(await getWorkspaceSetting(tenantId, WARRANTY_PARTS_KEY)) : null;
 
-  const [vehicles, claims, recalls] = await Promise.all([
+  const [vehicles, loadedClaims, recalls, isOwner, tenantId] = await Promise.all([
     prisma.vehicle.findMany({ where: vehicleScope, include: { contact: true } }),
     prisma.warrantyClaim.findMany({
       where: {
@@ -44,7 +45,14 @@ export default async function WarrantyPage() {
       include: { vehicle: { include: { contact: true } } },
     }),
     prisma.recall.findMany({ orderBy: { createdAt: "desc" } }),
+    isTenantOwner(),
+    getActiveTenantId(),
   ]);
+  // Each claim names its claimant (the owner when it was logged), not whoever owns the vehicle now.
+  const claims = await withClaimants(loadedClaims);
+  const transferRule = isOwner && tenantId ? await warrantyTransferRule(tenantId) : null;
+  // The owner names the parts a warranty can cover (lib/warrantyParts.ts).
+  const partList = isOwner && tenantId ? parsePartList(await getWorkspaceSetting(tenantId, WARRANTY_PARTS_KEY)) : null;
 
   const expiring = vehicles
     .map((vehicle) => ({ vehicle, warranty: computeWarranty(vehicle) }))
@@ -97,13 +105,13 @@ export default async function WarrantyPage() {
         <h2 className="font-semibold">Open warranty claims ({claims.length})</h2>
         <ResponsiveEntityTable>
           <table className="table-base">
-            <thead><tr><th>Cart</th><th>Owner</th><th>Fault</th><th>Status</th><th>Opened</th><th /></tr></thead>
+            <thead><tr><th>Cart</th><th>Claimant</th><th>Fault</th><th>Status</th><th>Opened</th><th /></tr></thead>
             <tbody>
               {claims.length === 0 && <tr><td data-empty colSpan={6} className="text-center text-slate-400 py-6">No accessible open claims.</td></tr>}
               {claims.map((claim) => (
                 <tr key={claim.id}>
                   <td data-primary data-label="Cart"><Link href={`/vehicles/${claim.vehicleId}`} className="text-orange-400 hover:underline font-medium">{claim.vehicle.model}</Link></td>
-                  <td data-label="Owner">{contactName(claim.vehicle.contact)}</td>
+                  <td data-label="Claimant">{contactName(claim.vehicle.contact)}</td>
                   <td data-label="Fault" className="max-w-xs truncate" title={claim.description}><Link href={`/warranty/${claim.id}`} className="text-slate-300 hover:text-orange-400 hover:underline">{claim.description}</Link></td>
                   <td data-label="Status"><span className={`badge ${claimColors[claim.status]}`}>{claim.status}</span></td>
                   <td data-label="Opened" className="text-slate-400">{formatDate(claim.claimedAt)}</td>
@@ -114,6 +122,24 @@ export default async function WarrantyPage() {
           </table>
         </ResponsiveEntityTable>
       </section>
+
+      {transferRule && (
+        <section className="card max-w-2xl space-y-2">
+          <h2 className="font-semibold">Warranty when a vehicle changes hands</h2>
+          <p className="text-xs text-slate-400">
+            When someone transfers a vehicle to a new owner, does the warranty go with it? The warranty&apos;s dates never
+            change; this decides whether the new owner is covered by them.
+          </p>
+          <SaveForm action={saveWarrantyTransferRule} success="Saved" resetOnSuccess={false} className="flex flex-wrap gap-2">
+            <select name="rule" defaultValue={transferRule} className="input max-w-md">
+              {WARRANTY_TRANSFER_RULES.map((rule) => (
+                <option key={rule} value={rule}>{WARRANTY_TRANSFER_LABELS[rule]}</option>
+              ))}
+            </select>
+            <SaveButton className="btn-secondary">Save</SaveButton>
+          </SaveForm>
+        </section>
+      )}
 
       <section className="space-y-3">
         <h2 className="font-semibold">Recalls & service bulletins</h2>

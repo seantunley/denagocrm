@@ -23,6 +23,7 @@ import { signedDeliveryNote } from "@/lib/deliveryNoteSigning";
 import { signedPdfIsSafeToDelete } from "@/lib/signing/blobReferences";
 import { staffActor } from "@/lib/signing/events";
 import { DELIVERY_NOTE } from "@/lib/signing/subject";
+import { addMonths } from "date-fns";
 import { holdSubjectRequests, recordSubjectWithdrawn, withdrawOpenSubjectRequests } from "@/lib/signing/subjectRequests";
 import type { PermissionUser } from "@/lib/permissions";
 import { financeDeliveryRefusal, financeDeliveryRefusalInTx } from "@/lib/dealFinance";
@@ -237,9 +238,8 @@ export async function deliverQuote(input: {
 
   const deliveredAt = new Date();
   const warrantyMonths = Math.max(0, input.warrantyMonths ?? 12);
-  const warrantyEndAt = warrantyMonths
-    ? new Date(deliveredAt.getFullYear(), deliveredAt.getMonth() + warrantyMonths, deliveredAt.getDate())
-    : null;
+  // Clamped to the month's last day, as every warranty date is (lib/warranty.ts).
+  const warrantyEndAt = warrantyMonths ? addMonths(deliveredAt, warrantyMonths) : null;
 
   /*
    * NOTHING ABOVE THIS POINT WRITES. Everything below either commits together
