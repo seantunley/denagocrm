@@ -47,6 +47,16 @@ import { logAudit } from "@/lib/audit";
  * — by which point the loser has already written a message that went nowhere.
  * See the block inside the function for why the ordering is the whole point.
  */
+/**
+ * The comment a reply or Hide is aimed at must be one FILED on this thread — its provider id is the filed row's
+ * messageId (commentThreads.recordPostComment). The thread guard proves access to the thread, not to whatever comment
+ * id the browser sends (review of #1181). Not exported: a helper, not an action.
+ */
+async function requireCommentOnThread(conversationId: string, commentId: string): Promise<void> {
+  const filed = await prisma.communication.findFirst({ where: { conversationId, messageId: commentId }, select: { id: true } });
+  if (!filed) refuse("That comment isn't on this thread.");
+}
+
 export async function privateReplyToComment(
   conversationId: string,
   commentId: string,
@@ -79,6 +89,8 @@ export async function privateReplyToComment(
       if (!thread) refuse("That comment thread no longer exists.");
       // Threads has no private messages (lib/threads.ts): only Facebook and Instagram comments get a private reply.
       if (!commentAllowsPrivateReply(commentPlatform(thread.externalRef))) refuse("This platform has no private replies — reply publicly instead.");
+      // The comment must be one filed on THIS thread, as for the public reply and Hide.
+      await requireCommentOnThread(thread.id, commentId);
 
       /*
        * ONE PER COMMENT — RESERVED BEFORE THE SEND, NOT RECORDED AFTER IT.
@@ -200,6 +212,9 @@ export async function publicReplyToComment(
         select: { id: true, tenantId: true, externalRef: true },
       });
       if (!thread) refuse("That comment thread no longer exists.");
+      // The comment must be one filed on THIS thread (review of #1181): access to the thread is not access to any
+      // comment id the browser sends.
+      await requireCommentOnThread(thread.id, commentId);
 
       // A Threads post is answered through the workspace's Threads connection (lib/threads.ts); the rest through Meta.
       const onThreads = commentPlatform(thread.externalRef) === "threads";
@@ -266,8 +281,7 @@ export async function hideComment(conversationId: string, commentId: string): Pr
       if (!thread) refuse("That comment thread no longer exists.");
       if (commentPlatform(thread.externalRef) !== "threads") refuse("Hiding is available for Threads comments.");
       // The comment must be one filed on this thread.
-      const filed = await prisma.communication.findFirst({ where: { conversationId: thread.id, messageId: commentId }, select: { id: true } });
-      if (!filed) refuse("That comment isn't on this thread.");
+      await requireCommentOnThread(thread.id, commentId);
       const hidden = await hideOnThreads(commentId, true);
       if (!hidden.ok) refuse(hidden.error ?? "Threads refused it.");
       await logAudit({ action: "comment.hidden", summary: `Hid a Threads comment (${commentId})`, userName: user.name });

@@ -2,6 +2,7 @@ import "server-only";
 import { basePrisma } from "./db";
 import { currentTenantScope } from "./tenantScope";
 import { putTenantCredentialBundle, resolveIntegrationBundle } from "./settings";
+import { claimChannelEndpoint } from "./channelClaim";
 
 /**
  * THREADS (Sean, 2026-11-21: "Build those into the CRM as new options for social media accounts"). Comments on the
@@ -62,17 +63,12 @@ export async function exchangeThreadsCode(input: { tenantId: string; code: strin
   if (!me.ok || typeof me.body?.id !== "string") throw new Error("The Threads account could not be identified.");
   const accountId = me.body.id;
   const username = typeof me.body.username === "string" ? me.body.username : "";
-  const claimed = await basePrisma.channelIdentity.findUnique({
-    where: { channel_externalId: { channel: "threads", externalId: accountId } },
-    select: { tenantId: true },
-  });
-  if (claimed && claimed.tenantId !== input.tenantId) throw new Error("This Threads account is already connected to another workspace.");
-  await basePrisma.channelIdentity.updateMany({ where: { tenantId: input.tenantId, channel: "threads", disabledAt: null }, data: { disabledAt: new Date() } });
-  await basePrisma.channelIdentity.upsert({
-    where: { channel_externalId: { channel: "threads", externalId: accountId } },
-    update: { tenantId: input.tenantId, label: `@${username || accountId}`, disabledAt: null },
-    create: { tenantId: input.tenantId, channel: "threads", externalId: accountId, label: `@${username || accountId}` },
-  });
+  // Claimed ATOMICALLY (review of #1181): the first workspace wins, a racing second one is refused — never moved.
+  if (!(await claimChannelEndpoint(input.tenantId, "threads", accountId, `@${username || accountId}`))) {
+    throw new Error("This Threads account is already connected to another workspace.");
+  }
+  // Then any OTHER Threads account this workspace had connected is retired.
+  await basePrisma.channelIdentity.updateMany({ where: { tenantId: input.tenantId, channel: "threads", disabledAt: null, NOT: { externalId: accountId } }, data: { disabledAt: new Date() } });
   const expiresIn = typeof long.body.expires_in === "number" ? long.body.expires_in : SIXTY_DAYS_S;
   // Only after the account is proven this workspace's: a refused claim leaves no usable token behind.
   await putTenantCredentialBundle(input.tenantId, {

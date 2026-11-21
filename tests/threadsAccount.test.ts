@@ -56,7 +56,12 @@ test("Threads in the inbox: its icon, public replies and hiding — never a priv
   assert.match(actions, /if \(!commentAllowsPrivateReply\(commentPlatform\(thread\.externalRef\)\)\) refuse\(/, "the server refuses a private reply on Threads");
   assert.match(actions, /const sent = onThreads \? await replyOnThreads\(commentId, body\) : await sendPublicCommentReply\(commentId, body\);/);
   assert.match(actions, /if \(commentPlatform\(thread\.externalRef\) !== "threads"\) refuse\("Hiding is available for Threads comments\."\);/);
-  assert.match(actions, /const filed = await prisma\.communication\.findFirst\(\{ where: \{ conversationId: thread\.id, messageId: commentId \}/, "only a comment filed on this thread");
+  // Review of #1181: a reply or Hide may target only a comment FILED on this thread — private, public and Hide alike.
+  assert.match(actions, /async function requireCommentOnThread\(conversationId: string, commentId: string\): Promise<void> \{\s*const filed = await prisma\.communication\.findFirst\(\{ where: \{ conversationId, messageId: commentId \}/);
+  assert.equal(actions.match(/await requireCommentOnThread\(thread\.id, commentId\);/g)?.length, 3);
+  const publicReply = actions.slice(actions.indexOf("export async function publicReplyToComment"));
+  assert.ok(publicReply.indexOf("requireCommentOnThread(") < publicReply.indexOf("replyOnThreads("), "checked before anything is sent");
+  assert.doesNotMatch(actions, /^export async function requireCommentOnThread/m, "a helper, not a callable action");
   const list = code("src/components/CommentThreadList.tsx");
   assert.match(list, /canReplyPrivately=\{thread\.privateReplies\}/);
   assert.match(list, /\{!canReplyPrivately \? null : comment\.privateReplied \? \(/);
@@ -78,7 +83,15 @@ test("Connect Threads: this workspace's own app, the account claimed before any 
   const threads = TENANT_CREDENTIAL_INTEGRATIONS.find((integration) => integration.id === "threads")!;
   assert.deepEqual(threads.fields.filter((f) => f.required !== false).map((f) => f.key), ["THREADS_APP_ID", "THREADS_APP_SECRET", "THREADS_VERIFY_TOKEN"]);
   const lib = code("src/lib/threads.ts");
-  assert.ok(lib.indexOf('throw new Error("This Threads account is already connected to another workspace.")') < lib.indexOf("await putTenantCredentialBundle(input.tenantId, {"));
+  // Review of #1181: claimed ATOMICALLY (first wins, an active foreign owner is never rewritten), before any token.
+  assert.match(lib, /if \(!\(await claimChannelEndpoint\(input\.tenantId, "threads", accountId, `@\$\{username \|\| accountId\}`\)\)\) \{\s*throw new Error\("This Threads account is already connected to another workspace\."\);/);
+  assert.ok(lib.indexOf("claimChannelEndpoint(") < lib.indexOf("await putTenantCredentialBundle(input.tenantId, {"));
+  assert.doesNotMatch(lib, /channelIdentity\.upsert\(/, "no unconditional overwrite of the owner");
+  const claim = code("src/lib/channelClaim.ts");
+  assert.match(claim, /await basePrisma\.channelIdentity\.create\(\{ data: \{ tenantId, channel, externalId, label \} \}\);\s*return true;/);
+  assert.match(claim, /if \(\(error as \{ code\?: string \} \| null\)\?\.code !== "P2002"\) throw error;/);
+  assert.match(claim, /where: \{ channel, externalId, OR: \[\{ tenantId \}, \{ disabledAt: \{ not: null \} \}\] \},/);
+  assert.match(claim, /return count === 1;/);
   assert.match(lib, /const REFRESH_WITHIN_MS = 7 \* 24 \* 60 \* 60 \* 1000;/);
   assert.match(lib, /grant_type: "th_refresh_token"/);
   // Reply: create, wait for FINISHED, then publish.
