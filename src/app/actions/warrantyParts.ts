@@ -10,6 +10,7 @@ import { isModuleEnabled } from "@/lib/modules/enabled";
 import { requireVehicleAccess } from "@/lib/permissions";
 import { getWorkspaceSetting, putWorkspaceSetting } from "@/lib/settings";
 import { formatDate } from "@/lib/format";
+import { issueWarrantyCertificate } from "@/lib/warrantyCertificateStore";
 import {
   WARRANTY_PARTS_KEY,
   coverOf,
@@ -66,6 +67,20 @@ export async function saveProductWarrantyTerms(productId: string, formData: Form
       });
       revalidatePath(`/products/${productId}`);
       return { success: "Saved" };
+    }),
+  );
+}
+
+/** Issue (or reissue, after a correction) the vehicle's warranty certificate: filed on the customer, not sent. */
+export async function issueVehicleCertificate(vehicleId: string) {
+  return withActingStaffScope(() =>
+    asActionResult(async () => {
+      const user = await requireVehicleAccess(vehicleId, "warranty.manage");
+      const tenantId = await workspace();
+      const issued = await issueWarrantyCertificate({ tenantId, vehicleId, actor: user, why: "reissue" });
+      if (!issued) refuse("This vehicle has no warranty recorded — set its cover first.");
+      revalidatePath(`/vehicles/${vehicleId}`);
+      return { success: `Certificate ${issued.number} filed` };
     }),
   );
 }

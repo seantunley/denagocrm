@@ -1,6 +1,7 @@
 import ModalTrigger from "@/components/Modal";
 import WarrantyTermsForm from "@/components/WarrantyTermsForm";
-import { saveVehicleWarranty } from "@/app/actions/warrantyParts";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
+import { issueVehicleCertificate, saveVehicleWarranty } from "@/app/actions/warrantyParts";
 import { formatDate } from "@/lib/format";
 import { johannesburgDateKey } from "@/lib/activityDay";
 import { parseTerms, termLabel, type PartCover } from "@/lib/warrantyParts";
@@ -20,11 +21,14 @@ export default function VehicleWarrantyParts({
   cover,
   parts,
   canManage,
+  certificate,
 }: {
   vehicle: { id: string; warrantyParts: unknown; warrantyStartsAt: Date | null; purchaseDate: Date | null };
   cover: PartCover[];
   parts: readonly string[];
   canManage: boolean;
+  /** The latest filed certificate (lib/warrantyCertificateStore.ts), if any. */
+  certificate?: { id: string; createdAt: Date } | null;
 }) {
   const start = vehicle.warrantyStartsAt ?? vehicle.purchaseDate;
   return (
@@ -52,6 +56,24 @@ export default function VehicleWarrantyParts({
             ))}
           </tbody>
         </table>
+      )}
+      {(certificate || (canManage && cover.length > 0)) && (
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
+          {certificate ? (
+            <a href={`/api/files/${certificate.id}`} target="_blank" rel="noreferrer" className="text-orange-400 hover:underline">
+              Warranty certificate · {formatDate(certificate.createdAt)}
+            </a>
+          ) : (
+            <span>No certificate filed yet.</span>
+          )}
+          {canManage && cover.length > 0 && (
+            <SaveForm action={issueVehicleCertificate.bind(null, vehicle.id)} success="Certificate filed">
+              <SaveButton className="btn-secondary btn-sm" pendingLabel="Making the certificate…">
+                {certificate ? "Reissue certificate" : "Issue certificate"}
+              </SaveButton>
+            </SaveForm>
+          )}
+        </div>
       )}
       <div className="flex items-center justify-between gap-2 text-xs text-slate-400">
         <span>{start ? `From ${formatDate(start)}` : ""}</span>

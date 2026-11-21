@@ -30,6 +30,7 @@ import { WARRANTY_READ } from "@/lib/warrantyAccess";
 import VehicleWarrantyParts from "@/components/VehicleWarrantyParts";
 import { WARRANTY_PARTS_KEY, parsePartList, vehicleCover } from "@/lib/warrantyParts";
 import { getWorkspaceSetting } from "@/lib/settings";
+import { CERTIFICATE_TAG } from "@/lib/warrantyCertificate";
 import CustomFieldsCard from "@/components/custom-fields/CustomFieldsCard";
 import ChecklistCard from "@/components/checklists/ChecklistCard";
 import { runsForHost, templatesForHostRecord } from "@/lib/checklists/store";
@@ -425,7 +426,13 @@ export default async function VehicleDetailPage({
                     {w.expiryDate ? ` · ${formatDate(w.expiryDate)}` : ""}
                   </span>
                 </div>
-                <VehicleWarrantyParts vehicle={vehicle} cover={vehicleCover(vehicle, new Date())} parts={warrantyPartList} canManage={canManageWarranty} />
+                <VehicleWarrantyParts
+                  vehicle={vehicle}
+                  cover={vehicleCover(vehicle, new Date())}
+                  parts={warrantyPartList}
+                  canManage={canManageWarranty}
+                  certificate={vehicle.documents.find((d) => d.tag === CERTIFICATE_TAG && !d.replacedById) ?? null}
+                />
                 <form action={addWarrantyClaim.bind(null, vehicle.id)} className="flex gap-2 mb-4">
                   <input
                     name="description"

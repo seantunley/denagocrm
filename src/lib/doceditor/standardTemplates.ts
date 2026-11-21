@@ -30,7 +30,8 @@ export type StandardDocKey =
   | "delivery"
   | "jobcard"
   | "service-report"
-  | "warranty-claim";
+  | "warranty-claim"
+  | "warranty-certificate";
 
 const INK = "#020617";
 const ACCENT = "#ea580c";
@@ -521,6 +522,30 @@ function warrantyClaimTemplate(): DocumentModel {
 }
 
 /**
+ * The warranty certificate (Sean, 2026-11-21: "professional with the logos and details. A certificate sort of feel"):
+ * the workspace's banner and logo, who owns what, each part's cover from the vehicle's own warranty, the terms, a
+ * signature and the branded footer. Bound to a vehicle (lib/warrantyCertificate.ts), edited in Document Studio.
+ */
+function warrantyCertificateTemplate(): DocumentModel {
+  return documentModel("Warranty certificate", [
+    [banner("WARRANTY CERTIFICATE", "{{certificate.number}}")],
+    [small(text("Issued: {{certificate.date}}")), small(text("Cover from: {{warranty.start}}", "right"))],
+    [text("This certifies that the vehicle below, delivered to {{customer.name}}, is covered by the warranty of {{company.name}} as set out on this certificate.", "center")],
+    [
+      infoCard("OWNER", "{{customer.name}}", "{{customer.lines}}"),
+      infoCard("VEHICLE", "{{vehicle}}", "{{vehicle.lines}}", INK),
+    ],
+    [infoCard("COVER", "", "{{warranty.partsLines}}")],
+    [textBox(
+      "WARRANTY TERMS",
+      "Each part is covered from the delivery date for the period shown. The warranty covers defects in materials and workmanship under normal use. It does not cover normal wear and tear, accident damage, misuse, neglect, or repairs and modifications not made or approved by {{company.name}}. Keep this certificate with the vehicle's service records, and have the vehicle serviced as scheduled.",
+    )],
+    [smallSignLine("For {{company.name}} · Date"), smallSignLine("Owner · Date")],
+    [footer()],
+  ]);
+}
+
+/**
  * The premium "showcase" quotation: dark header band, info strip, a vehicle hero
  * bound to the quote's primary vehicle (its Product's photo, tagline and specs),
  * line items, a totals box, terms + acceptance cards and a dark footer band.
@@ -845,6 +870,7 @@ const BUILDERS: Record<StandardDocKey, (options: StandardTemplateOptions) => Doc
   jobcard: jobcardTemplate,
   "service-report": serviceReportTemplate,
   "warranty-claim": warrantyClaimTemplate,
+  "warranty-certificate": warrantyCertificateTemplate,
 };
 
 export const STANDARD_TEMPLATE_KEYS = Object.keys(BUILDERS) as StandardDocKey[];
@@ -859,6 +885,7 @@ export const STANDARD_TEMPLATE_NAMES: Record<StandardDocKey, string> = {
   jobcard: "Job card",
   "service-report": "Service report",
   "warranty-claim": "Warranty claim",
+  "warranty-certificate": "Warranty certificate",
 };
 
 export function standardTemplateFor(key: StandardDocKey, options: StandardTemplateOptions = {}): DocumentModel {

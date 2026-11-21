@@ -27,6 +27,7 @@ import { holdSubjectRequests, recordSubjectWithdrawn, withdrawOpenSubjectRequest
 import type { PermissionUser } from "@/lib/permissions";
 import { financeDeliveryRefusal, financeDeliveryRefusalInTx } from "@/lib/dealFinance";
 import { vehicleWarrantyFrom } from "@/lib/warrantyParts";
+import { issueCertificatesAtDelivery } from "@/lib/warrantyCertificateStore";
 
 /**
  * THE ONE DELIVERY. Both "Mark delivered" on the Deliveries board and "Complete
@@ -455,6 +456,8 @@ export async function deliverQuote(input: {
       user,
     });
   }
+  // Each delivered vehicle's warranty certificate, filed on the customer — never sent (lib/warrantyCertificateStore.ts).
+  await issueCertificatesAtDelivery(tenantId, vehicleIds, actor);
   if (!catchUp) {
     if (quote.leadId) {
       await emitLeadJourneyEvent("delivered", quote.leadId, {
