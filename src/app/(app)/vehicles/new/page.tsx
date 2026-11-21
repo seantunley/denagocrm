@@ -9,6 +9,7 @@ import { prisma } from "@/lib/db";
 import { contactName } from "@/lib/format";
 import { getAccessibleContactIds, requirePermission } from "@/lib/permissions";
 import { registrationQueueForQuote } from "@/lib/quoteDelivery";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 
 const vehicleJourney = [
   { icon: History, label: "Customer garage", detail: "The vehicle becomes part of the owner’s permanent sales and service timeline." },
@@ -46,6 +47,10 @@ export default async function NewVehiclePage({
    */
   // Minus the carts that came out of stock: those got their vehicle at delivery.
   const queue = quoteId ? await registrationQueueForQuote(quoteId) : [];
+  const warrantyOn = await isModuleEnabled("warranty");
+  const journey = warrantyOn
+    ? vehicleJourney
+    : vehicleJourney.filter((step) => step.label !== "Warranty-ready identity");
   const position = Math.max(0, Number.parseInt(seq ?? "0", 10) || 0);
   const current = queue[position] ?? null;
 
@@ -66,8 +71,8 @@ export default async function NewVehiclePage({
         }
         description={
           queue.length > 1
-            ? `This delivery included ${queue.length} vehicles. Each one needs its own record — VIN, registration and mileage differ per unit, and so does its warranty and service history.`
-            : "Connect the vehicle to its owner and establish the identity, warranty and service data the team will rely on."
+            ? `This delivery included ${queue.length} vehicles. Each one needs its own record — VIN, registration and mileage differ per unit, and so does its ${warrantyOn ? "warranty and " : ""}service history.`
+            : `Connect the vehicle to its owner and establish the identity, ${warrantyOn ? "warranty and " : ""}service data the team will rely on.`
         }
       />
 
@@ -99,6 +104,7 @@ export default async function NewVehiclePage({
               : "Register vehicle"
           }
           showInitialKm
+          showWarranty={warrantyOn}
           variant="page"
         />
 
@@ -107,7 +113,7 @@ export default async function NewVehiclePage({
             <div className="pointer-events-none absolute -right-12 -top-12 size-32 rounded-full bg-primary/10 blur-3xl" />
             <SectionHeading title="Registration creates" description="The vehicle becomes an active relationship and service record immediately." />
             <ol className="relative mt-5 space-y-5 before:absolute before:bottom-5 before:left-[17px] before:top-5 before:w-px before:bg-border">
-              {vehicleJourney.map(({ icon: Icon, label, detail }, index) => (
+              {journey.map(({ icon: Icon, label, detail }, index) => (
                 <li key={label} className="relative flex gap-3">
                   <span className="relative z-10 grid size-9 shrink-0 place-items-center rounded-xl border border-border bg-card text-muted-foreground"><Icon className="size-4" /></span>
                   <div className="min-w-0 pt-0.5">

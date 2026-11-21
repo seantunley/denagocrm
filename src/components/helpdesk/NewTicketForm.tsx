@@ -6,7 +6,7 @@ import ContactPicker from "@/components/ContactPicker";
 type Option = { id: string; label: string };
 
 /** Capture form for opening a ticket on a customer's behalf. Rendered inside a modal. */
-export function NewTicketForm({ contacts, mailboxes }: { contacts: Option[]; mailboxes: Option[] }) {
+export function NewTicketForm({ contacts, mailboxes, types = TICKET_TYPES }: { contacts: Option[]; mailboxes: Option[]; types?: readonly string[] }) {
   return (
     <SaveForm action={createTicket} success="Ticket created" className="card space-y-4">
       <div>
@@ -28,7 +28,7 @@ export function NewTicketForm({ contacts, mailboxes }: { contacts: Option[]; mai
         <div>
           <label className="label" htmlFor="type">Type</label>
           <select id="type" name="type" defaultValue="support" className="input capitalize">
-            {TICKET_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+            {types.map((t) => <option key={t} value={t}>{t}</option>)}
           </select>
         </div>
         <div>

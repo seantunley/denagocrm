@@ -54,12 +54,12 @@ export function PortalPreferenceForm({ defaults }: { defaults: { serviceReminder
   );
 }
 
-export function PortalCaseForm({ vehicles, contacts, automotive = true }: { vehicles: Option[]; contacts: Option[]; automotive?: boolean }) {
+export function PortalCaseForm({ vehicles, contacts, automotive = true, warranty = true }: { vehicles: Option[]; contacts: Option[]; automotive?: boolean; warranty?: boolean }) {
   const [state, action, pending] = useActionState(createPortalCase, {});
   return (
     <form action={action} className="space-y-4">
       <div className="grid sm:grid-cols-2 gap-3">
-        <label className="space-y-1"><span className="text-xs text-slate-400">Request type</span><select name="type" className="input"><option value="support">General support</option>{automotive && <><option value="service">Service question</option><option value="warranty">Warranty request</option><option value="delivery">Delivery question</option></>}<option value="documents">Document request</option></select></label>
+        <label className="space-y-1"><span className="text-xs text-slate-400">Request type</span><select name="type" className="input"><option value="support">General support</option>{automotive && <><option value="service">Service question</option>{warranty && <option value="warranty">Warranty request</option>}<option value="delivery">Delivery question</option></>}<option value="documents">Document request</option></select></label>
         <label className="space-y-1"><span className="text-xs text-slate-400">Priority</span><select name="priority" className="input"><option value="normal">Normal</option><option value="high">High</option><option value="urgent">Urgent</option></select></label>
         {contacts.length > 1 && <label className="space-y-1"><span className="text-xs text-slate-400">Customer/account contact</span><select name="contactId" className="input">{contacts.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select></label>}
         {automotive && <label className="space-y-1"><span className="text-xs text-slate-400">Vehicle</span><select name="vehicleId" className="input"><option value="">Not vehicle-specific</option>{vehicles.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select></label>}

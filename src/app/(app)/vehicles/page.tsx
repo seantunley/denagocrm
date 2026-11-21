@@ -16,6 +16,7 @@ import {
   requireAnyPermission,
 } from "@/lib/permissions";
 import RecordContextMenu, { type RecordContextAction } from "@/components/RecordContextMenu";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 
 export default async function VehiclesPage({
   searchParams,
@@ -24,11 +25,12 @@ export default async function VehiclesPage({
 }) {
   const user = await requireAnyPermission("vehicles.view_all", "vehicles.view_owned");
   const { filter } = await searchParams;
-  const [vehicleIds, contactIds, canManage, canManageJobs] = await Promise.all([
+  const [vehicleIds, contactIds, canManage, canManageJobs, warrantyOn] = await Promise.all([
     getAccessibleVehicleIds(user),
     getAccessibleContactIds(user),
     hasPermission(user, "vehicles.manage"),
     hasPermission(user, "jobcards.manage"),
+    isModuleEnabled("warranty"),
   ]);
   const [vehicles, contacts, products] = await Promise.all([
     prisma.vehicle.findMany({
@@ -84,6 +86,7 @@ export default async function VehiclesPage({
                 }))}
                 submitLabel="Register vehicle"
                 showInitialKm
+                showWarranty={warrantyOn}
                 variant="dialog"
               />
             </ModalTrigger>

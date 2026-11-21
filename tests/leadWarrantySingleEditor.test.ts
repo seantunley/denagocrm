@@ -224,7 +224,8 @@ for (const page of [
 
 test("the warranty document route keeps the module guard the (print) layout gave the page", () => {
   const routeSrc = src("src/app/(print)/warranty/[id]/print/document/route.ts");
-  const moduleGuard = routeSrc.indexOf('isModuleEnabled("automotive")');
+  // Its own module since 2026-11-21 (Warranty needs Automotive, so this guards both).
+  const moduleGuard = routeSrc.indexOf('isModuleEnabled("warranty")');
   assert.ok(moduleGuard > -1 && moduleGuard < routeSrc.indexOf("requireWarrantyClaimReadAccess(id)"));
 });
 

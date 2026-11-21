@@ -70,6 +70,8 @@ export type FieldOption = { value: string; label: string };
 export type SourceField = {
   /** Stable id used in saved configs. Renaming one is a breaking change. */
   key: string;
+  /** A column that belongs to a switchable module (a vehicle's warranty): offered only while it is on. */
+  module?: ModuleId;
   label: string;
   type: FieldType;
   /**
@@ -364,7 +366,7 @@ export const SOURCES: readonly SourceDef[] = [
       { key: "openedAt", label: "Opened", type: "date", path: "openedAt" },
       { key: "completedAt", label: "Completed", type: "date", path: "completedAt" },
       { key: "estimatedHours", label: "Estimated hours", type: "number", path: "estimatedHours", aggregatable: true },
-      { key: "underWarranty", label: "Under warranty", type: "boolean", path: "underWarranty", groupable: true },
+      { key: "underWarranty", label: "Under warranty", type: "boolean", path: "underWarranty", groupable: true, module: "warranty" },
       { key: "isSubcontracted", label: "Subcontracted", type: "boolean", path: "isSubcontracted", groupable: true },
     ],
   },
@@ -388,7 +390,7 @@ export const SOURCES: readonly SourceDef[] = [
       { key: "contact", label: "Owner", type: "relation", path: "contact.firstName", paths: ["contact.lastName", "contact.company"], filterable: false, sortable: false, groupable: false },
       { key: "fleet", label: "Fleet", type: "relation", path: "fleet.name", sortable: false, groupable: true },
       { key: "purchaseDate", label: "Purchased", type: "date", path: "purchaseDate" },
-      { key: "warrantyMonths", label: "Warranty (months)", type: "number", path: "warrantyMonths", aggregatable: true },
+      { key: "warrantyMonths", label: "Warranty (months)", type: "number", path: "warrantyMonths", aggregatable: true, module: "warranty" },
       { key: "createdAt", label: "Added", type: "date", path: "createdAt" },
     ],
   },
@@ -432,6 +434,7 @@ export function canUseSource(source: SourceDef, access: SourceAccess): boolean {
 
 /** May this viewer see this particular column? */
 export function canUseField(field: SourceField, access: SourceAccess): boolean {
+  if (field.module && !access.modules.has(field.module)) return false;
   return !field.permission || access.permissions.has(field.permission);
 }
 

@@ -40,7 +40,7 @@ type DocDef = {
    * offered the template at all — a breastfeeding-art studio has no job cards,
    * test drives or vehicle deliveries.
    */
-  module?: "automotive";
+  module?: "automotive" | "warranty";
 };
 
 export const DOC_DEFS: Record<DocKey, DocDef> = {
@@ -151,7 +151,8 @@ export const DOC_DEFS: Record<DocKey, DocDef> = {
   "warranty-claim": {
     label: "Warranty claim",
     group: "Workshop",
-    module: "automotive",
+    // Its own module (Sean, 2026-11-21), which itself needs Automotive.
+    module: "warranty",
     description: "Claim form for a warranty fault — for the customer and the manufacturer.",
     sections: [
       { id: "vehicle", label: "Vehicle & warranty details" },
@@ -171,7 +172,8 @@ export const DOC_GROUPS: { name: DocDef["group"]; keys: DocKey[] }[] = [
 /** Whether this workspace has the document at all (its module, if any, is on). */
 export function docKeyAvailable(key: string, enabledModules: ReadonlySet<string>): boolean {
   const needs = (DOC_DEFS as Record<string, DocDef | undefined>)[key]?.module;
-  return !needs || enabledModules.has(needs);
+  // The warranty claim needs Warranty, and Warranty needs Automotive.
+  return !needs || (enabledModules.has(needs) && (needs !== "warranty" || enabledModules.has("automotive")));
 }
 
 /** DOC_GROUPS for this workspace: module-only documents removed, empty groups dropped. */

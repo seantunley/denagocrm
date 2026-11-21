@@ -827,7 +827,10 @@ export async function saveNotificationPrefs(formData: FormData) {
   return asActionResult(async () => {
     await requireTenantOwner();
     const enabled = new Set(formData.getAll("kinds").map(String));
-    const disabled = PUSH_KINDS.map((kind) => kind.id).filter((id) => !enabled.has(id));
+    // The Warranty module off: its toggle isn't on the form, so its stored choice is kept, not switched off by omission.
+    const warrantyShown = await isModuleEnabled("warranty");
+    const before = new Set(String((await getSetting("PUSH_DISABLED_KINDS")) ?? "").split(",").filter(Boolean));
+    const disabled = PUSH_KINDS.map((kind) => kind.id).filter((id) => (id === "warranty" && !warrantyShown ? before.has(id) : !enabled.has(id)));
     await putSetting("PUSH_DISABLED_KINDS", disabled.join(","));
     revalidatePath("/settings");
   });

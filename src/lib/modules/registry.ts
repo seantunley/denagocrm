@@ -18,7 +18,8 @@ export type ModuleId =
   | "multicurrency"
   | "suppliers"
   | "signatures"
-  | "finance";
+  | "finance"
+  | "warranty";
 
 export type AppModule = {
   id: ModuleId;
@@ -28,6 +29,8 @@ export type AppModule = {
   /** Another module this one is built on: with that one off, this one is off too (entitlement.ts). */
   requires?: ModuleId;
   routePrefixes: string[];
+  /** Permissions that belong to this module: with it off nobody holds them, not even the owner (permissions.ts). */
+  permissionPrefixes?: string[];
 };
 
 export const MODULE_REGISTRY: AppModule[] = [
@@ -71,11 +74,20 @@ export const MODULE_REGISTRY: AppModule[] = [
   {
     id: "automotive",
     label: "Automotive / Workshop",
-    description: "Vehicles, fleets, test drives, job cards, warranty, service and deliveries.",
+    description: "Vehicles, fleets, test drives, job cards, service and deliveries.",
     routePrefixes: [
-      "/vehicles", "/fleets", "/test-drives", "/jobcards", "/warranty",
+      "/vehicles", "/fleets", "/test-drives", "/jobcards",
       "/service-due", "/workshop-calendar", "/parts", "/deliveries", "/invoices",
     ],
+  },
+  {
+    id: "warranty",
+    label: "Warranty",
+    description: "Warranty cover on each vehicle, claims, recalls and warranty certificates. Off: everything warranty is hidden from the CRM, the portal and DAX; the records are kept.",
+    // Sean, 2026-11-21: "Warranty must be a completely separate module". Built on vehicles.
+    requires: "automotive",
+    routePrefixes: ["/warranty"],
+    permissionPrefixes: ["warranty."],
   },
   {
     id: "commerce",
@@ -162,6 +174,14 @@ const MODULE_BY_ID = new Map(MODULE_REGISTRY.map((mod) => [mod.id, mod]));
 
 export function getModule(id: ModuleId): AppModule | undefined {
   return MODULE_BY_ID.get(id);
+}
+
+/** The switchable module a permission belongs to, or null (most permissions belong to none). */
+export function moduleForPermission(permission: string): ModuleId | null {
+  for (const mod of MODULE_REGISTRY) {
+    if (mod.permissionPrefixes?.some((prefix) => permission.startsWith(prefix))) return mod.id;
+  }
+  return null;
 }
 
 export function moduleForPath(pathname: string): ModuleId {

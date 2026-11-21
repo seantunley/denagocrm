@@ -31,7 +31,7 @@ import { prisma } from "@/lib/db";
 import { contactName, formatDateTime } from "@/lib/format";
 import {
   FOLDERS,
-  TICKET_TYPES,
+  ticketTypesOffered,
   priorityMeta,
   statusMeta,
   type Folder,
@@ -113,14 +113,16 @@ export default async function CasesPage({
     type: sp.type ?? null,
   };
 
-  const [tickets, counts, mailboxes, tags, canCreate, automotiveOn] = await Promise.all([
+  const [tickets, counts, mailboxes, tags, canCreate, automotiveOn, warrantyOn] = await Promise.all([
     listTickets(user, filters),
     folderCounts(user, filters),
     listMailboxes(),
     listTags(),
     hasPermission(user, "cases.create"),
     isModuleEnabled("automotive"),
+    isModuleEnabled("warranty"),
   ]);
+  const types = ticketTypesOffered(warrantyOn);
 
   const contactIds = canCreate ? await getAccessibleContactIds(user) : [];
   const newTicketContacts = canCreate
@@ -161,6 +163,7 @@ export default async function CasesPage({
               <NewTicketForm
                 contacts={newTicketContacts.map((contact) => ({ id: contact.id, label: contactName(contact) }))}
                 mailboxes={mailboxes.map((mailbox) => ({ id: mailbox.id, label: mailbox.name }))}
+                types={types}
               />
             </ModalTrigger>
           ) : undefined}
@@ -239,6 +242,7 @@ export default async function CasesPage({
                 id: mailbox.id,
                 label: mailbox.name,
               }))}
+              types={types}
             />
           </ModalTrigger>
         ) : undefined}
@@ -364,7 +368,7 @@ export default async function CasesPage({
               </div>
               <select name="type" defaultValue={filters.type ?? ""} className="input h-10 rounded-xl bg-background/50 sm:w-40">
                 <option value="">All types</option>
-                {TICKET_TYPES.map((ticketType) => (
+                {types.map((ticketType) => (
                   <option key={ticketType} value={ticketType}>{titleCase(ticketType)}</option>
                 ))}
               </select>

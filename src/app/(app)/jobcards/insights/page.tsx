@@ -7,6 +7,7 @@ import { formatZAR } from "@/lib/format";
 import { WorkspaceHero } from "@/components/workspace-hero";
 import { stageMeta, isTerminalStage } from "@/lib/workshop-constants";
 import { getRegionalSettings } from "@/lib/settings";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 
 export const dynamic = "force-dynamic";
 
@@ -69,19 +70,20 @@ export default async function WorkshopInsightsPage() {
   for (const j of active) byStage.set(j.status, (byStage.get(j.status) ?? 0) + 1);
 
   const moneyFmt = await getRegionalSettings();
+  const warrantyOn = await isModuleEnabled("warranty");
   return (
     <div className="space-y-6">
       <WorkspaceHero
         icon={TrendingUp}
         eyebrow="Workshop intelligence"
         title="Workshop insights"
-        description="Understand work-in-progress, profitability, technician productivity and warranty recovery across workshop operations."
+        description={`Understand work-in-progress, profitability, technician productivity${warrantyOn ? " and warranty recovery" : ""} across workshop operations.`}
         actions={<Link href="/jobcards" className="btn-secondary btn-sm"><ArrowLeft className="size-4" /> Workshop jobs</Link>}
         stats={[
           { label: "Work in progress", value: formatZAR(wipCents, moneyFmt), detail: `${active.length} active job${active.length === 1 ? "" : "s"}`, icon: Gauge, tone: "primary" },
           { label: "Profit · 90 days", value: formatZAR(totals.profit, moneyFmt), detail: `${marginPct}% margin on ${formatZAR(totals.revenue, moneyFmt)}`, icon: BadgeDollarSign, tone: totals.profit >= 0 ? "success" : "danger" },
           { label: "Comeback rate · 90 days", value: `${comebackRate}%`, detail: `${totals.comebacks} of ${completed.length} completed`, icon: RotateCcw, tone: comebackRate > 10 ? "warning" : "default" },
-          { label: "Warranty recovered", value: formatZAR(totals.warranty, moneyFmt), detail: "Last 90 days", icon: ShieldCheck },
+          ...(warrantyOn ? [{ label: "Warranty recovered", value: formatZAR(totals.warranty, moneyFmt), detail: "Last 90 days", icon: ShieldCheck }] : []),
         ]}
       />
 
