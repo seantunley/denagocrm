@@ -6,6 +6,7 @@ import { TenantScopeError } from "./tenantGuard";
 import { deleteFile } from "./storage";
 import { logError } from "./errorLog";
 import { type CustomEntity } from "./customFields";
+import { contactKeptBecause } from "./contactKeep";
 
 export const TRASH_RETENTION_DAYS = 60;
 
@@ -357,7 +358,13 @@ export async function purgeTrash(): Promise<number> {
           SELECT "id", "tenantId" FROM ${Prisma.raw(`"${table}"`)}
           WHERE "id" IN (${Prisma.join(staleIds)}) AND "deletedAt" < ${cutoff}
           FOR UPDATE`);
-        const ids = locked.map((r) => r.id);
+        // A customer with a sale or filed paperwork is never deleted for good (lib/contactKeep.ts) — one trashed before
+        // that rule existed stays in the trash, restorable, instead.
+        const kept = new Set<string>();
+        if (model === "contact") {
+          for (const r of locked) if (await contactKeptBecause(tx, r.tenantId, r.id)) kept.add(r.id);
+        }
+        const ids = locked.map((r) => r.id).filter((id) => !kept.has(id));
         if (ids.length === 0) return { count: 0 };
         // The workspaces the purged rows belong to — children cascading with them are in the same ones.
         const tenants = [...new Set(locked.map((r) => r.tenantId).filter((t): t is string => Boolean(t)))];
