@@ -34,6 +34,7 @@ import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { hasIntegrationFlow, getIntegrationFlow, flowFieldKeys } from "@/lib/integrationFlow";
 import { getIntegrationConnections, type IntegrationConnectionState } from "@/lib/integrationConnection";
 import { IntegrationConfigFlow } from "@/components/integration-config-flow";
+import MetaConnectBox from "@/components/settings/MetaConnectBox";
 
 export const dynamic = "force-dynamic";
 
@@ -69,8 +70,9 @@ const XERO_NOTICES: Record<string, string> = {
   failed: "Xero sign-in could not be completed. Check the redirect URI in the Xero app matches this CRM's address, then try again.",
 };
 
-export default async function IntegrationsPage({ searchParams }: { searchParams?: Promise<{ xero?: string }> }) {
-  const xeroNotice = XERO_NOTICES[(await searchParams)?.xero ?? ""] ?? null;
+export default async function IntegrationsPage({ searchParams }: { searchParams?: Promise<{ xero?: string; meta?: string }> }) {
+  const params = await searchParams;
+  const xeroNotice = XERO_NOTICES[params?.xero ?? ""] ?? null;
   // Entirely sensitive (credential management) — gate the whole page.
   // Uses requireTenantOwner so a tenant's own provisioned owner can manage
   // their credentials without needing the global platform owner role (a
@@ -209,6 +211,9 @@ export default async function IntegrationsPage({ searchParams }: { searchParams?
                     </a>
                   </div>
                 )}
+
+                {/* Connect Facebook (2026-11-21): the business signs in and picks its Page — no token to paste. */}
+                {integration.id === "meta" && <MetaConnectBox tenantId={tenantId} notice={params?.meta ?? null} />}
 
                 {integration.id === "xero" && (
                   <div className="mb-5 rounded-lg border border-border bg-background/40 p-4">
