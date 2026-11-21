@@ -1,5 +1,5 @@
 import { basePrisma } from "@/lib/db";
-import { resolveTenantCredential } from "@/lib/settings";
+import { metaPageCredential } from "@/lib/metaPage";
 import { currentTenantScope } from "@/lib/tenantScope";
 import { ownedWriteTenantId } from "@/lib/tenantWrite";
 import { createIntakeLead } from "@/lib/leadIntake";
@@ -15,16 +15,21 @@ const G = "https://graph.facebook.com/v21.0";
  */
 export async function syncFacebookLeads(): Promise<number> {
   const tenantId = currentTenantScope()?.tenantId ?? null;
-  const token = await resolveTenantCredential(tenantId, "META_PAGE_ACCESS_TOKEN");
-  if (!token) return 0;
+  const credential = await metaPageCredential(tenantId);
+  if (!credential) return 0;
 
-  const pagesRes = await fetch(
-    `${G}/me/accounts?fields=id,name,access_token&access_token=${encodeURIComponent(token)}`,
-    { cache: "no-store", signal: AbortSignal.timeout(10000) }
-  );
-  if (!pagesRes.ok) throw new Error(`me/accounts ${pagesRes.status}`);
-  const pages: { data?: { id: string; name: string; access_token: string }[] } =
-    await pagesRes.json();
+  // A Page connected with Connect Facebook is the one Page (lib/metaPage.ts); a System User token lists its Pages.
+  let pages: { data?: { id: string; name: string; access_token: string }[] };
+  if (credential.kind === "connected") {
+    pages = { data: [{ id: credential.pageId, name: credential.pageName ?? "", access_token: credential.pageToken }] };
+  } else {
+    const pagesRes = await fetch(
+      `${G}/me/accounts?fields=id,name,access_token&access_token=${encodeURIComponent(credential.userToken)}`,
+      { cache: "no-store", signal: AbortSignal.timeout(10000) }
+    );
+    if (!pagesRes.ok) throw new Error(`me/accounts ${pagesRes.status}`);
+    pages = await pagesRes.json();
+  }
 
   let created = 0;
   for (const page of pages.data ?? []) {
