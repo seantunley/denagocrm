@@ -8,6 +8,7 @@ import { WARRANTY_READ } from "../../warrantyAccess";
 import { computeWarranty, warrantyLabels } from "../../warranty";
 import { termLabel, vehicleCover } from "../../warrantyParts";
 import { CERTIFICATE_TAG } from "../../warrantyCertificate";
+import { currentOwnersCertificate } from "../../assistantWarrantyCertificateRules";
 import { type ToolOutput, type User, fuzzy, refused } from "../lookupKit";
 
 const day = (d: Date | null | undefined) => (d ? johannesburgDateKey(d) : null);
@@ -42,7 +43,7 @@ export async function vehicleWarranty(user: User, args: { search?: string; limit
       purchaseDate: true, warrantyMonths: true, warrantyParts: true, warrantyStartsAt: true,
       product: { select: { name: true } },
       contact: { select: { firstName: true, lastName: true, company: true, isCompany: true } },
-      documents: { where: { tag: CERTIFICATE_TAG, deletedAt: null, replacedById: null }, orderBy: { createdAt: "desc" }, take: 1, select: { id: true, createdAt: true } },
+      documents: { where: { tag: CERTIFICATE_TAG, deletedAt: null, replacedById: null }, orderBy: { createdAt: "desc" }, take: 1, select: { id: true, createdAt: true, contactId: true } },
     },
   });
   const page = found.slice(0, take);
@@ -51,14 +52,19 @@ export async function vehicleWarranty(user: User, args: { search?: string; limit
     truncated: found.length > take,
     data: page.map((v) => {
       const overall = computeWarranty(v, now);
-      const certificate = v.documents[0];
+      // A previous owner's certificate is never offered as this owner's.
+      const certificate = currentOwnersCertificate(v.documents, v.contactId);
       return {
         vehicle: v.model, link: `/vehicles/${v.id}`, vin: v.vin, reg: v.regNumber, colour: v.color,
         owner: contactName(v.contact), ownerLink: `/contacts/${v.contactId}`, product: v.product?.name ?? null,
         delivered: day(v.warrantyStartsAt ?? v.purchaseDate),
         warranty: warrantyLabels[overall.status],
         cover: vehicleCover(v, now).map((c) => ({ part: c.part, cover: termLabel(c.months), until: day(c.until), status: c.status })),
-        certificate: certificate ? { link: `/api/files/${certificate.id}`, issued: day(certificate.createdAt) } : "none filed yet",
+        certificate: certificate
+          ? { link: `/api/files/${certificate.id}`, issued: day(certificate.createdAt) }
+          : v.documents.length > 0
+            ? "only a previous owner's is filed — a new one must be issued for the current owner"
+            : "none filed yet",
       };
     }),
     rows: page.map((v) => ({ label: `${v.model} — ${contactName(v.contact)}`, detail: v.regNumber ?? v.vin ?? "no reg", href: `/vehicles/${v.id}` })),

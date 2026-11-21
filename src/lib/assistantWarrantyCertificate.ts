@@ -8,7 +8,7 @@ import { canAccessVehicle, hasAnyPermission, type PermissionUser } from "./permi
 import { isModuleEnabled } from "./modules/enabled";
 import { WARRANTY_READ } from "./warrantyAccess";
 import { CERTIFICATE_TAG } from "./warrantyCertificate";
-import { linkedDocumentIds } from "./assistantWarrantyCertificateRules";
+import { currentOwnersCertificate, linkedDocumentIds } from "./assistantWarrantyCertificateRules";
 
 /**
  * "Send me the warranty certificate for …" on WhatsApp (Sean, 2026-11-21): the filed PDF goes to THE PERSON WHO ASKED,
@@ -33,10 +33,13 @@ export async function sendCertificatesInAnswer(input: {
   for (const id of ids) {
     try {
       const doc = await basePrisma.document.findFirst({
-        where: { id, tenantId, tag: CERTIFICATE_TAG, deletedAt: null },
-        select: { id: true, fileName: true, storedName: true, vehicleId: true },
+        where: { id, tenantId, tag: CERTIFICATE_TAG, deletedAt: null, replacedById: null },
+        select: { id: true, fileName: true, storedName: true, vehicleId: true, contactId: true },
       });
       if (!doc?.vehicleId || !(await canAccessVehicle(user, doc.vehicleId))) continue;
+      // Only the certificate made out to the vehicle's owner now — never a previous owner's.
+      const vehicle = await basePrisma.vehicle.findFirst({ where: { id: doc.vehicleId, tenantId, deletedAt: null }, select: { contactId: true } });
+      if (!vehicle || !currentOwnersCertificate([doc], vehicle.contactId)) continue;
       const pdf = await readFile(doc.storedName, tenantId);
       if (!(await input.phoneSafe())) return sent;
       const result = await sendWhatsAppDocument(waId, { content: pdf, filename: doc.fileName, contentType: "application/pdf" }, "Warranty certificate — for you. This copy was not sent to the customer.");

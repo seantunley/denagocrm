@@ -15,6 +15,7 @@ import { tenantEmailContent } from "@/lib/signing/signingEmail";
 import { describeBlockedReason, firstAllowedChannel } from "@/lib/communicationPolicy";
 import { vehicleCover } from "@/lib/warrantyParts";
 import { CERTIFICATE_TAG, partsLines } from "@/lib/warrantyCertificate";
+import { REISSUE_FOR_OWNER, currentOwnersCertificate } from "@/lib/assistantWarrantyCertificateRules";
 
 /**
  * Send the vehicle's filed warranty certificate to its owner — only when someone presses Send (Sean, 2026-11-21): by
@@ -33,13 +34,15 @@ export async function sendWarrantyCertificate(vehicleId: string) {
         select: {
           model: true, purchaseDate: true, warrantyMonths: true, warrantyParts: true, warrantyStartsAt: true,
           contact: { select: { id: true, firstName: true, lastName: true } },
-          documents: { where: { tag: CERTIFICATE_TAG, deletedAt: null, replacedById: null }, orderBy: { createdAt: "desc" }, take: 1, select: { id: true, fileName: true, storedName: true } },
+          documents: { where: { tag: CERTIFICATE_TAG, deletedAt: null, replacedById: null }, orderBy: { createdAt: "desc" }, take: 1, select: { id: true, fileName: true, storedName: true, contactId: true } },
         },
       });
       if (!vehicle) return refuse("This vehicle is in the trash or no longer exists.");
-      const certificate = vehicle.documents[0];
-      if (!certificate) refuse("No certificate is filed for this vehicle yet — press Issue certificate first.");
+      if (vehicle.documents.length === 0) refuse("No certificate is filed for this vehicle yet — press Issue certificate first.");
       const c = vehicle.contact;
+      // Only a certificate made out to the owner now — never a previous owner's.
+      const certificate = currentOwnersCertificate(vehicle.documents, c.id);
+      if (!certificate) return refuse(REISSUE_FOR_OWNER);
       const verdict = await firstAllowedChannel({ contactId: c.id, tenantId, purpose: "service", channels: ["email"] });
       if (!verdict.allowed || !verdict.destination) {
         await logAudit({ action: "communication.suppressed", summary: `Warranty certificate for ${vehicle.model} not sent — ${describeBlockedReason(verdict.reason)}`, contactId: c.id, user });

@@ -25,14 +25,16 @@ export default function VehicleWarrantyParts({
   canManage,
   certificate,
 }: {
-  vehicle: { id: string; warrantyParts: unknown; warrantyStartsAt: Date | null; purchaseDate: Date | null };
+  vehicle: { id: string; contactId: string; warrantyParts: unknown; warrantyStartsAt: Date | null; purchaseDate: Date | null };
   cover: PartCover[];
   parts: readonly string[];
   canManage: boolean;
   /** The latest filed certificate (lib/warrantyCertificateStore.ts), if any. */
-  certificate?: { id: string; createdAt: Date } | null;
+  certificate?: { id: string; createdAt: Date; contactId: string | null } | null;
 }) {
   const start = vehicle.warrantyStartsAt ?? vehicle.purchaseDate;
+  // After a transfer the filed certificate still names the previous owner: it is never sent as the new owner's.
+  const previousOwners = !!certificate && certificate.contactId !== vehicle.contactId;
   return (
     <div className="mb-4 space-y-2">
       {cover.length === 0 ? (
@@ -63,14 +65,14 @@ export default function VehicleWarrantyParts({
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
           {certificate ? (
             <a href={`/api/files/${certificate.id}`} target="_blank" rel="noreferrer" className="text-orange-400 hover:underline">
-              Warranty certificate · {formatDate(certificate.createdAt)}
+              {previousOwners ? "Previous owner's certificate" : "Warranty certificate"} · {formatDate(certificate.createdAt)}
             </a>
           ) : (
             <span>No certificate filed yet.</span>
           )}
           {canManage && cover.length > 0 && (
             <div className="flex flex-wrap items-center gap-2">
-              {certificate && (
+              {certificate && !previousOwners && (
                 // Only on this click, behind a Confirm: emailed to the owner with the PDF, through the consent check.
                 <ConfirmActionDialog
                   trigger={<button type="button" className="btn-secondary btn-sm">Send to owner</button>}
@@ -82,7 +84,7 @@ export default function VehicleWarrantyParts({
               )}
               <SaveForm action={issueVehicleCertificate.bind(null, vehicle.id)} success="Certificate filed">
                 <SaveButton className="btn-secondary btn-sm" pendingLabel="Making the certificate…">
-                  {certificate ? "Reissue certificate" : "Issue certificate"}
+                  {previousOwners ? "Issue for the current owner" : certificate ? "Reissue certificate" : "Issue certificate"}
                 </SaveButton>
               </SaveForm>
             </div>
