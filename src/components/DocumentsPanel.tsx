@@ -23,6 +23,7 @@ import { quotePricing, type PricedLine } from "@/lib/pricing";
 import { saveQuoteLineCosts } from "@/app/actions/quoteCosts";
 import { requireUser } from "@/lib/auth";
 import { hasPermission } from "@/lib/permissions";
+import StaysWithVehicleToggle from "@/components/StaysWithVehicleToggle";
 import { FileText, Tag, Upload } from "lucide-react";
 
 function humanSize(bytes: number): string {
@@ -46,6 +47,12 @@ type Doc = {
    * where the owner is the page you are already on.
    */
   ownerLabel?: string | null;
+  /**
+   * A vehicle's document: whether it passes to the vehicle's next owner on a transfer (the service book, the warranty
+   * certificate). Off, the next owner never sees it in the portal (lib/portalAccess.ts). Only on the vehicle panel.
+   */
+  vehicleId?: string | null;
+  staysWithVehicle?: boolean;
   /**
    * The supplier it is from. Undefined where the page didn't load it: that row then
    * offers no supplier choice when relabelled, and the one on file is kept.
@@ -209,6 +216,7 @@ function DocRow({ doc: row, revalidate, types, supplierTypes, vendors, invoices,
           </SaveForm>
         </ModalTrigger>
       )}
+      {doc.vehicleId && <StaysWithVehicleToggle documentId={doc.id} on={doc.staysWithVehicle === true} revalidate={revalidate} />}
       <div className="opacity-0 group-hover:opacity-100">
         <ConfirmDelete
           action={deleteDocument.bind(null, doc.id, revalidate)}

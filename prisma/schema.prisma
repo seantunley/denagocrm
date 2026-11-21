@@ -2028,6 +2028,10 @@ model Document {
   // Multi-tenancy (Phase B — additive/inert): owning tenant. See Contact.tenantId.
   tenantId   String?
 
+  /// A vehicle's document that passes to its next owner on a transfer (service book, warranty certificate).
+  /// Off: only the owner of the time it was added sees it in the portal (lib/portalAccess.ts).
+  staysWithVehicle Boolean @default(false)
+
   deletedAt     DateTime?
   deletedByName String?
   deleteReason  String?
@@ -3245,7 +3249,7 @@ model SignatureLink {
   id          String    @id @default(cuid())
   tenantId    String
   userId      String
-  /// website | whatsapp | booking | facebook | instagram | privacy | link
+  /// website | whatsapp | booking | facebook | instagram | privacy | contact | link
   kind        String
   url         String
   token       String    @unique
@@ -3259,6 +3263,22 @@ model SignatureLink {
 
   @@unique([tenantId, userId, url])
   @@index([tenantId, userId])
+}
+
+/// A dated line on email signatures (Sean, 2026-11-20): "On leave until 5 January, contact Thandi", or holiday trading
+/// hours — shown from startsAt to endsAt, then gone by itself. userId null = on everyone's signature (the owner's);
+/// otherwise that person's own. lib/signatureNotices.ts.
+model SignatureNotice {
+  id          String   @id @default(cuid())
+  tenantId    String
+  userId      String?
+  text        String
+  startsAt    DateTime
+  endsAt      DateTime
+  createdById String
+  createdAt   DateTime @default(now())
+
+  @@index([tenantId, endsAt])
 }
 
 model SignatureBannerClick {
