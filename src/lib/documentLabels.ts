@@ -38,6 +38,8 @@ export const SYSTEM_DOCUMENT_TAGS: ReadonlySet<string> = new Set([
   "checkin", "checkin-photo", "checkout-photo", "generated-pdf", "for-signing",
   // Xero's own PDF of a quote's invoice (lib/xero.ts) — the accounting invoice, beside the CRM's "invoice".
   "accounting-invoice",
+  // The warranty certificate filed at delivery (lib/warrantyCertificateStore.ts).
+  "warranty-certificate",
 ]);
 
 /**

@@ -10,7 +10,7 @@ import { requireDocumentAccess, requirePermission } from "@/lib/permissions";
 import { getWorkspaceSetting, putWorkspaceSetting } from "@/lib/settings";
 import { softDeleteRecord } from "@/lib/trash";
 import { deleteFile, readFile, saveFile } from "@/lib/storage";
-import { SYSTEM_TAG_LABELS } from "@/lib/documentLabels";
+import { SYSTEM_TAG_LABELS, isPersonLabel } from "@/lib/documentLabels";
 import { LIBRARY_CATEGORIES_KEY, chosenLibraryCategory, parseLibraryCategories } from "@/lib/libraryCategories";
 
 /* The Library's categories (lib/libraryCategories.ts): the list, an item's category, and a filed document moved in. */
@@ -68,7 +68,10 @@ export async function moveDocumentToLibrary(documentId: string, formData: FormDa
       select: { id: true, tenantId: true, fileName: true, storedName: true, mimeType: true, sizeBytes: true, tag: true },
     });
     if (!doc) refuse("That document is no longer there — refresh the page.");
-    if (doc.tag && SYSTEM_TAG_LABELS[doc.tag]) refuse(`${SYSTEM_TAG_LABELS[doc.tag]} is paperwork on its record and stays there.`);
+    // EVERY tag the CRM sets (lib/documentLabels SYSTEM_DOCUMENT_TAGS: signed copies, invoices, proofs of payment,
+    // delivery notes, generated PDFs, check-in photos, warranty certificates…), not just the labelled ones — the same
+    // rule the dialog uses, checked here because a server action can be called without it (review of #1175).
+    if (!isPersonLabel(doc.tag)) refuse(`${(doc.tag && SYSTEM_TAG_LABELS[doc.tag]) || "This file"} was filed by the CRM and stays on its record.`);
     const signed = await prisma.signatureRequest.count({ where: { documentId } });
     if (signed > 0) refuse("This document was sent for signature, so it stays on its record.");
 
@@ -84,6 +87,10 @@ export async function moveDocumentToLibrary(documentId: string, formData: FormDa
     try {
       await withActingTenantWrite(async (tx, actingTenant) => {
         const owner = doc.tenantId ?? actingTenant;
+        // HELD AND RE-CHECKED: two clicks at once both read it live above; the second waits here, then finds it already
+        // in the Trash and copies nothing (review of #1175).
+        const held = await tx.$queryRaw`SELECT "id" FROM "Document" WHERE "id" = ${documentId} AND "tenantId" IS NOT DISTINCT FROM ${doc.tenantId} AND "deletedAt" IS NULL FOR UPDATE`;
+        if ((held as unknown[]).length !== 1) refuse("That document was just moved or deleted — refresh the page.");
         const created = await tx.libraryDocument.create({ data: { name, category, tenantId: owner } });
         await tx.libraryVersion.create({
           data: {

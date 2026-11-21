@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { DEFAULT_LIBRARY_CATEGORIES, chosenLibraryCategory, parseLibraryCategories } from "../src/lib/libraryCategories";
+import { isPersonLabel } from "../src/lib/documentLabels";
 
 /**
  * Sean, 2026-11-21: "Why can't I label this a brochure or price list … for this Library?" / "Library work has to be
@@ -42,7 +43,15 @@ test("moving a filed brochure into the Library: its own access AND library.manag
   const actions = code("src/app/actions/libraryCategories.ts");
   const move = actions.slice(actions.indexOf("export async function moveDocumentToLibrary"));
   assert.match(move, /requireDocumentAccess\(documentId, "documents\.manage"\);\s*await requirePermission\("library\.manage"\);/);
-  assert.match(move, /if \(doc\.tag && SYSTEM_TAG_LABELS\[doc\.tag\]\) refuse\(/, "a signed copy, invoice, proof of payment… stays on its record");
+  assert.match(move, /if \(!isPersonLabel\(doc\.tag\)\) refuse\(/, "EVERY tag the CRM sets stays on its record — not only the labelled ones (review of #1175)");
+  for (const tag of ["generated-pdf", "for-signing", "warranty-certificate", "signed", "invoice", "pop", "delivery-note", "checkin-photo"]) {
+    assert.equal(isPersonLabel(tag), false, `${tag} is the CRM's`);
+  }
+  assert.equal(isPersonLabel("Brochure"), true);
+  assert.equal(isPersonLabel(null), true);
+  // Two clicks at once: the row is held and re-checked live before anything is copied.
+  assert.match(move, /FOR UPDATE`;\s*if \(\(held as unknown\[\]\)\.length !== 1\) refuse\(/);
+  assert.ok(move.indexOf("FOR UPDATE") < move.indexOf("tx.libraryDocument.create"), "held before the Library copy is made");
   assert.match(move, /prisma\.signatureRequest\.count\(\{ where: \{ documentId \} \}\)/);
   assert.match(move, /const storedName = await saveFile\(bytes, doc\.fileName, doc\.mimeType, tenantId\);/, "a copy of its own, in this workspace");
   assert.match(move, /softDeleteRecord\("document", documentId, "Moved to the Library", user\.name, tx\)/, "the record's copy is restorable");
