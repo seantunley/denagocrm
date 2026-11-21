@@ -12,7 +12,8 @@ import { outMsgText } from "./flowMedia";
 import type { OutMsg } from "./flow";
 import { sendPrivateReplyToComment } from "./messenger";
 import { commentDedupeKey, isOwnPageComment, privateReplyDedupeKey, type IngestibleComment } from "./socialComments";
-import { isDedupeKeyConflict } from "./inboundMessageKey";
+import { withBotConversationWrite } from "./botTenant";
+import { deleteBotSessionTx } from "./botSessionStore";
 import { commentFlowReplyKey } from "./instagramComments";
 import { deleteCommunicationsAndReconcile } from "./conversations";
 
@@ -52,39 +53,58 @@ export async function runInstagramCommentFlow(igAccountId: string, comment: Inge
   const actor = await resolveTenantActor();
   if (!filed?.conversationId || !actor) return;
 
-  // A person already replied privately to this comment from the inbox: theirs is the one Meta allows.
-  if (await prisma.communication.findFirst({ where: { tenantId, dedupeKey: privateReplyDedupeKey(tenantId, comment.commentId) }, select: { id: true } })) return;
-  // ONCE PER PERSON PER POST (Sean, 2026-11-21): the reservation's unique key is this person on this post, so a second
-  // or third "GUIDE" — or a redelivery of the first — finds it taken and gets nothing more, even at the same moment.
-  // `inReplyTo` names the comment answered, so the inbox stops offering a reply Meta would refuse.
-  const replyKey = commentFlowReplyKey(tenantId, comment.postId, commenter);
-  try {
-    await prisma.communication.create({
-      data: {
-        type: "comment", direction: "outbound", body: "…", subject: "Private reply (chatbot)",
-        conversationId: filed.conversationId, inReplyTo: comment.commentId, dedupeKey: replyKey, userId: actor.id, tenantId,
-      },
+  // ONE PRIVATE REPLY PER COMMENT — THE SAME LOCK AS STAFF (review of #1179): the reservation IS the inbox's own
+  // per-comment key (privateReplyDedupeKey, actions/comments.ts), so the chatbot and a person pressing Reply privately
+  // can never both send, in either order. ONCE PER PERSON PER POST (Sean, 2026-11-21): a marker keyed on this person
+  // and this post, written in the SAME transaction — a second "GUIDE", a redelivery or a race finds one of the two taken
+  // and reserves nothing. Subject "Private reply", so the inbox shows the reply as spent.
+  const replyKey = privateReplyDedupeKey(tenantId, comment.commentId);
+  const personKey = commentFlowReplyKey(tenantId, comment.postId, commenter);
+  const reserved = await prisma
+    .$transaction(async (tx) => {
+      await tx.appSetting.create({ data: { tenantId, key: personKey, value: comment.commentId } });
+      await tx.communication.create({
+        data: {
+          type: "comment", direction: "outbound", body: "…", subject: "Private reply",
+          conversationId: filed.conversationId, inReplyTo: comment.commentId, dedupeKey: replyKey, userId: actor.id, tenantId,
+        },
+      });
+      return true;
+    })
+    .catch((error: unknown) => {
+      if ((error as { code?: string } | null)?.code === "P2002") return false; // already answered — by us or a person
+      throw error;
     });
-  } catch (error) {
-    if (isDedupeKeyConflict(error)) return; // already answered — a redelivery, or a person got there first
-    throw error;
-  }
+  if (!reserved) return;
+  const release = async () => {
+    await deleteCommunicationsAndReconcile({ dedupeKey: replyKey });
+    await prisma.appSetting.deleteMany({ where: { tenantId, key: personKey } });
+  };
+  // A refused first reply means the flow never asked them anything: its session goes too (a person-owned one stays).
+  const forgetSession = () => withBotConversationWrite((tx, owner) => deleteBotSessionTx(tx, owner, "instagram", commenter));
 
   // The flow's first turn, for this person, from its start — its messages become the private reply.
   const firstTurn: OutMsg[] = [];
-  const result = await advanceFlow(
-    "instagram",
-    commenter,
-    { text: comment.message },
-    dmFlowCtx("instagram", commenter, null),
-    greetingVars(null, (await getCompanyProfile()).name),
-    async (messages) => { firstTurn.push(...messages); },
-    entry,
-  );
+  let result: Awaited<ReturnType<typeof advanceFlow>>;
+  try {
+    result = await advanceFlow(
+      "instagram",
+      commenter,
+      { text: comment.message },
+      dmFlowCtx("instagram", commenter, null),
+      greetingVars(null, (await getCompanyProfile()).name),
+      async (messages) => { firstTurn.push(...messages); },
+      entry,
+    );
+  } catch (error) {
+    // Nothing was sent: the reservation is released so a redelivery can try again.
+    await release();
+    throw error;
+  }
   // One private reply, text only: the turn's messages as one message.
   const text = firstTurn.map(outMsgText).filter(Boolean).join("\n\n").slice(0, 1000);
   if (result.suppressed || !text) {
-    await deleteCommunicationsAndReconcile({ dedupeKey: replyKey });
+    await release();
     return;
   }
 
@@ -97,7 +117,9 @@ export async function runInstagramCommentFlow(igAccountId: string, comment: Inge
     return;
   }
   if (!sent.ok) {
-    await deleteCommunicationsAndReconcile({ dedupeKey: replyKey });
+    // A definite refusal: nothing reached them, so neither the reservation nor the flow's "asked" state stands.
+    await release();
+    await forgetSession();
     // Meta's reason only — never the person or their comment.
     await logError("instagram-comment-flow", sent.error ?? "Meta refused the private reply", "The comment's flow could not send its private reply.").catch(() => {});
     return;

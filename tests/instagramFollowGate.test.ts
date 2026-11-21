@@ -98,17 +98,22 @@ test("a comment starts its flow only through a Comment route, with the ONE priva
   // Reserved with the inbox's own key, BEFORE the flow runs or anything is sent.
   const reserve = runner.indexOf("dedupeKey: replyKey");
   assert.ok(reserve > 0 && reserve < runner.indexOf("await advanceFlow(") && reserve < runner.indexOf("sendPrivateReplyToComment("));
-  // Once per person per post: the reservation's unique key is the person on the post, so a repeated "GUIDE", a
-  // redelivery or a race finds it taken. A staff member's own private reply to the comment comes first.
+  // Review of #1179: ONE lock with staff — the reservation IS the inbox's per-comment key, so the chatbot and a person
+  // pressing Reply privately (actions/comments.ts) can't both send, in either order; and it reads as a spent reply.
+  assert.match(runner, /const replyKey = privateReplyDedupeKey\(tenantId, comment\.commentId\);/);
+  assert.match(code("src/app/actions/comments.ts"), /privateReplyDedupeKey\(thread\.tenantId, commentId\)/, "the inbox reserves the same key");
+  assert.match(runner, /subject: "Private reply",/);
+  // Once per person per post: a marker on this person + post, in the SAME transaction — either taken, nothing reserved.
   assert.equal(commentFlowReplyKey("t1", "post9", "user7"), "igcommentflow:t1:post9:user7");
   assert.notEqual(commentFlowReplyKey("t1", "post9", "user7"), commentFlowReplyKey("t1", "post10", "user7"), "another post: another reply");
-  assert.match(runner, /const replyKey = commentFlowReplyKey\(tenantId, comment\.postId, commenter\);/);
-  assert.match(runner, /if \(await prisma\.communication\.findFirst\(\{ where: \{ tenantId, dedupeKey: privateReplyDedupeKey\(tenantId, comment\.commentId\) \}, select: \{ id: true \} \}\)\) return;/);
-  assert.ok(runner.indexOf("privateReplyDedupeKey(tenantId, comment.commentId)") < runner.indexOf("const replyKey"));
-  assert.match(runner, /if \(isDedupeKeyConflict\(error\)\) return;/);
+  assert.match(runner, /\.\$transaction\(async \(tx\) => \{\s*await tx\.appSetting\.create\(\{ data: \{ tenantId, key: personKey, value: comment\.commentId \} \}\);\s*await tx\.communication\.create\(/);
+  assert.match(runner, /if \(\(error as \{ code\?: string \} \| null\)\?\.code === "P2002"\) return false;/);
   assert.match(runner, /conversationId: filed\.conversationId, inReplyTo: comment\.commentId, dedupeKey: replyKey/);
-  // Refused: reservation released and logged without customer data. No answer: kept (it may have been delivered).
-  assert.match(runner, /if \(!sent\.ok\) \{\s*await deleteCommunicationsAndReconcile\(\{ dedupeKey: replyKey \}\);/);
+  // The flow failing before anything is sent releases both, so a redelivery can try again.
+  assert.match(runner, /\} catch \(error\) \{\s*\/\/ Nothing was sent[^\n]*\n\s*await release\(\);\s*throw error;/);
+  // Refused: both released, the session forgotten (it never asked), logged without customer data. No answer: kept.
+  assert.match(runner, /if \(!sent\.ok\) \{\s*\/\/[^\n]*\n\s*await release\(\);\s*await forgetSession\(\);/);
+  assert.match(runner, /withBotConversationWrite\(\(tx, owner\) => deleteBotSessionTx\(tx, owner, "instagram", commenter\)\)/);
   assert.match(runner, /\} catch \{\s*\/\/ No answer from Meta[^\n]*\n\s*await prisma\.communication\.updateMany\(\{ where: \{ dedupeKey: replyKey \}, data: \{ body: text \} \}\);\s*return;/);
   // A comment always starts its flow afresh (never an answer to the last question); a person-owned chat is left alone.
   assert.match(code("src/lib/flowSession.ts"), /const restart = decision\.act === "restart" \|\| Boolean\(entryContext\?\.commentText\);/);
