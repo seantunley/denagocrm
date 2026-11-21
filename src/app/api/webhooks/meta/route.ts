@@ -16,6 +16,7 @@ import { withChannelTenantScope, validateInSystemScope } from "@/lib/tenantScope
 import { reportUnmappedEndpoint } from "@/lib/channelRegistration";
 import { decideComment, type FeedChangeValue } from "@/lib/socialComments";
 import { decideInstagramComment, type InstagramCommentValue } from "@/lib/instagramComments";
+import { runInstagramCommentFlow } from "@/lib/instagramCommentFlow";
 import { recordPostCommentSafely } from "@/lib/commentThreads";
 import { inboundRetryResponse, noteInboundRetry, noteLeasedInbound } from "@/lib/webhookRetry";
 import { secretEquals } from "@/lib/secretCompare";
@@ -211,6 +212,11 @@ export async function POST(req: NextRequest) {
           igAccountId,
           async () => {
             await recordPostCommentSafely(decision.comment, { platform: "instagram", pageId: igAccountId });
+            // A Comment keyword route starts its flow (the follow gate). Never fails the delivery: the comment is filed.
+            await runInstagramCommentFlow(igAccountId, decision.comment).catch(async (error) => {
+              const { logError } = await import("@/lib/errorLog");
+              await logError("instagram-comment-flow", error).catch(() => {});
+            });
           },
           () => reportUnmappedEndpoint("instagram", igAccountId, 1),
           only,

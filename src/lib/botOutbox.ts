@@ -22,12 +22,12 @@ import {
   type ProviderFailure,
 } from "./providerFailure";
 import { attachToConversation, bumpConversation, deleteCommunicationsAndReconcile, recomputeConversationDerivedState } from "./conversations";
-import { attachmentUrlForDelivery } from "./outboundMedia";
+import { attachmentUrlForDelivery, outboundMediaUrl } from "./outboundMedia";
 import type { OutMsg } from "./flow";
 import { sendWhatsAppButtons, sendWhatsAppContact, sendWhatsAppDocumentLink, sendWhatsAppImage, sendWhatsAppList, sendWhatsAppText } from "./whatsapp";
-import { contactCardText, documentFallbackText, documentLabel } from "./flowMedia";
+import { contactCardText, documentFallbackText, documentLabel, documentLinkText } from "./flowMedia";
 import { resolveFlowDocument } from "./flowDocuments";
-import { sendDirectAttachment, sendDirectMessage, sendDirectQuickReplies } from "./messenger";
+import { sendDirectAttachment, sendDirectMessage, sendDirectQuickReplies, sendInstagramFile } from "./messenger";
 import { tgSend, tgSendPhoto } from "./telegramTransport";
 import { logError } from "./errorLog";
 import { recordBotFlowEvents } from "./botFlowAnalytics";
@@ -879,6 +879,7 @@ async function sendFlowDocument(row: OutboxRow, message: Extract<OutMsg, { type:
     await logError("bot-outbox", `Chatbot flow document ${message.documentId} is missing or no longer sendable; sent the "not available" note instead.`).catch(() => {});
     return sendProvider({ ...row, payload: { type: "text", text: DOCUMENT_UNAVAILABLE_TEXT } });
   }
+  if (row.channel === "instagram") return sendInstagramDocument(row, doc, message);
   if (!FILE_CHANNELS.has(row.channel)) return sendProvider({ ...row, payload: { type: "text", text: documentFallbackText(doc.fileName, message.caption) } });
   const url = attachmentUrlForDelivery({ ref: doc.storedName, contentType: doc.mimeType });
   if (!url) {
@@ -887,6 +888,29 @@ async function sendFlowDocument(row: OutboxRow, message: Extract<OutMsg, { type:
   if (row.channel === "whatsapp") return sendWhatsAppDocumentLink(row.key, url, doc.fileName, message.caption);
   // Messenger attachments carry no caption; botOutboxWrite queued it as the next text row.
   return sendDirectAttachment("messenger", row.key, { type: "file", url });
+}
+
+/**
+ * Instagram (the follow gate's guide, 2026-11-21): the file itself when Instagram takes it (uploaded, then sent —
+ * messenger.sendInstagramFile). When it doesn't, a link that EXPIRES in 7 days — never a permanent one, so no lasting
+ * copy of the workspace's file sits in the chat (flowMedia.documentFallbackText's rule). Only when neither can be made,
+ * the "the team will send it" note.
+ */
+const INSTAGRAM_LINK_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+async function sendInstagramDocument(
+  row: OutboxRow,
+  doc: { fileName: string; storedName: string; mimeType: string },
+  message: Extract<OutMsg, { type: "document" }>,
+): Promise<{ ok: boolean; error?: string; providerMessageId?: string }> {
+  const url = attachmentUrlForDelivery({ ref: doc.storedName, contentType: doc.mimeType });
+  if (url) {
+    const sent = await sendInstagramFile(row.key, url);
+    if (sent.ok) return sent;
+    await logError("bot-outbox", `Instagram didn't take the flow document as a file (${sent.error ?? "refused"}); sent a 7-day link instead.`).catch(() => {});
+  }
+  const link = outboundMediaUrl(doc.storedName, doc.mimeType, { ttlMs: INSTAGRAM_LINK_TTL_MS });
+  const text = link ? documentLinkText(doc.fileName, message.caption, link) : documentFallbackText(doc.fileName, message.caption);
+  return sendProvider({ ...row, payload: { type: "text", text } });
 }
 
 const ATTACHMENT_LABEL: Record<AttachmentKind, string> = {
@@ -903,7 +927,7 @@ function timelineBody(row: OutboxRow): string | null {
   if (message.type === "text") return message.text;
   if (message.type === "image") return message.caption ? `🖼 ${message.caption}` : "🖼 [image]";
   // What the customer actually got: on a channel with no files, the fallback text.
-  if (message.type === "document") return FILE_CHANNELS.has(row.channel) ? documentLabel(message) : documentFallbackText(message.fileName, message.caption);
+  if (message.type === "document") return FILE_CHANNELS.has(row.channel) || row.channel === "instagram" ? documentLabel(message) : documentFallbackText(message.fileName, message.caption);
   if (message.type === "contact") return contactCardText(message.card);
   return `${message.text}\n${message.options.map((o) => `• ${o.label}`).join("\n")}`;
 }

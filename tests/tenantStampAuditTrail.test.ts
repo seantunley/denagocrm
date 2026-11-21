@@ -482,6 +482,9 @@ const CUSTOMER_RECORD_WRITERS = [
   // Inbound comments on posts and ads. Stamped from the channel scope the Page
   // id established, exactly as the DM and WhatsApp webhooks are.
   "src/lib/commentThreads.ts",
+  // The chatbot's private reply to an Instagram comment (the follow gate, 2026-11-21) — the inbox's own reservation,
+  // stamped from the channel scope the Instagram account established.
+  "src/lib/instagramCommentFlow.ts",
   // The composer's email on the timeline — sent now, or scheduled and sent by the cron (since 2026-10-15).
   "src/lib/composerSend.ts",
   "src/lib/botOutbox.ts",
