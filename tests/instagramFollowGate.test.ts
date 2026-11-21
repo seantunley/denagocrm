@@ -8,6 +8,7 @@ import { routeKindAllowed, routeMatches, FLOW_ROUTE_KINDS } from "../src/lib/flo
 import { flowTemplate } from "../src/lib/flowTemplates";
 import { validateFlow, flowVariables } from "../src/lib/flowValidation";
 import { RESERVED_NAMES } from "../src/lib/flowSharedValues";
+import { commentFlowReplyKey } from "../src/lib/instagramComments";
 
 /**
  * Instagram follow gate, part 3 (Sean, 2026-11-21: "If we trigger on a comment from Instagram to send a guide from the
@@ -97,8 +98,15 @@ test("a comment starts its flow only through a Comment route, with the ONE priva
   // Reserved with the inbox's own key, BEFORE the flow runs or anything is sent.
   const reserve = runner.indexOf("dedupeKey: replyKey");
   assert.ok(reserve > 0 && reserve < runner.indexOf("await advanceFlow(") && reserve < runner.indexOf("sendPrivateReplyToComment("));
-  assert.match(runner, /const replyKey = privateReplyDedupeKey\(tenantId, comment\.commentId\);/);
+  // Once per person per post: the reservation's unique key is the person on the post, so a repeated "GUIDE", a
+  // redelivery or a race finds it taken. A staff member's own private reply to the comment comes first.
+  assert.equal(commentFlowReplyKey("t1", "post9", "user7"), "igcommentflow:t1:post9:user7");
+  assert.notEqual(commentFlowReplyKey("t1", "post9", "user7"), commentFlowReplyKey("t1", "post10", "user7"), "another post: another reply");
+  assert.match(runner, /const replyKey = commentFlowReplyKey\(tenantId, comment\.postId, commenter\);/);
+  assert.match(runner, /if \(await prisma\.communication\.findFirst\(\{ where: \{ tenantId, dedupeKey: privateReplyDedupeKey\(tenantId, comment\.commentId\) \}, select: \{ id: true \} \}\)\) return;/);
+  assert.ok(runner.indexOf("privateReplyDedupeKey(tenantId, comment.commentId)") < runner.indexOf("const replyKey"));
   assert.match(runner, /if \(isDedupeKeyConflict\(error\)\) return;/);
+  assert.match(runner, /conversationId: filed\.conversationId, inReplyTo: comment\.commentId, dedupeKey: replyKey/);
   // Refused: reservation released and logged without customer data. No answer: kept (it may have been delivered).
   assert.match(runner, /if \(!sent\.ok\) \{\s*await deleteCommunicationsAndReconcile\(\{ dedupeKey: replyKey \}\);/);
   assert.match(runner, /\} catch \{\s*\/\/ No answer from Meta[^\n]*\n\s*await prisma\.communication\.updateMany\(\{ where: \{ dedupeKey: replyKey \}, data: \{ body: text \} \}\);\s*return;/);

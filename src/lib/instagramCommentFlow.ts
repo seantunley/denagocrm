@@ -13,6 +13,7 @@ import type { OutMsg } from "./flow";
 import { sendPrivateReplyToComment } from "./messenger";
 import { commentDedupeKey, isOwnPageComment, privateReplyDedupeKey, type IngestibleComment } from "./socialComments";
 import { isDedupeKeyConflict } from "./inboundMessageKey";
+import { commentFlowReplyKey } from "./instagramComments";
 import { deleteCommunicationsAndReconcile } from "./conversations";
 
 /**
@@ -24,9 +25,9 @@ import { deleteCommunicationsAndReconcile } from "./conversations";
  * rule: one DM per comment, within 7 days). Their answer arrives as an ordinary DM and the same conversation carries
  * on — the follow check, the guide.
  *
- * The private reply is RESERVED before anything is sent, with the same key the inbox's own private-reply button uses
- * (actions/comments.ts): a redelivered comment, or a staff member replying privately to the same comment, can never
- * send a second. Refused by Meta: the reservation is released and the failure is in the System Log. No answer at all:
+ * The private reply is RESERVED before anything is sent — once per person per post (commentFlowReplyKey), and never
+ * where a staff member already replied privately to the comment (the inbox's own key, actions/comments.ts): a
+ * redelivered comment, a repeated comment or a race can never send a second. Refused by Meta: the reservation is released and the failure is in the System Log. No answer at all:
  * the reservation stays (it may have been delivered).
  */
 export async function runInstagramCommentFlow(igAccountId: string, comment: IngestibleComment): Promise<void> {
@@ -51,7 +52,12 @@ export async function runInstagramCommentFlow(igAccountId: string, comment: Inge
   const actor = await resolveTenantActor();
   if (!filed?.conversationId || !actor) return;
 
-  const replyKey = privateReplyDedupeKey(tenantId, comment.commentId);
+  // A person already replied privately to this comment from the inbox: theirs is the one Meta allows.
+  if (await prisma.communication.findFirst({ where: { tenantId, dedupeKey: privateReplyDedupeKey(tenantId, comment.commentId) }, select: { id: true } })) return;
+  // ONCE PER PERSON PER POST (Sean, 2026-11-21): the reservation's unique key is this person on this post, so a second
+  // or third "GUIDE" — or a redelivery of the first — finds it taken and gets nothing more, even at the same moment.
+  // `inReplyTo` names the comment answered, so the inbox stops offering a reply Meta would refuse.
+  const replyKey = commentFlowReplyKey(tenantId, comment.postId, commenter);
   try {
     await prisma.communication.create({
       data: {
