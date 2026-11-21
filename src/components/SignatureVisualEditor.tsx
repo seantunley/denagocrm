@@ -23,6 +23,9 @@ export type PersonDetails = {
   hasPhoto: boolean;
   /** Dated lines showing today (lib/signatureNotices.ts), so the preview is today's signature. */
   notices?: string[];
+  /** "Save my contact" links, when the owner switched it on (lib/contactCardServer.ts). */
+  contactCardUrl?: string;
+  contactQrUrl?: string;
 };
 
 const PLACEHOLDER: Record<TextField, string> = {
@@ -100,6 +103,8 @@ export default function SignatureVisualEditor({
     ...Object.fromEntries(TEXT_FIELDS.map((field) => [field, problem(field) ? "" : values[field].trim()])),
     photoUrl: photo && initial.hasPhoto ? `/api/signature-photo/${person.id}` : null,
     notices: initial.notices ?? [],
+    contactCardUrl: initial.contactCardUrl ?? null,
+    contactQrUrl: initial.contactQrUrl ?? null,
   };
   const built = buildEmailHtml("", buildSignature({ ...person, signatureHtml: null, extras, teamLine }, company));
   // Item 7: how it looks on a phone, and in a mail app that darkens emails (which flips the colours but not pictures).

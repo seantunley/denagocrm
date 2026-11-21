@@ -52,7 +52,10 @@ import { AddDocumentsForm } from "@/components/LibraryUploader";
 import ModalTrigger from "@/components/Modal";
 import { type MoveTargets } from "@/components/RepoRow";
 import { DOCUMENT_TYPES_KEY, parseDocumentTypes } from "@/lib/documentLabels";
-import { getSetting } from "@/lib/settings";
+import { getSetting, getWorkspaceSetting } from "@/lib/settings";
+import { DEFAULT_LIBRARY_CATEGORIES, LIBRARY_CATEGORIES_KEY, parseLibraryCategories } from "@/lib/libraryCategories";
+import { saveLibraryCategoryList } from "@/app/actions/libraryCategories";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import PortalUploadsList, { type PortalUploadRow } from "@/components/PortalUploadsList";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -377,6 +380,11 @@ export default async function DocumentsPage({
         folder.kind === "library" ? prisma.libraryDocument.count({ where: libraryWhere }) : Promise.resolve(0),
       ])
     : [[], [], 0];
+  // The workspace's own Library categories (lib/libraryCategories.ts): the dropdowns offer these, saves check them.
+  const libraryTenantId = canLibrary ? await getActiveTenantId() : null;
+  const libraryCategoryList = libraryTenantId
+    ? parseLibraryCategories(await getWorkspaceSetting(libraryTenantId, LIBRARY_CATEGORIES_KEY))
+    : [...DEFAULT_LIBRARY_CATEGORIES];
   const libraryTotal = libraryCategories.reduce((sum, group) => sum + group._count._all, 0);
   const libraryCategoryCounts = [
     ...libraryCategories
@@ -406,7 +414,7 @@ export default async function DocumentsPage({
         library: {
           versionId: latest.id,
           actions: (
-            <LibraryItemActions documentId={doc.id} name={doc.name} versions={doc.versions} canManage={canLibraryManage} />
+            <LibraryItemActions documentId={doc.id} name={doc.name} versions={doc.versions} canManage={canLibraryManage} category={doc.category} categories={libraryCategoryList} />
           ),
         },
       };
@@ -452,6 +460,8 @@ export default async function DocumentsPage({
     })),
     // What a document can be labelled as here: the workspace's own list (Settings → Quotes → Document types).
     documentTypes: parseDocumentTypes(await getSetting(DOCUMENT_TYPES_KEY)),
+    // "Move to the Library" — only for someone who manages it (the action checks again).
+    ...(canLibraryManage ? { libraryCategories: libraryCategoryList } : {}),
   };
 
   /* ── Where am I, and what does dropping a file here do? ──────────── */
@@ -498,9 +508,21 @@ export default async function DocumentsPage({
   // it (or you are in it), so the tree does not invite filing things nowhere.
   const showUnfiled = tree.company > 0 || folder.kind === "company";
   const libraryAdd = inLibrary && canLibraryManage && (
-    <ModalTrigger label={<><Plus className="size-4" />Add to library</>} title="Add documents to library">
-      <AddDocumentsForm defaultCategory={folder.category} />
-    </ModalTrigger>
+    <>
+      <ModalTrigger label={<><Plus className="size-4" />Add to library</>} title="Add documents to library">
+        <AddDocumentsForm defaultCategory={folder.category} categories={libraryCategoryList} />
+      </ModalTrigger>
+      <ModalTrigger label="Categories" title="Library categories" buttonClass="btn-secondary btn-sm">
+        <SaveForm action={saveLibraryCategoryList} success="Saved" resetOnSuccess={false} className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            One per line — Brochure, Price list, Spec sheet… Offered when adding to the Library, on each item, and when
+            moving a customer&apos;s file here.
+          </p>
+          <textarea name="categories" className="input" rows={7} defaultValue={libraryCategoryList.join("\n")} />
+          <SaveButton className="btn-primary btn-sm">Save categories</SaveButton>
+        </SaveForm>
+      </ModalTrigger>
+    </>
   );
 
   // Links keep the view, type and history settings; a folder change clears the

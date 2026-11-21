@@ -85,6 +85,7 @@ export function plainSignature(person: SignaturePerson, company: Pick<SignatureC
     clean(x.hours),
     clean(x.cta),
     clean(person.teamLine),
+    clean(x.contactCardUrl) && `Save my contact: ${clean(x.contactCardUrl)}`,
   ]
     .filter(Boolean)
     .join("\n");

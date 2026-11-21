@@ -15,6 +15,7 @@ import { upcomingNotices } from "@/lib/signatureNoticeStore";
 import { liveNotices, noticeState } from "@/lib/signatureNotices";
 import { bannerDayValue } from "@/lib/signatureBanners";
 import type { NoticeItem } from "@/components/SignatureNotices";
+import { contactCardLinks } from "@/lib/contactCardServer";
 import { PageHeader } from "@/components/page-header";
 import EmailSignatureSection from "@/components/EmailSignatureSection";
 import EmailSignatureDetails, { type SignaturePerson } from "@/components/EmailSignatureDetails";
@@ -82,6 +83,7 @@ export default async function EmailSignaturesPage() {
     bookingUrl: u.signatureBookingUrl, hours: u.signatureHours, cta: u.signatureCta, photo: u.signaturePhoto, hasPhoto: Boolean(u.avatarRef),
     teamLine: teamLineFor(design.teams ?? [], memberships.filter((m) => m.userId === u.id).map((m) => m.teamId)),
     customHtmlInUse: Boolean(u.signatureHtml?.trim()),
+    ...contactCardLinks(tenantId, u.id, design.contactCard, company.assetBase),
   });
 
   return (
@@ -108,6 +110,7 @@ export default async function EmailSignaturesPage() {
           everyone: isOwner ? noticeRows.filter((row) => row.userId === null).map(asItem) : [],
           today: bannerDayValue(now),
         }}
+        contactCard={design.contactCard}
         clicks={isOwner ? await signatureLinkReport(tenantId).catch(() => null) : null}
         staff={others.map(asPerson)}
         // Copy my signature (#1161): this person's signature exactly as their emails carry it, for Gmail, Outlook or a
