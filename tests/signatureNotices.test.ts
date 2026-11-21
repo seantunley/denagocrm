@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { cleanNotice, liveNotices, noticeState, NOTICE_MAX, type NoticeRow } from "../src/lib/signatureNotices";
+import { cleanNotice, liveNotices, noticeState, NOTICE_MAX, NOTICES_SHOWN, type NoticeRow } from "../src/lib/signatureNotices";
 import { extrasHtml, shortSignature } from "../src/lib/signaturePeople";
 import { copyableSignature } from "../src/lib/signatureCopy";
 import { DEFAULT_SIGNATURE_COMPANY } from "../src/lib/signature";
@@ -41,6 +41,16 @@ test("your own line first, then everyone's; someone else's never; two at most", 
   assert.deepEqual(liveNotices(rows, "lerato", at("2027-01-10T09:00:00+02:00")), []);
 });
 
+test("20 live workspace lines never crowd out someone's own leave line (review of #1166)", () => {
+  const now = at("2026-12-28T09:00:00+02:00");
+  const everyone = Array.from({ length: 20 }, (_, i) => row({ id: `g${i}`, text: `Workspace line ${i}` }));
+  const own = [row({ id: "mine", userId: "sipho", text: "On leave until 5 January — contact Thandi" })];
+  // What the store hands over: each group read on its own, in this order, two at most.
+  const shown = liveNotices([...own.slice(0, NOTICES_SHOWN), ...everyone.slice(0, NOTICES_SHOWN)], "sipho", now);
+  assert.equal(shown[0], "On leave until 5 January — contact Thandi");
+  assert.equal(shown.length, NOTICES_SHOWN);
+});
+
 test("what may be saved: a line, real days in order, not over, not endless", () => {
   const now = at("2026-11-20T12:00:00+02:00");
   const ok = cleanNotice({ text: "  On leave\nuntil 5 January  ", startsOn: "2026-12-20", endsOn: "2027-01-05" }, now);
@@ -72,7 +82,9 @@ test("the line is on the full signature and on replies, escaped; and never on a 
 test("sends read today's lines; writes name the workspace; the table is walled off per workspace", () => {
   assert.match(code("src/lib/signatureSender.ts"), /const notices = await liveNoticesFor\(tenantId, userId\);/);
   const store = code("src/lib/signatureNoticeStore.ts");
-  assert.match(store, /where: \{ tenantId, startsAt: \{ lte: now \}, endsAt: \{ gt: now \}, OR: \[\{ userId: null \}, \{ userId \}\] \}/);
+  // The person's own and the workspace's lines read separately, each in liveNotices' order, before any limit.
+  assert.match(store, /where: \{ tenantId, userId: who, startsAt: \{ lte: now \}, endsAt: \{ gt: now \} \},\s*select: SELECT,\s*orderBy: \[\{ endsAt: "asc" \}, \{ createdAt: "asc" \}\],\s*take: NOTICES_SHOWN,/);
+  assert.match(store, /const \[own, everyone\] = await Promise\.all\(\[live\(userId\), live\(null\)\]\);\s*return liveNotices\(\[\.\.\.own, \.\.\.everyone\], userId, now\);/);
   const actions = code("src/app/actions/signatureNotices.ts");
   assert.match(actions, /if \(forEveryone && !\(await isTenantOwner\(\)\)\) refuse\(/);
   assert.match(actions, /findFirst\(\{ where: \{ id, tenantId \}/, "row's workspace checked at the door");
