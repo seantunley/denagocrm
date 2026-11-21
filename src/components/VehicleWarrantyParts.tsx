@@ -22,7 +22,10 @@ export default function VehicleWarrantyParts({
   parts,
   canManage,
   certificate,
+  ownerCovered = true,
 }: {
+  /** The warranty covers the owner now (not pending or declined after a transfer): only then can a certificate be issued. */
+  ownerCovered?: boolean;
   vehicle: { id: string; warrantyParts: unknown; warrantyStartsAt: Date | null; purchaseDate: Date | null };
   cover: PartCover[];
   parts: readonly string[];
@@ -66,7 +69,8 @@ export default function VehicleWarrantyParts({
           ) : (
             <span>No certificate filed yet.</span>
           )}
-          {canManage && cover.length > 0 && (
+          {canManage && cover.length > 0 && !ownerCovered && <span>No certificate for this owner: the warranty hasn&apos;t transferred to them.</span>}
+          {canManage && cover.length > 0 && ownerCovered && (
             <SaveForm action={issueVehicleCertificate.bind(null, vehicle.id)} success="Certificate filed">
               <SaveButton className="btn-secondary btn-sm" pendingLabel="Making the certificate…">
                 {certificate ? "Reissue certificate" : "Issue certificate"}

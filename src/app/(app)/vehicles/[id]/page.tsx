@@ -438,6 +438,7 @@ export default async function VehicleDetailPage({
                   parts={warrantyPartList}
                   canManage={canManageWarranty}
                   certificate={vehicle.documents.find((d) => d.tag === CERTIFICATE_TAG && !d.replacedById) ?? null}
+                  ownerCovered={ownerWarranty === "carried"}
                 />
                 {ownerWarranty !== "carried" && (
                   <p className="mb-3 rounded-md bg-amber-500/10 px-3 py-2 text-xs text-amber-300">

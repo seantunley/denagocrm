@@ -8,6 +8,7 @@
 import type { MergeContext } from "./docbuilder/merge";
 import { contactName, DEFAULT_REGIONAL, formatDate, type Regional } from "./format";
 import { termLabel, type PartCover } from "./warrantyParts";
+import { parseOwnershipWarranty } from "./vehicleTransferRules";
 
 export const CERTIFICATE_TAG = "warranty-certificate";
 
@@ -31,6 +32,18 @@ export type CertificateVehicle = {
 };
 
 const lines = (...values: (string | null | undefined)[]) => values.filter(Boolean).join("\n");
+
+/**
+ * Does the warranty cover the vehicle's owner NOW? Their open ownership row says so (lib/vehicleOwnership.ts): after a
+ * transfer it can be pending approval or declined, while the vehicle's terms stay as they were. A vehicle with no row
+ * reads as covered, as currentOwnershipWarranty does. Issue, send and DAX all refuse a certificate otherwise.
+ */
+export function ownerCovered(openRows: readonly { warranty: string }[]): boolean {
+  return parseOwnershipWarranty(openRows[0]?.warranty) === "carried";
+}
+
+export const NOT_COVERED =
+  "The warranty hasn't transferred to this vehicle's current owner (it is waiting for approval or was declined), so there's no certificate for them.";
 
 /**
  * "WCERT-7F3K2A-2611-1A2B-3C4D-5E6F": the vehicle's short id, the issue month and 12 random hex characters of its own

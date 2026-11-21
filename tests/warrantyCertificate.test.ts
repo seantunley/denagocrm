@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { buildWarrantyCertificateContext, certificateFileName, certificateNumber, partsLines, CERTIFICATE_TAG } from "../src/lib/warrantyCertificate";
+import { buildWarrantyCertificateContext, certificateFileName, certificateNumber, partsLines, CERTIFICATE_TAG, NOT_COVERED, ownerCovered } from "../src/lib/warrantyCertificate";
 import { coverOf } from "../src/lib/warrantyParts";
 import { standardTemplateFor, STANDARD_TEMPLATE_KEYS } from "../src/lib/doceditor/standardTemplates";
 import { DOC_DEFS, docKeyAvailable } from "../src/lib/docTemplates";
@@ -113,4 +113,22 @@ test("at delivery: after the delivery commits, for each delivered vehicle — an
   const action = code("src/app/actions/warrantyParts.ts");
   const issue = action.slice(action.indexOf("export async function issueVehicleCertificate"), action.indexOf("export async function saveVehicleWarranty"));
   assert.match(issue, /requireVehicleAccess\(vehicleId, "warranty\.manage"\)/);
+});
+
+test("no certificate for an owner the warranty didn't transfer to — pending or declined (review of #1173)", () => {
+  assert.equal(ownerCovered([{ warranty: "carried" }]), true);
+  assert.equal(ownerCovered([{ warranty: "pending" }]), false, "waiting for approval");
+  assert.equal(ownerCovered([{ warranty: "not_carried" }]), false, "declined, or the rule said no");
+  assert.equal(ownerCovered([]), true, "no ownership row reads as covered, as currentOwnershipWarranty does");
+  assert.match(NOT_COVERED, /hasn't transferred to this vehicle's current owner/);
+  const store = code("src/lib/warrantyCertificateStore.ts");
+  // Checked before anything is rendered, and again at filing under the vehicle's lock (a transfer takes the same lock).
+  assert.match(store, /ownerships: \{ where: \{ tenantId, ownedUntil: null \}, select: \{ warranty: true \}, take: 1 \}/);
+  assert.ok(store.indexOf("if (!ownerCovered(vehicle.ownerships)) refuse(NOT_COVERED);") < store.indexOf("renderModelToPdf("));
+  assert.match(store, /SELECT "contactId" FROM "Vehicle" WHERE "id" = \$\{vehicle\.id\} AND "tenantId" = \$\{tenantId\} AND "deletedAt" IS NULL FOR UPDATE/);
+  assert.match(store, /if \(held\[0\]\?\.contactId !== vehicle\.contactId \|\| !ownerCovered\(open\)\) \{/);
+  assert.ok(store.indexOf("FOR UPDATE") < store.indexOf("tx.document.create("), "re-checked before the row is filed");
+  // The vehicle page offers no Issue button then.
+  assert.match(code("src/app/(app)/vehicles/[id]/page.tsx"), /ownerCovered=\{ownerWarranty === "carried"\}/);
+  assert.match(code("src/components/VehicleWarrantyParts.tsx"), /canManage && cover\.length > 0 && ownerCovered && \(/);
 });
