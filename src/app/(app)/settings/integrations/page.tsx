@@ -37,6 +37,7 @@ import { IntegrationConfigFlow } from "@/components/integration-config-flow";
 import MetaConnectBox from "@/components/settings/MetaConnectBox";
 import ThreadsConnectBox from "@/components/settings/ThreadsConnectBox";
 import MetaOwnAppBox from "@/components/settings/MetaOwnAppBox";
+import WhatsAppConnectBox from "@/components/settings/WhatsAppConnectBox";
 
 export const dynamic = "force-dynamic";
 
@@ -216,6 +217,7 @@ export default async function IntegrationsPage({ searchParams }: { searchParams?
 
                 {/* Connect Facebook (2026-11-21): the business signs in and picks its Page — no token to paste. */}
                 {integration.id === "meta" && <MetaConnectBox tenantId={tenantId} notice={params?.meta ?? null} />}
+                {integration.id === "whatsapp" && <WhatsAppConnectBox tenantId={tenantId} />}
 
                 {integration.id === "xero" && (
                   <div className="mb-5 rounded-lg border border-border bg-background/40 p-4">
