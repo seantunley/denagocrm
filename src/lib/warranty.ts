@@ -1,17 +1,32 @@
 import { addMonths, differenceInCalendarDays } from "date-fns";
+import { parseTerms, termEnd } from "./warrantyParts";
 
 export type WarrantyStatus = "active" | "expiring" | "expired" | "unknown";
 
 const EXPIRING_DAYS = 60;
 
+/**
+ * The vehicle's warranty as one verdict. With parts (lib/warrantyParts.ts): in warranty while any part is — a lifetime
+ * part (the chassis) keeps it in warranty for good — and otherwise until its last part ends. Without parts, the single
+ * purchase date + warrantyMonths, exactly as before. Each part's own cover is on the vehicle page (vehicleCover).
+ */
 export function computeWarranty(
-  v: { purchaseDate: Date | null; warrantyMonths: number | null },
+  v: { purchaseDate: Date | null; warrantyMonths: number | null; warrantyParts?: unknown; warrantyStartsAt?: Date | null },
   now = new Date()
 ): { status: WarrantyStatus; expiryDate: Date | null; daysRemaining: number | null } {
+  const parts = parseTerms(v.warrantyParts);
+  if (parts.length > 0 && v.warrantyStartsAt) {
+    const ends = parts.map((p) => termEnd(v.warrantyStartsAt!, p.months));
+    if (ends.some((end) => end === null)) return { status: "active", expiryDate: null, daysRemaining: null };
+    return verdict(new Date(Math.max(...ends.map((end) => end!.getTime()))), now);
+  }
   if (!v.purchaseDate || !v.warrantyMonths) {
     return { status: "unknown", expiryDate: null, daysRemaining: null };
   }
-  const expiryDate = addMonths(v.purchaseDate, v.warrantyMonths);
+  return verdict(addMonths(v.purchaseDate, v.warrantyMonths), now);
+}
+
+function verdict(expiryDate: Date, now: Date): { status: WarrantyStatus; expiryDate: Date; daysRemaining: number } {
   const daysRemaining = differenceInCalendarDays(expiryDate, now);
   const status: WarrantyStatus =
     daysRemaining < 0 ? "expired" : daysRemaining <= EXPIRING_DAYS ? "expiring" : "active";

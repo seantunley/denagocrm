@@ -14,10 +14,14 @@ import CustomFieldsCard from "@/components/custom-fields/CustomFieldsCard";
 import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { StatusPill } from "@/components/visual-system";
 import { currencySymbol, formatZAR } from "@/lib/format";
-import { getRegionalSettings, resolveIntegrationField } from "@/lib/settings";
+import { getRegionalSettings, getWorkspaceSetting, resolveIntegrationField } from "@/lib/settings";
 import { getActiveTenantId } from "@/lib/auth";
 import XeroItemPicker from "@/components/XeroItemPicker";
 import { linkProductToXeroItem } from "@/app/actions/xero";
+import { isModuleEnabled } from "@/lib/modules/enabled";
+import { WARRANTY_PARTS_KEY, parsePartList, parseTerms } from "@/lib/warrantyParts";
+import WarrantyTermsForm from "@/components/WarrantyTermsForm";
+import { saveProductWarrantyTerms } from "@/app/actions/warrantyParts";
 
 export default async function ProductDetailPage({
   params,
@@ -39,6 +43,10 @@ export default async function ProductDetailPage({
   const tenantId = await getActiveTenantId();
   // The "Xero item" link shows once this workspace has connected Xero.
   const xeroConnected = Boolean(tenantId && (await resolveIntegrationField(tenantId, "xero", "XERO_TENANT_ID")));
+  // Warranty in parts (Warranty module): this model's terms, copied onto each vehicle at delivery.
+  const warrantyParts = tenantId && (await isModuleEnabled("warranty"))
+    ? parsePartList(await getWorkspaceSetting(tenantId, WARRANTY_PARTS_KEY))
+    : null;
   return (
     <EntityDetailShell
       backHref="/products"
@@ -138,6 +146,16 @@ export default async function ProductDetailPage({
           </p>
         </div>
 
+        {warrantyParts && (
+          <div className="card">
+            <h2 className="font-semibold">Warranty</h2>
+            <p className="text-xs text-muted-foreground mt-1 mb-4">
+              Cover on each part, from the delivery day. Copied onto every {product.name} when it is delivered — changing it
+              here doesn&apos;t change vehicles already delivered. Parts are listed on the Warranty page.
+            </p>
+            <WarrantyTermsForm action={saveProductWarrantyTerms.bind(null, product.id)} terms={parseTerms(product.warrantyTerms)} parts={warrantyParts} />
+          </div>
+        )}
         <ProductShowcaseForm product={product} />
         <CustomFieldsCard entity="product" recordId={product.id} />
         {xeroConnected && (

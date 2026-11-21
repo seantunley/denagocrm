@@ -26,6 +26,7 @@ import { DELIVERY_NOTE } from "@/lib/signing/subject";
 import { holdSubjectRequests, recordSubjectWithdrawn, withdrawOpenSubjectRequests } from "@/lib/signing/subjectRequests";
 import type { PermissionUser } from "@/lib/permissions";
 import { financeDeliveryRefusal, financeDeliveryRefusalInTx } from "@/lib/dealFinance";
+import { vehicleWarrantyFrom } from "@/lib/warrantyParts";
 
 /**
  * THE ONE DELIVERY. Both "Mark delivered" on the Deliveries board and "Complete
@@ -89,7 +90,7 @@ export async function deliverQuote(input: {
 
   const units = await prisma.stockUnit.findMany({
     where: { soldQuoteId: quoteId, tenantId, deletedAt: null },
-    include: { product: { select: { name: true } } },
+    include: { product: { select: { name: true, warrantyTerms: true } } },
     orderBy: { createdAt: "asc" },
   });
   const outstanding = units.filter((unit) => !(DELIVERED_STOCK_STATUSES as readonly string[]).includes(unit.status));
@@ -400,6 +401,8 @@ export async function deliverQuote(input: {
             color: unit.color,
             purchaseDate: deliveredAt,
             warrantyMonths: warrantyMonths || null,
+            // The product's warranty in parts, from the delivery day (lib/warrantyParts.ts).
+            ...vehicleWarrantyFrom(unit.product.warrantyTerms, deliveredAt),
             notes: `Created automatically from stock unit ${unit.stockNumber ?? unit.id}`,
             contactId: contact!.id,
             productId: unit.productId,

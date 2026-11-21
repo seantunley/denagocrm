@@ -279,6 +279,9 @@ model Product {
   // colour picks its photo (case-insensitive); showcaseImageRef is the fallback.
   showcaseColourImages Json?
 
+  /// Warranty in parts (lib/warrantyParts.ts): [{ part, months | null = lifetime }]. Copied onto each vehicle at delivery.
+  warrantyTerms Json?
+
   deletedAt     DateTime?
   deletedByName String?
   deleteReason  String?
@@ -2068,6 +2071,10 @@ model Vehicle {
   color                 String?
   purchaseDate          DateTime?
   warrantyMonths        Int?
+  /// This vehicle's own warranty in parts (lib/warrantyParts.ts), copied from its product at delivery and editable
+  /// per vehicle; each part runs from warrantyStartsAt (the delivery day). Empty: the single warrantyMonths applies.
+  warrantyParts         Json?
+  warrantyStartsAt      DateTime?
   serviceIntervalKm     Int?      @default(1000)
   serviceIntervalMonths Int?      @default(6)
   notes                 String?

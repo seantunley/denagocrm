@@ -14,6 +14,12 @@ import {
   requireAnyPermission,
 } from "@/lib/permissions";
 
+import { SaveForm, SaveButton } from "@/components/SaveForm";
+import { getActiveTenantId, isTenantOwner } from "@/lib/auth";
+import { getWorkspaceSetting } from "@/lib/settings";
+import { WARRANTY_PARTS_KEY, parsePartList } from "@/lib/warrantyParts";
+import { saveWarrantyPartList } from "@/app/actions/warrantyParts";
+
 export const dynamic = "force-dynamic";
 
 export default async function WarrantyPage() {
@@ -23,6 +29,9 @@ export default async function WarrantyPage() {
     hasPermission(user, "warranty.manage"),
   ]);
   const vehicleScope = vehicleIds === null ? {} : { id: { in: vehicleIds } };
+  // The owner names the parts a warranty can cover (lib/warrantyParts.ts).
+  const tenantId = await getActiveTenantId();
+  const partList = tenantId && (await isTenantOwner()) ? parsePartList(await getWorkspaceSetting(tenantId, WARRANTY_PARTS_KEY)) : null;
 
   const [vehicles, claims, recalls] = await Promise.all([
     prisma.vehicle.findMany({ where: vehicleScope, include: { contact: true } }),
@@ -148,6 +157,20 @@ export default async function WarrantyPage() {
           ))}
         </div>
       </section>
+
+      {partList && (
+        <section className="space-y-3">
+          <h2 className="font-semibold">Warranty parts</h2>
+          <SaveForm action={saveWarrantyPartList} success="Saved" resetOnSuccess={false} className="card space-y-3 max-w-xl">
+            <p className="text-sm text-muted-foreground">
+              The parts a warranty can cover, one per line — offered in the dropdowns on each product and vehicle. Set each
+              model&apos;s cover on its product page (for example Battery 5 years, Cart 2 years, Chassis lifetime).
+            </p>
+            <textarea name="parts" className="input" rows={5} defaultValue={partList.join("\n")} />
+            <SaveButton className="btn-primary btn-sm">Save parts</SaveButton>
+          </SaveForm>
+        </section>
+      )}
     </div>
   );
 }

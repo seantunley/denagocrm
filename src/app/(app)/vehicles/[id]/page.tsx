@@ -27,6 +27,9 @@ import { StatusPill } from "@/components/visual-system";
 import { requireUser } from "@/lib/auth";
 import { hasAnyPermission, hasPermission } from "@/lib/permissions";
 import { WARRANTY_READ } from "@/lib/warrantyAccess";
+import VehicleWarrantyParts from "@/components/VehicleWarrantyParts";
+import { WARRANTY_PARTS_KEY, parsePartList, vehicleCover } from "@/lib/warrantyParts";
+import { getWorkspaceSetting } from "@/lib/settings";
 import CustomFieldsCard from "@/components/custom-fields/CustomFieldsCard";
 import ChecklistCard from "@/components/checklists/ChecklistCard";
 import { runsForHost, templatesForHostRecord } from "@/lib/checklists/store";
@@ -58,6 +61,11 @@ export default async function VehicleDetailPage({
   const canManageChecklists = await hasPermission(currentUser, "vehicles.manage");
   // The Warranty module on, and the warranty grant (lib/warrantyAccess.ts): its cover, claims and battery hint.
   const canSeeWarranty = await hasAnyPermission(currentUser, ...WARRANTY_READ);
+  // Its warranty part by part, and who may change it (lib/warrantyParts.ts).
+  const canManageWarranty = canSeeWarranty && (await hasPermission(currentUser, "warranty.manage"));
+  const warrantyPartList = canManageWarranty && vehicle.tenantId
+    ? parsePartList(await getWorkspaceSetting(vehicle.tenantId, WARRANTY_PARTS_KEY))
+    : [];
   const checklistTenantId = vehicle.tenantId ?? "";
   const [conditionTemplates, conditionRuns] = canManageChecklists && checklistTenantId
     ? await Promise.all([
@@ -417,6 +425,7 @@ export default async function VehicleDetailPage({
                     {w.expiryDate ? ` · ${formatDate(w.expiryDate)}` : ""}
                   </span>
                 </div>
+                <VehicleWarrantyParts vehicle={vehicle} cover={vehicleCover(vehicle, new Date())} parts={warrantyPartList} canManage={canManageWarranty} />
                 <form action={addWarrantyClaim.bind(null, vehicle.id)} className="flex gap-2 mb-4">
                   <input
                     name="description"

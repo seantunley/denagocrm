@@ -13,6 +13,7 @@ import { withActingStaffScope } from "@/lib/actingScope";
 import { asActionResult, refuse } from "@/lib/actionResult";
 import { requiredReason } from "@/lib/deleteReason";
 import { registrationQueueForQuote } from "@/lib/quoteDelivery";
+import { vehicleWarrantyFrom } from "@/lib/warrantyParts";
 import {
   requireContactAccess,
   requirePermission,
@@ -56,13 +57,12 @@ export async function createVehicle(formData: FormData) {
     const data = vehicleData(formData);
     if (!data.contactId) throw new Error("Customer is required");
     const user = await requireContactAccess(data.contactId, "vehicles.manage");
-    if (!data.model && data.productId) {
-      const p = await prisma.product.findUnique({ where: { id: data.productId } });
-      data.model = p?.name ?? "";
-    }
+    const product = data.productId ? await prisma.product.findUnique({ where: { id: data.productId }, select: { name: true, warrantyTerms: true } }) : null;
+    if (!data.model && product) data.model = product.name;
     if (!data.model) throw new Error("Model is required");
 
-    const vehicle = await prisma.vehicle.create({ data });
+    // Its product's warranty in parts, from the purchase (delivery) day — today when none is given (lib/warrantyParts.ts).
+    const vehicle = await prisma.vehicle.create({ data: { ...data, ...vehicleWarrantyFrom(product?.warrantyTerms, data.purchaseDate ?? new Date()) } });
     await logAudit({
       action: "vehicle.registered",
       summary: `Registered vehicle ${vehicle.model}${vehicle.color ? ` (${vehicle.color})` : ""}`,
