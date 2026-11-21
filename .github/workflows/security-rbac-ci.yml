@@ -820,6 +820,11 @@ jobs:
       - name: DAX conversations -- search, rename and delete, only your own
         run: npm run test:assistant-conversation-manage
 
+      # 2026-11-21: the 60-day purge had failed silently since 2026-07-27 — one audit row blocked a contact's delete.
+      # History stays (unlinked); paperwork keeps its record in the trash; nothing fails.
+      - name: Trash purge -- history unlinked, paperwork kept, nothing fails
+        run: npm run test:trash-purge
+
       # A scheduled briefing going to a linked phone: what is waiting, claimed
       # before it is sent and released when it could not be, the template nudge
       # claimed once. No WhatsApp connection here, so nothing is ever sent.

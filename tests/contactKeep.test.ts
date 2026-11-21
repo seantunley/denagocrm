@@ -47,7 +47,10 @@ test("every way a contact is deleted asks: the Delete action (row held), the con
   const page = code("src/app/(app)/contacts/[id]/page.tsx");
   assert.match(page, /disabled=\{Boolean\(keptBecause\)\}\s*disabledReason=\{keptBecause \?\? undefined\}/);
   const purge = code("src/lib/trash.ts");
-  assert.match(purge, /if \(model === "contact"\) \{\s*for \(const r of locked\) if \(await contactKeptBecause\(r\.tenantId, r\.id\)\) kept\.add\(r\.id\);\s*\}\s*const ids = locked\.map\(\(r\) => r\.id\)\.filter\(\(id\) => !kept\.has\(id\)\);/);
+  // Beside the paperwork rule (#1170): both run, then the kept ones are left out.
+  assert.match(purge, /if \(model === "contact"\) \{\s*for \(const r of locked\) if \(!kept\.has\(r\.id\) && \(await contactKeptBecause\(r\.tenantId, r\.id\)\)\) kept\.add\(r\.id\);\s*\}\s*const ids = locked\.map\(\(r\) => r\.id\)\.filter\(\(id\) => !kept\.has\(id\)\);/);
+  assert.match(purge, /for \(const \[paper, column\] of PAPERWORK\[model\] \?\? \[\]\)/);
+  assert.match(purge, /if \(locked\.length === 0\) return \{ count: 0 \};/, "no empty IN () after a restore race");
   // A transfer TO a contact holds their row, so it can't land between the delete's check and the delete.
   assert.match(code("src/lib/vehicleOwnership.ts"), /SELECT "id" FROM "Contact" WHERE "id" = \$\{newContactId\} AND "tenantId" = \$\{tenantId\} FOR SHARE/);
 });
