@@ -11,11 +11,13 @@ import {
   ChevronDown,
   ChevronRight,
   ExternalLink,
+  EyeOff,
   Globe,
   Send,
 } from "lucide-react";
 import { Surface } from "@/components/visual-system";
 import {
+  hideComment,
   privateReplyToComment,
   publicReplyToComment,
   setCommentThreadArchived,
@@ -180,7 +182,10 @@ function CommentThreadCard({
               key={comment.id}
               conversationId={thread.conversationId}
               comment={comment}
-              canReplyPublicly={canReplyPublicly}
+              // Threads (2026-11-21): its own connection replies publicly and can hide; it has no private replies.
+              canReplyPublicly={thread.platform === "threads" || canReplyPublicly}
+              canReplyPrivately={thread.privateReplies}
+              canHide={thread.platform === "threads"}
             />
           ))}
         </ul>
@@ -195,10 +200,16 @@ function CommentRow({
   conversationId,
   comment,
   canReplyPublicly,
+  canReplyPrivately,
+  canHide,
 }: {
   conversationId: string;
   comment: CommentThread["comments"][number];
   canReplyPublicly: boolean;
+  /** False where the platform has no private messages (Threads). */
+  canReplyPrivately: boolean;
+  /** Threads: hide a comment from the post. */
+  canHide: boolean;
 }) {
   const router = useRouter();
   const [mode, setMode] = useState<ReplyMode>(null);
@@ -253,7 +264,7 @@ function CommentRow({
                   spent the button goes, rather than being offered to the next
                   person who looks and refused by Meta after they have written
                   their message. */}
-              {comment.privateReplied ? (
+              {!canReplyPrivately ? null : comment.privateReplied ? (
                 <span className="text-[11px] text-muted-foreground">
                   Private reply already sent — Meta allows only one.
                 </span>
@@ -261,6 +272,22 @@ function CommentRow({
                 <button type="button" className="btn-secondary btn-sm" onClick={() => setMode("private")}>
                   <Send className="size-4" />
                   Reply privately
+                </button>
+              )}
+              {canHide && (
+                <button
+                  type="button"
+                  className="btn-secondary btn-sm"
+                  disabled={pending}
+                  title="Hide this comment from the post — it stays here in the inbox"
+                  onClick={() => startTransition(async () => {
+                    const result = await hideComment(conversationId, comment.commentId!).catch(() => null);
+                    if (!result || "error" in result) toast.error(result && "error" in result ? result.error : "Couldn't hide that.");
+                    else { toast.success(result.success ?? "Hidden"); router.refresh(); }
+                  })}
+                >
+                  <EyeOff className="size-4" />
+                  Hide
                 </button>
               )}
             </div>

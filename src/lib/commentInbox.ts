@@ -2,6 +2,7 @@ import "server-only";
 import { prisma } from "./db";
 import { activeTenantPredicate } from "./tenantPredicate";
 import {
+  commentAllowsPrivateReply,
   commentPlatform,
   commentPlatformPresentation,
   commentPostUrl,
@@ -34,6 +35,8 @@ export type CommentThread = {
   platform: CommentPlatform | null;
   platformLabel: string;
   platformIcon: string | null;
+  /** The platform can take a private reply (a DM) to a comment — not Threads (socialComments.commentAllowsPrivateReply). */
+  privateReplies: boolean;
   /** A link back to the post, when the platform has an addressable URL. */
   postUrl: string | null;
   subject: string;
@@ -140,6 +143,7 @@ export async function loadCommentThreads(
       platform,
       platformLabel: presentation.label,
       platformIcon: presentation.icon,
+      privateReplies: commentAllowsPrivateReply(platform),
       postUrl: commentPostUrl(thread.externalRef),
       subject: thread.subject ?? "Comment thread",
       unread: thread.unread,

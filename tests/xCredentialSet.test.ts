@@ -68,14 +68,14 @@ test("other integrations keep the plain set rule", async () => {
   });
   assert.equal(smtp?.SMTP_HOST, "platform-host");
   for (const integration of TENANT_CREDENTIAL_INTEGRATIONS) {
-    // X and Xero: the connected account's sign-in belongs to the workspace whichever app it came through.
+    // X, Xero and Threads: the connected account's sign-in belongs to the workspace whichever app it came through.
     // Meta: a workspace's OWN app's secret and verify token (2026-11-21) are its own whichever Page token is in use —
     // encrypted (settings SECRET_KEYS) and never part of the Page-token set.
     if (integration.id === "meta") {
       assert.deepEqual(integration.fields.filter((field) => field.independent).map((field) => field.key), ["META_OWN_APP_SECRET", "META_OWN_VERIFY_TOKEN"]);
       continue;
     }
-    if (integration.id !== "x" && integration.id !== "xero") assert.ok(integration.fields.every((field) => !field.independent), `${integration.id} has no independent fields`);
+    if (integration.id !== "x" && integration.id !== "xero" && integration.id !== "threads") assert.ok(integration.fields.every((field) => !field.independent), `${integration.id} has no independent fields`);
   }
 });
 

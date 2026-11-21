@@ -152,7 +152,15 @@ export function isOwnPageComment(comment: IngestibleComment, pageId: string | nu
  * icon or the storage has to change when Instagram comments are switched on —
  * only the webhook branch that produces them.
  */
-export type CommentPlatform = "facebook" | "instagram" | "x";
+export type CommentPlatform = "facebook" | "instagram" | "x" | "threads";
+
+/**
+ * Whether the inbox can reply PRIVATELY (a DM) to a comment on this platform. Threads has no messaging API (lib/
+ * threads.ts), so its comments are answered publicly only; X comments are mentions answered as DMs elsewhere.
+ */
+export function commentAllowsPrivateReply(platform: CommentPlatform | null): boolean {
+  return platform === "facebook" || platform === "instagram";
+}
 
 /** The stable key for one post's comment thread. */
 export function commentThreadRef(platform: CommentPlatform, postId: string): string {
@@ -162,7 +170,7 @@ export function commentThreadRef(platform: CommentPlatform, postId: string): str
 /** The platform a thread key names, or null when it names none we know. */
 export function commentPlatform(externalRef: string | null | undefined): CommentPlatform | null {
   const prefix = (externalRef ?? "").split(":")[0];
-  return prefix === "facebook" || prefix === "instagram" || prefix === "x" ? prefix : null;
+  return prefix === "facebook" || prefix === "instagram" || prefix === "x" || prefix === "threads" ? prefix : null;
 }
 
 /** The post id, without its platform prefix. */
@@ -176,6 +184,7 @@ const PLATFORM_PRESENTATION: Record<CommentPlatform, { label: string; icon: stri
   facebook: { label: "Facebook", icon: "/branding/social-facebook.png" },
   instagram: { label: "Instagram", icon: "/branding/social-instagram.png" },
   x: { label: "X", icon: "/branding/social-x.svg" },
+  threads: { label: "Threads", icon: "/branding/social-threads.svg" },
 };
 
 /** How a platform is named and shown. The same assets the inbox already uses. */

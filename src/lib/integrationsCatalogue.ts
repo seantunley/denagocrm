@@ -27,6 +27,7 @@ export const INTEGRATION_META: Record<string, IntegrationMeta> = {
   whatsapp: { group: "messaging", purpose: "Send and receive WhatsApp messages in the Inbox.", mark: { text: "WA", tone: "bg-emerald-500/15 text-emerald-300" } },
   meta: { group: "messaging", purpose: "Facebook Messenger and Instagram messages, and lead ads, in the Inbox.", mark: { text: "Me", tone: "bg-blue-500/15 text-blue-300" } },
   x: { group: "messaging", purpose: "X messages, mentions and replies in the Inbox.", mark: { text: "X", tone: "bg-zinc-500/20 text-zinc-100" } },
+  threads: { group: "messaging", purpose: "Comments on your Threads posts in the Inbox, answered or hidden from there.", mark: { text: "@", tone: "bg-zinc-500/20 text-zinc-100" } },
   telegram: { group: "messaging", purpose: "Telegram messages in the Inbox, answered by the chatbot.", mark: { text: "Tg", tone: "bg-sky-500/15 text-sky-300" } },
   sms: { group: "messaging", purpose: "Text one-time codes to signers who need them.", mark: { text: "SMS", tone: "bg-violet-500/15 text-violet-300" } },
   smtp: { group: "email", purpose: "Send quotes, invoices and messages from your own mail server.", mark: { text: "Out", tone: "bg-orange-500/15 text-orange-300" } },
@@ -165,6 +166,8 @@ export function connectedTo(integrationId: string, shown: Record<string, string 
       return shown.XERO_ORG_NAME ? `Organisation: ${shown.XERO_ORG_NAME}` : null;
     case "x":
       return shown.X_USERNAME ? `@${shown.X_USERNAME.replace(/^@/, "")}` : null;
+    case "threads":
+      return shown.THREADS_USERNAME ? `@${shown.THREADS_USERNAME.replace(/^@/, "")}` : null;
     case "google-reviews":
       return shown.GOOGLE_PLACE_ID ? `Place ID ${shown.GOOGLE_PLACE_ID}` : null;
     default:
