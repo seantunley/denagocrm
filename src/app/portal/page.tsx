@@ -274,8 +274,9 @@ export default async function PortalHome() {
                   <ul className="space-y-1.5">
                     {services.earlier.slice(0, 10).map((record) => (
                       <li key={record.id} className="text-sm flex justify-between gap-3 text-slate-400">
-                        <span>{record.summary}</span>
-                        <span className="shrink-0">{record.km != null ? `${record.km.toLocaleString()} km · ` : ""}{formatDate(record.serviceDate, regional)}</span>
+                        {/* Date and odometer only: anything typed was for the previous owner (lib/vehicleOwnershipPrivacy.ts). */}
+                        <span>Serviced {formatDate(record.serviceDate, regional)}</span>
+                        <span className="shrink-0">{record.km != null ? `${record.km.toLocaleString()} km` : ""}</span>
                       </li>
                     ))}
                   </ul>
