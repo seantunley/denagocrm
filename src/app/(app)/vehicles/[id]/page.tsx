@@ -440,7 +440,12 @@ export default async function VehicleDetailPage({
                   cover={vehicleCover(vehicle, new Date())}
                   parts={warrantyPartList}
                   canManage={canManageWarranty}
-                  certificate={filedCertificate ? { ...filedCertificate, state: certificateState(filedCertificate, vehicle) } : null}
+                  certificate={
+                    filedCertificate
+                      ? { ...filedCertificate, state: certificateState(filedCertificate, { ...vehicle, ownerships: [{ warranty: ownerWarranty }] }) }
+                      : null
+                  }
+                  ownerCovered={ownerWarranty === "carried"}
                 />
                 {ownerWarranty !== "carried" && (
                   <p className="mb-3 rounded-md bg-amber-500/10 px-3 py-2 text-xs text-amber-300">

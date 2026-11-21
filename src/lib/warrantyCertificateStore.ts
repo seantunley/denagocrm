@@ -11,7 +11,8 @@ import { standardTemplateFor } from "./doceditor/standardTemplates";
 import { renderModelToPdf } from "./doceditor/generate";
 import { vehicleCover } from "./warrantyParts";
 import { certificateFingerprint } from "./warrantyCertificateState";
-import { CERTIFICATE_TAG, buildWarrantyCertificateContext, certificateFileName, certificateNumber } from "./warrantyCertificate";
+import { CERTIFICATE_TAG, NOT_COVERED, buildWarrantyCertificateContext, certificateFileName, certificateNumber, ownerCovered } from "./warrantyCertificate";
+import { refuse } from "./actionResult";
 
 /**
  * Issue a vehicle's warranty certificate and FILE it: a PDF in the owner's documents and on the vehicle, from the
@@ -35,9 +36,12 @@ export async function issueWarrantyCertificate(input: {
       id: true, model: true, vin: true, regNumber: true, color: true, contactId: true,
       warrantyParts: true, warrantyStartsAt: true, purchaseDate: true, warrantyMonths: true,
       contact: { select: { firstName: true, lastName: true, company: true, isCompany: true, phone: true, email: true, address: true, suburb: true, city: true } },
+      ownerships: { where: { tenantId, ownedUntil: null }, select: { warranty: true }, take: 1 },
     },
   });
   if (!vehicle) return null;
+  // A certificate certifies the owner NOW: never while their warranty transfer is pending or was declined.
+  if (!ownerCovered(vehicle.ownerships)) refuse(NOT_COVERED);
   const issuedAt = new Date();
   const cover = vehicleCover(vehicle, issuedAt);
   const start = vehicle.warrantyStartsAt ?? vehicle.purchaseDate;
@@ -53,6 +57,12 @@ export async function issueWarrantyCertificate(input: {
 
   try {
     const documentId = await prisma.$transaction(async (tx) => {
+      // Re-checked at filing under the vehicle's lock, which a transfer also takes: the same owner, still covered.
+      const held = await tx.$queryRaw<{ contactId: string }[]>`SELECT "contactId" FROM "Vehicle" WHERE "id" = ${vehicle.id} AND "tenantId" = ${tenantId} AND "deletedAt" IS NULL FOR UPDATE`;
+      const open = await tx.vehicleOwnership.findMany({ where: { tenantId, vehicleId: vehicle.id, ownedUntil: null }, select: { warranty: true }, take: 1 });
+      if (held[0]?.contactId !== vehicle.contactId || !ownerCovered(open)) {
+        refuse("The vehicle's owner or warranty changed while the certificate was being made. Refresh and try again.");
+      }
       const doc = await tx.document.create({
         data: {
           tenantId, contactId: vehicle.contactId, vehicleId: vehicle.id, fileName, storedName,

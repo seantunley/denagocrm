@@ -66,10 +66,14 @@ test("to the owner: only on a Send behind a Confirm — consent-checked, the edi
 
 test("a certificate is sent or offered only while it names the owner now and states the warranty as it is now", () => {
   const delivered = new Date("2026-11-21T00:00:00");
+  const annaContact = {
+    firstName: "Anna", lastName: "Smit", company: null, isCompany: false,
+    phone: "082 000 0000", email: "anna@example.com", address: "1 Example Road", suburb: "Constantia", city: "Cape Town",
+  };
   const anna = {
-    contactId: "anna", model: "Nomad XL", vin: "VIN1", color: "White", purchaseDate: delivered, warrantyMonths: null,
+    contactId: "anna", model: "Nomad XL", vin: "VIN1", regNumber: null, color: "White", purchaseDate: delivered, warrantyMonths: null,
     warrantyParts: [{ part: "Battery", months: 60 }, { part: "Cart", months: 24 }, { part: "Chassis", months: null }],
-    warrantyStartsAt: delivered, contact: { firstName: "Anna", lastName: "Smit" },
+    warrantyStartsAt: delivered, contact: annaContact, ownerships: [{ warranty: "carried" }],
   };
   // Issued: stamped with what it was made from.
   const cert = { contactId: "anna", issuedFrom: certificateFingerprint(anna) };
@@ -78,22 +82,43 @@ test("a certificate is sent or offered only while it names the owner now and sta
   const extended = { ...anna, warrantyParts: [{ part: "Battery", months: 60 }, { part: "Cart", months: 36 }, { part: "Chassis", months: null }] };
   assert.equal(certificateState(cert, extended), "out_of_date");
   assert.equal(certificateState(cert, { ...anna, warrantyStartsAt: new Date("2026-12-01T00:00:00") }), "out_of_date", "start date moved");
-  assert.equal(certificateState(cert, { ...anna, contact: { firstName: "Anna", lastName: "Botha" } }), "out_of_date", "owner's name changed");
+  assert.equal(certificateState(cert, { ...anna, contact: { ...annaContact, lastName: "Botha" } }), "out_of_date", "owner's name changed");
+  // Review of #1174 [P2]: every owner detail a certificate can print — phone, email, address — and the registration.
+  for (const changed of [{ phone: "083 111 1111" }, { email: "anna@new.example" }, { address: "9 New Street" }, { suburb: "Bishopscourt" }, { city: "Stellenbosch" }]) {
+    assert.equal(certificateState(cert, { ...anna, contact: { ...annaContact, ...changed } }), "out_of_date", Object.keys(changed)[0]);
+  }
+  assert.equal(certificateState(cert, { ...anna, regNumber: "CA 1" }), "out_of_date", "registration");
+  // Review of #1174 [P1]: the warranty didn't transfer to the owner (pending approval, or declined) — never current, even
+  // for a certificate stamped for them; reissuing is refused too (#1173's ownerCovered).
+  assert.equal(certificateState(cert, { ...anna, ownerships: [{ warranty: "pending" }] }), "not_covered");
+  assert.equal(certificateState(cert, { ...anna, ownerships: [{ warranty: "not_carried" }] }), "not_covered");
+  assert.equal(certificateState(cert, { ...anna, ownerships: [{ warranty: "carried" }] }), "current", "approved: current again");
+  assert.match(CERTIFICATE_NOT_CURRENT.not_covered, /hasn't transferred/);
   // Reissued: current again, with the same body and PDF terms.
   assert.equal(certificateState({ contactId: "anna", issuedFrom: certificateFingerprint(extended) }, extended), "current");
   // Transferred to Ben: Anna's certificate isn't his, and a certificate from before stamping is never current.
-  assert.equal(certificateState(cert, { ...anna, contactId: "ben", contact: { firstName: "Ben" } }), "previous_owner");
+  assert.equal(certificateState(cert, { ...anna, contactId: "ben", contact: { ...annaContact, firstName: "Ben" } }), "previous_owner");
   assert.equal(certificateState({ contactId: "anna", issuedFrom: null }, anna), "out_of_date");
   assert.match(CERTIFICATE_NOT_CURRENT.out_of_date, /Reissue it first/);
 
   // Issuing stamps it; every reader checks it: the email send, DAX's lookup, DAX's WhatsApp send, the vehicle page.
   assert.match(code("src/lib/warrantyCertificateStore.ts"), /issuedFrom: certificateFingerprint\(vehicle\),/);
   assert.match(code("prisma/migrations/20261121140000_document_issued_from/migration.sql"), /ADD COLUMN IF NOT EXISTS "issuedFrom" TEXT/);
+  // One select for every reader: everything printed, plus the owner's open ownership row.
+  const state = code("src/lib/warrantyCertificateState.ts");
+  assert.match(state, /contact: \{ select: \{ firstName: true, lastName: true, company: true, isCompany: true, phone: true, email: true, address: true, suburb: true, city: true \} \},\s*ownerships: \{ where: \{ ownedUntil: null \}, select: \{ warranty: true \}, take: 1 \},/);
   const send = code("src/app/actions/warrantyCertificateSend.ts");
+  assert.match(send, /\.\.\.CERTIFICATE_FACTS_SELECT,/);
   assert.match(send, /const state = certificateState\(certificate, vehicle\);\s*if \(state !== "current"\) return refuse\(CERTIFICATE_NOT_CURRENT\[state\]\);/);
   const lookup = code("src/lib/assistant/lookups/vehicleWarranty.ts");
+  assert.match(lookup, /\.\.\.CERTIFICATE_FACTS_SELECT,/);
   assert.match(lookup, /const certificate = state === "current" \? filed : null;/);
-  assert.match(code("src/lib/assistantWarrantyCertificate.ts"), /if \(!vehicle \|\| certificateState\(doc, vehicle\) !== "current"\) continue;/);
-  assert.match(code("src/app/(app)/vehicles/[id]/page.tsx"), /state: certificateState\(filedCertificate, vehicle\)/);
-  assert.match(code("src/components/VehicleWarrantyParts.tsx"), /\{current && \(/, "Send only for a current certificate");
+  assert.match(lookup, /ownerCovered\(v\.ownerships\) \? \{\} : \{ warrantyForThisOwner:/, "DAX hears the warranty didn't transfer");
+  const whatsapp = code("src/lib/assistantWarrantyCertificate.ts");
+  assert.match(whatsapp, /select: CERTIFICATE_FACTS_SELECT,/);
+  assert.match(whatsapp, /if \(!vehicle \|\| certificateState\(doc, vehicle\) !== "current"\) continue;/);
+  assert.match(code("src/app/(app)/vehicles/[id]/page.tsx"), /state: certificateState\(filedCertificate, \{ \.\.\.vehicle, ownerships: \[\{ warranty: ownerWarranty \}\] \}\)/);
+  const card = code("src/components/VehicleWarrantyParts.tsx");
+  assert.match(card, /\{current && \(/, "Send only for a current certificate");
+  assert.match(card, /canManage && cover\.length > 0 && ownerCovered && \(/, "no Send or Issue for an owner the warranty didn't transfer to");
 });

@@ -7,8 +7,9 @@ import { getAccessibleVehicleIds, hasAnyPermission } from "../../permissions";
 import { WARRANTY_READ } from "../../warrantyAccess";
 import { computeWarranty, warrantyLabels } from "../../warranty";
 import { termLabel, vehicleCover } from "../../warrantyParts";
-import { CERTIFICATE_TAG } from "../../warrantyCertificate";
-import { CERTIFICATE_NOT_CURRENT, certificateState } from "../../warrantyCertificateState";
+import { CERTIFICATE_TAG, ownerCovered } from "../../warrantyCertificate";
+import { OWNERSHIP_WARRANTY_LABELS, parseOwnershipWarranty } from "../../vehicleTransferRules";
+import { CERTIFICATE_FACTS_SELECT, CERTIFICATE_NOT_CURRENT, certificateState } from "../../warrantyCertificateState";
 import { type ToolOutput, type User, fuzzy, refused } from "../lookupKit";
 
 const day = (d: Date | null | undefined) => (d ? johannesburgDateKey(d) : null);
@@ -39,10 +40,10 @@ export async function vehicleWarranty(user: User, args: { search?: string; limit
     orderBy: { createdAt: "desc" },
     take: take + 1,
     select: {
-      id: true, model: true, vin: true, regNumber: true, color: true, contactId: true,
-      purchaseDate: true, warrantyMonths: true, warrantyParts: true, warrantyStartsAt: true,
+      // Everything the certificate prints, and whether the warranty covers the owner now (warrantyCertificateState.ts).
+      ...CERTIFICATE_FACTS_SELECT,
+      id: true,
       product: { select: { name: true } },
-      contact: { select: { firstName: true, lastName: true, company: true, isCompany: true } },
       documents: { where: { tag: CERTIFICATE_TAG, deletedAt: null, replacedById: null }, orderBy: { createdAt: "desc" }, take: 1, select: { id: true, createdAt: true, contactId: true, issuedFrom: true } },
     },
   });
@@ -61,6 +62,8 @@ export async function vehicleWarranty(user: User, args: { search?: string; limit
         owner: contactName(v.contact), ownerLink: `/contacts/${v.contactId}`, product: v.product?.name ?? null,
         delivered: day(v.warrantyStartsAt ?? v.purchaseDate),
         warranty: warrantyLabels[overall.status],
+        // After a transfer: whether the warranty covers this owner at all (pending approval or declined = it doesn't).
+        ...(ownerCovered(v.ownerships) ? {} : { warrantyForThisOwner: OWNERSHIP_WARRANTY_LABELS[parseOwnershipWarranty(v.ownerships[0]?.warranty)] }),
         cover: vehicleCover(v, now).map((c) => ({ part: c.part, cover: termLabel(c.months), until: day(c.until), status: c.status })),
         certificate: certificate
           ? { link: `/api/files/${certificate.id}`, issued: day(certificate.createdAt) }

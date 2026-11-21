@@ -9,7 +9,7 @@ import { isModuleEnabled } from "./modules/enabled";
 import { WARRANTY_READ } from "./warrantyAccess";
 import { CERTIFICATE_TAG } from "./warrantyCertificate";
 import { linkedDocumentIds } from "./assistantWarrantyCertificateRules";
-import { certificateState } from "./warrantyCertificateState";
+import { CERTIFICATE_FACTS_SELECT, certificateState } from "./warrantyCertificateState";
 
 /**
  * "Send me the warranty certificate for …" on WhatsApp (Sean, 2026-11-21): the filed PDF goes to THE PERSON WHO ASKED,
@@ -41,10 +41,7 @@ export async function sendCertificatesInAnswer(input: {
       // Only the certificate for the vehicle's owner now, made from its warranty as it is now.
       const vehicle = await basePrisma.vehicle.findFirst({
         where: { id: doc.vehicleId, tenantId, deletedAt: null },
-        select: {
-          contactId: true, model: true, vin: true, color: true, purchaseDate: true, warrantyMonths: true, warrantyParts: true, warrantyStartsAt: true,
-          contact: { select: { firstName: true, lastName: true, company: true, isCompany: true } },
-        },
+        select: CERTIFICATE_FACTS_SELECT,
       });
       if (!vehicle || certificateState(doc, vehicle) !== "current") continue;
       const pdf = await readFile(doc.storedName, tenantId);

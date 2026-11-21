@@ -15,7 +15,7 @@ import { tenantEmailContent } from "@/lib/signing/signingEmail";
 import { describeBlockedReason, firstAllowedChannel } from "@/lib/communicationPolicy";
 import { vehicleCover } from "@/lib/warrantyParts";
 import { CERTIFICATE_TAG, partsLines } from "@/lib/warrantyCertificate";
-import { CERTIFICATE_NOT_CURRENT, certificateState } from "@/lib/warrantyCertificateState";
+import { CERTIFICATE_FACTS_SELECT, CERTIFICATE_NOT_CURRENT, certificateState } from "@/lib/warrantyCertificateState";
 
 /**
  * Send the vehicle's filed warranty certificate to its owner — only when someone presses Send (Sean, 2026-11-21): by
@@ -32,19 +32,19 @@ export async function sendWarrantyCertificate(vehicleId: string) {
       const vehicle = await prisma.vehicle.findFirst({
         where: { id: vehicleId, tenantId, deletedAt: null },
         select: {
-          model: true, vin: true, color: true, contactId: true,
-          purchaseDate: true, warrantyMonths: true, warrantyParts: true, warrantyStartsAt: true,
-          contact: { select: { id: true, firstName: true, lastName: true, company: true, isCompany: true } },
+          // Everything the certificate prints, and whether the warranty covers the owner now.
+          ...CERTIFICATE_FACTS_SELECT,
           documents: { where: { tag: CERTIFICATE_TAG, deletedAt: null, replacedById: null }, orderBy: { createdAt: "desc" }, take: 1, select: { id: true, fileName: true, storedName: true, contactId: true, issuedFrom: true } },
         },
       });
       if (!vehicle) return refuse("This vehicle is in the trash or no longer exists.");
       const certificate = vehicle.documents[0];
       if (!certificate) return refuse("No certificate is filed for this vehicle yet — press Issue certificate first.");
-      // Only a certificate made out to the owner now, from the warranty as it is now — the email states the live cover.
+      // Only a certificate made out to the owner now, covered now, from the details as they are now — the email states
+      // the live cover.
       const state = certificateState(certificate, vehicle);
       if (state !== "current") return refuse(CERTIFICATE_NOT_CURRENT[state]);
-      const c = vehicle.contact;
+      const c = { ...vehicle.contact, id: vehicle.contactId };
       const verdict = await firstAllowedChannel({ contactId: c.id, tenantId, purpose: "service", channels: ["email"] });
       if (!verdict.allowed || !verdict.destination) {
         await logAudit({ action: "communication.suppressed", summary: `Warranty certificate for ${vehicle.model} not sent — ${describeBlockedReason(verdict.reason)}`, contactId: c.id, user });
