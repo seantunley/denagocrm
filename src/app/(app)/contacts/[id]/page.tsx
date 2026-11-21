@@ -26,6 +26,7 @@ import { watchState } from "@/lib/collaboration";
 import PreviouslyOwnedVehicles from "@/components/PreviouslyOwnedVehicles";
 import { auditDetailFor } from "@/lib/auditDetailQuery";
 import ConfirmDelete from "@/components/ConfirmDelete";
+import { contactKeptBecause } from "@/lib/contactKeep";
 import { QuickCreateButton } from "@/components/QuickCreateButton";
 import WhatsAppPanel from "@/components/WhatsAppPanel";
 import Tabs, { TabLink } from "@/components/Tabs";
@@ -131,6 +132,7 @@ export default async function ContactDetailPage({
     },
   });
   if (!contact) notFound();
+  const keptBecause = canDeleteContact ? await contactKeptBecause(contact.tenantId, contact.id) : null;
   // Xero from the customer too: a delivered invoice leaves the Deliveries board, and
   // one that never went to Xero must still be sendable from somewhere.
   const canSendXero =
@@ -384,7 +386,10 @@ export default async function ContactDetailPage({
             triggerClass="btn-secondary text-red-400"
             action={deleteContact.bind(null, contact.id)}
             title={`Delete contact ${contactName(contact)}?`}
-            description={`The contact moves to the Trash and can be restored for 60 days.${automotiveOn ? " Their vehicles and job cards stay in place." : ""}`}
+            description="The contact moves to the Trash and can be restored for 60 days. After that they are deleted for good."
+            // A customer with a sale or filed paperwork is kept for good (lib/contactKeep.ts); the action refuses too.
+            disabled={Boolean(keptBecause)}
+            disabledReason={keptBecause ?? undefined}
           />}
           </PopoverContent></Popover>
         </>}

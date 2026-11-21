@@ -182,6 +182,8 @@ export async function transferVehicleOwnership(
         newContactId = made.id;
         await logAuditStrict({ action: "contact.created", summary: `Created contact ${contactName(made)} as the new owner of ${vehicle.model}`, contactId: made.id, user: actor }, tx);
       }
+      // The new owner's row held too: deleting a contact holds it while it checks they own nothing (lib/contactKeep.ts).
+      await tx.$queryRaw`SELECT "id" FROM "Contact" WHERE "id" = ${newContactId} AND "tenantId" = ${tenantId} FOR SHARE`;
       const newOwner = await tx.contact.findFirst({ where: { id: newContactId, tenantId, deletedAt: null }, select: { ...NAME_SELECT, fleetId: true } });
       if (!newOwner) refuse("The new owner isn't a contact in this workspace (or is in the trash).");
       const problem = transferRefusal({ newContactId, currentContactId: vehicle.contactId, currentFrom: open.ownedFrom, date, reason, odometerKm, now });
@@ -274,6 +276,10 @@ export async function undoLastTransfer(input: { tenantId: string; vehicleId: str
     const problem = undoRefusal(latest, previous, { claims, jobCards, services });
     if (problem) refuse(problem);
     const back = previous!.contactId!;
+    await tx.$queryRaw`SELECT "id" FROM "Contact" WHERE "id" = ${back} AND "tenantId" = ${tenantId} FOR SHARE`;
+    if (!(await tx.contact.findFirst({ where: { id: back, tenantId, deletedAt: null }, select: { id: true } }))) {
+      refuse("The previous owner is in the trash. Restore them first, then undo the transfer.");
+    }
     const reversed = await tx.vehicleOwnership.updateMany({
       where: { id: latest!.id, tenantId, ownedUntil: null },
       data: { ownedUntil: latest!.ownedFrom, reversedAt: now, reversedByName: actor.name },
