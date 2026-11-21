@@ -2,6 +2,8 @@ import ModalTrigger from "@/components/Modal";
 import WarrantyTermsForm from "@/components/WarrantyTermsForm";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { issueVehicleCertificate, saveVehicleWarranty } from "@/app/actions/warrantyParts";
+import { sendWarrantyCertificate } from "@/app/actions/warrantyCertificateSend";
+import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import { formatDate } from "@/lib/format";
 import { johannesburgDateKey } from "@/lib/activityDay";
 import { parseTerms, termLabel, type PartCover } from "@/lib/warrantyParts";
@@ -67,11 +69,23 @@ export default function VehicleWarrantyParts({
             <span>No certificate filed yet.</span>
           )}
           {canManage && cover.length > 0 && (
-            <SaveForm action={issueVehicleCertificate.bind(null, vehicle.id)} success="Certificate filed">
-              <SaveButton className="btn-secondary btn-sm" pendingLabel="Making the certificate…">
-                {certificate ? "Reissue certificate" : "Issue certificate"}
-              </SaveButton>
-            </SaveForm>
+            <div className="flex flex-wrap items-center gap-2">
+              {certificate && (
+                // Only on this click, behind a Confirm: emailed to the owner with the PDF, through the consent check.
+                <ConfirmActionDialog
+                  trigger={<button type="button" className="btn-secondary btn-sm">Send to owner</button>}
+                  title="Email the warranty certificate to the owner?"
+                  description="The latest certificate is emailed to the vehicle's owner with the PDF attached, using your Warranty certificate email template. It's logged on the customer's timeline."
+                  confirmLabel="Send"
+                  onConfirm={sendWarrantyCertificate.bind(null, vehicle.id)}
+                />
+              )}
+              <SaveForm action={issueVehicleCertificate.bind(null, vehicle.id)} success="Certificate filed">
+                <SaveButton className="btn-secondary btn-sm" pendingLabel="Making the certificate…">
+                  {certificate ? "Reissue certificate" : "Issue certificate"}
+                </SaveButton>
+              </SaveForm>
+            </div>
           )}
         </div>
       )}

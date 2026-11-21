@@ -245,11 +245,14 @@ function asStored(value: unknown): unknown {
   return Object.fromEntries(Object.entries(value as Record<string, unknown>).reverse().map(([k, v]) => [k, asStored(v)]));
 }
 
+/** Emails that existed when the wording was archived (2026-10-07/08). One added since has no older wording to upgrade. */
+const ARCHIVED_KINDS = EMAIL_KINDS.filter((kind) => kind !== "warranty_certificate");
+
 test("a draft is 'untouched' only when it is EXACTLY what was seeded — any edit, however early, keeps it", () => {
   // Review of #807: "untouched" was `updatedAt - createdAt < 5s`, but the editor
   // autosaves ~1.2s after a keystroke, so a first edit made straight after the
   // email was created looked untouched and was overwritten on the next load.
-  for (const kind of EMAIL_KINDS) {
+  for (const kind of ARCHIVED_KINDS) {
     const old = STANDARD_WORDING_2026_10_07[kind];
     assert.ok(old, `${kind}: the replaced wording is on record`);
     const seeded = asStored(JSON.parse(JSON.stringify(defaultEmailBody(kind, null, old))));
@@ -304,7 +307,7 @@ test("real pre-upgrade draft labels from #806 and #807 are recognised across all
     survey_reminder: "Answer the survey",
   };
   for (const revision of [STANDARD_WORDING_2026_10_07, STANDARD_WORDING_2026_10_08]) {
-    for (const kind of EMAIL_KINDS) {
+    for (const kind of ARCHIVED_KINDS) {
       const wording = revision[kind]!;
       assert.ok(wording, `missing archived ${kind}`);
       // Deliberately discard the archived design metadata to reproduce the

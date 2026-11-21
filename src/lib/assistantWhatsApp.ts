@@ -8,6 +8,8 @@ import { sendWhatsAppDocument } from "./whatsapp";
 import { quotePdf } from "./quotePdf";
 import { quotePdfFileName } from "./quoteEmail";
 import { isWrittenAsReport, wantsReport } from "./assistantReport";
+import { sendCertificatesInAnswer } from "./assistantWarrantyCertificate";
+import { wantsCertificate } from "./assistantWarrantyCertificateRules";
 import { getCompanyProfile } from "./companyProfile";
 import { transcribeVoice, transcribeVoiceDetailed } from "./transcribe";
 import { askCrm } from "./crmAssistant";
@@ -499,6 +501,8 @@ export async function handleStaffWhatsApp(
     await sendPlan(waId, spoke ? voiceReplyExtras(choices) : plan);
     // A REPORT ASKED FOR HERE COMES WITH ITS PDF (Sean, 2026-11-14: "why can't it deliver the PDF reports to WhatsApp?").
     if (answer && wantsReport(q) && isWrittenAsReport(answer)) await sendReportPdf(tenantId, user, waId, q, answer);
+    // A warranty certificate asked for: the ones DAX linked, to this person only (assistantWarrantyCertificate.ts).
+    if (answer && wantsCertificate(q)) await sendCertificatesInAnswer({ tenantId, user, waId, answer, phoneSafe: () => staffPhoneStillSafe(tenantId, user.id, waId) });
   } finally {
     clearInterval(renew);
   }
