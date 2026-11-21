@@ -31,6 +31,7 @@ const BRANDED: { type: BlockType; label: string; icon: string }[] = [
   { type: "totalBand", label: "Total band", icon: "∑" },
   { type: "terms", label: "Terms", icon: "§" },
   { type: "handoverChecklist", label: "Handover checklist (bound)", icon: "☑" },
+  { type: "warrantyCover", label: "Warranty cover (bound)", icon: "🛡" },
   { type: "footer", label: "Footer", icon: "‗" },
 ];
 

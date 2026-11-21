@@ -32,10 +32,14 @@ export type CertificateVehicle = {
 
 const lines = (...values: (string | null | undefined)[]) => values.filter(Boolean).join("\n");
 
-/** "WCERT-7F3K2A-2611": the vehicle's short id and the issue month. */
-export function certificateNumber(vehicleId: string, issuedAt: Date): string {
+/**
+ * "WCERT-7F3K2A-2611-K4P9": the vehicle's short id, the issue month and a part of its own, so every issue — a reissue
+ * the same day included — has a number nobody else's has (review of #1173). Printed on the PDF, in its file name and
+ * in the audit line.
+ */
+export function certificateNumber(vehicleId: string, issuedAt: Date, unique: string): string {
   const yymm = `${String(issuedAt.getFullYear()).slice(2)}${String(issuedAt.getMonth() + 1).padStart(2, "0")}`;
-  return `WCERT-${vehicleId.slice(-6).toUpperCase()}-${yymm}`;
+  return `WCERT-${vehicleId.slice(-6).toUpperCase()}-${yymm}-${unique.replace(/[^a-z0-9]/gi, "").slice(0, 4).toUpperCase()}`;
 }
 
 /** One line per part: "Battery · 5 years · until 21 Nov 2031", "Chassis · Lifetime". */
@@ -44,8 +48,8 @@ export function partsLines(cover: readonly PartCover[], r: Regional = DEFAULT_RE
 }
 
 export function certificateFileName(v: { model: string; regNumber: string | null; vin: string | null }, number: string): string {
-  const ref = v.regNumber ?? v.vin ?? number;
-  return `Warranty certificate — ${v.model} ${ref}.pdf`.replace(/[\\/:*?"<>|]+/g, " ");
+  const ref = v.regNumber ?? v.vin;
+  return `Warranty certificate ${number} — ${v.model}${ref ? ` ${ref}` : ""}.pdf`.replace(/[\\/:*?"<>|]+/g, " ");
 }
 
 export function buildWarrantyCertificateContext(
@@ -53,10 +57,10 @@ export function buildWarrantyCertificateContext(
   cover: readonly PartCover[],
   start: Date,
   issuedAt: Date,
+  number: string,
   r: Regional = DEFAULT_REGIONAL,
 ): MergeContext {
   const c = v.contact;
-  const number = certificateNumber(v.id, issuedAt);
   const tokens: Record<string, string> = {
     "certificate.number": number,
     "certificate.date": formatDate(issuedAt, r),
@@ -76,7 +80,10 @@ export function buildWarrantyCertificateContext(
   };
   const vars = {
     certificate: { number },
-    warranty: { parts: cover.map((p) => ({ part: p.part, months: p.months, lifetime: p.months == null })) },
+    // The cover table (doceditor/warrantyCoverBlock.ts) reads these, already worded.
+    warranty: {
+      parts: cover.map((p) => ({ part: p.part, months: p.months, cover: termLabel(p.months), until: p.until ? formatDate(p.until, r) : "For life", lifetime: p.months == null })),
+    },
     customer: { name: tokens["customer.name"], email: tokens["customer.email"], phone: tokens["customer.phone"] },
     vehicle: { model: v.model, vin: v.vin ?? "", reg: v.regNumber ?? "" },
   };
