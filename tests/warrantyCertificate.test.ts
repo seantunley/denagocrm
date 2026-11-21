@@ -70,9 +70,10 @@ test("the cover table: one row per part from the record, lifetime shown FOR LIFE
 test("an editable, branded layout in Document Studio — the Warranty module's; filed with a label set by the CRM", () => {
   assert.ok(STANDARD_TEMPLATE_KEYS.includes("warranty-certificate"));
   const model = JSON.stringify(standardTemplateFor("warranty-certificate"));
-  for (const token of ["certificate.number", "certificate.date", "customer.name", "vehicle", "vehicle.vin", "vehicle.reg", "warranty.start", "company.name"]) {
+  for (const token of ["certificate.number", "certificate.date", "customer.name", "vehicle", "vehicle.vin", "vehicle.color", "warranty.start", "company.name"]) {
     assert.ok(model.includes(`{{${token}}}`), token);
   }
+  assert.ok(!model.includes("{{vehicle.reg}}"), "no registration line (Sean, 2026-11-21: 'Registration does not apply')");
   // The certificate feel (Sean, 2026-11-21: "Its boring"): a framed sheet, a serif title, the cover table, a seal.
   const doc = standardTemplateFor("warranty-certificate");
   assert.equal(doc.style.headingFont, "serif");
