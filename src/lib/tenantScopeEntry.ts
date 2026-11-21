@@ -221,14 +221,23 @@ export async function withTokenTenantScope<T>(
  *
  * The lookup itself is one indexed row on `basePrisma`, and it is now paid on the
  * dormant path as well — the deliberate cost of the scope existing at all.
+ *
+ * `onlyTenantId` — an event that arrived signed by ONE workspace's own app (Meta:
+ * `?workspace=<slug>`, Sean 2026-11-21 "Each workspace will have its own"). It is
+ * processed only for an endpoint registered to THAT workspace: an endpoint of another
+ * workspace, or of none, goes to `onUnresolved` in either mode — never another
+ * workspace's scope, never unscoped. A workspace's own app secret can therefore never
+ * inject events into another workspace.
  */
 export async function withChannelTenantScope<T>(
   channel: ChannelKind,
   externalId: string | null | undefined,
   fn: () => Promise<T>,
   onUnresolved: () => T | Promise<T>,
+  opts: { onlyTenantId?: string | null } = {},
 ): Promise<T> {
   const tenantId = await resolveChannelTenant(channel, externalId);
+  if (opts.onlyTenantId) return tenantId === opts.onlyTenantId ? runInTenantScope({ tenantId, system: false }, fn) : onUnresolved();
   if (tenantId) return runInTenantScope({ tenantId, system: false }, fn);
   return tenantEnforcing() ? onUnresolved() : fn();
 }

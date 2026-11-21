@@ -79,6 +79,11 @@ export type CommentDecision =
  */
 const ADDING_VERBS: ReadonlySet<string> = new Set(["add", "added"]);
 
+/** The story part of a Facebook id: "{pageId}_{storyId}" and "{albumId}_{storyId}" share it; a bare id is itself. */
+function storyId(id: string): string {
+  return id.split("_").pop() ?? id;
+}
+
 export function decideComment(value: FeedChangeValue | null | undefined): CommentDecision {
   const v = value ?? {};
 
@@ -109,7 +114,10 @@ export function decideComment(value: FeedChangeValue | null | undefined): Commen
       // Meta sets parent_id to the POST for a top-level comment, and to the
       // parent COMMENT for a reply. Treat "parent is the post" as top-level, so
       // callers can tell a reply from an original without knowing that quirk.
-      parentId: v.parent_id && v.parent_id !== postId ? String(v.parent_id) : null,
+      // Compared by the TRAILING story id: on a photo post a top-level comment's
+      // parent is "{albumId}_{storyId}", not the post's "{pageId}_{storyId}"
+      // (ChatbotX's trap 1, 2026-11-21) — the raw strings differ, the story doesn't.
+      parentId: v.parent_id && storyId(String(v.parent_id)) !== storyId(postId) ? String(v.parent_id) : null,
       message,
       authorId: v.from?.id ? String(v.from.id) : null,
       authorName: v.from?.name ? String(v.from.name) : null,
@@ -144,7 +152,15 @@ export function isOwnPageComment(comment: IngestibleComment, pageId: string | nu
  * icon or the storage has to change when Instagram comments are switched on —
  * only the webhook branch that produces them.
  */
-export type CommentPlatform = "facebook" | "instagram" | "x";
+export type CommentPlatform = "facebook" | "instagram" | "x" | "threads";
+
+/**
+ * Whether the inbox can reply PRIVATELY (a DM) to a comment on this platform. Threads has no messaging API (lib/
+ * threads.ts), so its comments are answered publicly only; X comments are mentions answered as DMs elsewhere.
+ */
+export function commentAllowsPrivateReply(platform: CommentPlatform | null): boolean {
+  return platform === "facebook" || platform === "instagram";
+}
 
 /** The stable key for one post's comment thread. */
 export function commentThreadRef(platform: CommentPlatform, postId: string): string {
@@ -154,7 +170,7 @@ export function commentThreadRef(platform: CommentPlatform, postId: string): str
 /** The platform a thread key names, or null when it names none we know. */
 export function commentPlatform(externalRef: string | null | undefined): CommentPlatform | null {
   const prefix = (externalRef ?? "").split(":")[0];
-  return prefix === "facebook" || prefix === "instagram" || prefix === "x" ? prefix : null;
+  return prefix === "facebook" || prefix === "instagram" || prefix === "x" || prefix === "threads" ? prefix : null;
 }
 
 /** The post id, without its platform prefix. */
@@ -168,6 +184,7 @@ const PLATFORM_PRESENTATION: Record<CommentPlatform, { label: string; icon: stri
   facebook: { label: "Facebook", icon: "/branding/social-facebook.png" },
   instagram: { label: "Instagram", icon: "/branding/social-instagram.png" },
   x: { label: "X", icon: "/branding/social-x.svg" },
+  threads: { label: "Threads", icon: "/branding/social-threads.svg" },
 };
 
 /** How a platform is named and shown. The same assets the inbox already uses. */

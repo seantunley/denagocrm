@@ -35,6 +35,8 @@ import { hasIntegrationFlow, getIntegrationFlow, flowFieldKeys } from "@/lib/int
 import { getIntegrationConnections, type IntegrationConnectionState } from "@/lib/integrationConnection";
 import { IntegrationConfigFlow } from "@/components/integration-config-flow";
 import MetaConnectBox from "@/components/settings/MetaConnectBox";
+import ThreadsConnectBox from "@/components/settings/ThreadsConnectBox";
+import MetaOwnAppBox from "@/components/settings/MetaOwnAppBox";
 
 export const dynamic = "force-dynamic";
 
@@ -70,7 +72,7 @@ const XERO_NOTICES: Record<string, string> = {
   failed: "Xero sign-in could not be completed. Check the redirect URI in the Xero app matches this CRM's address, then try again.",
 };
 
-export default async function IntegrationsPage({ searchParams }: { searchParams?: Promise<{ xero?: string; meta?: string }> }) {
+export default async function IntegrationsPage({ searchParams }: { searchParams?: Promise<{ xero?: string; meta?: string; threads?: string }> }) {
   const params = await searchParams;
   const xeroNotice = XERO_NOTICES[params?.xero ?? ""] ?? null;
   // Entirely sensitive (credential management) — gate the whole page.
@@ -271,6 +273,11 @@ export default async function IntegrationsPage({ searchParams }: { searchParams?
                     )}
                   </div>
                 )}
+
+                {/* Threads (2026-11-21): its own app's addresses, and Connect Threads. */}
+                {integration.id === "threads" && <ThreadsConnectBox tenantId={tenantId} connected={hasOverride.THREADS_USER_ID} notice={params?.threads ?? null} />}
+                {/* A workspace's own Meta app (Sean, 2026-11-21): where it delivers, and what to subscribe. */}
+                {integration.id === "meta" && <MetaOwnAppBox tenantId={tenantId} />}
 
                 {connection && (
                   <div

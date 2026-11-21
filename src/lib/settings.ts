@@ -24,6 +24,13 @@ const SECRET_KEYS = new Set([
   // waiting to be picked.
   "META_CONNECTED_PAGE_TOKEN",
   "META_CONNECT_PENDING",
+  // A workspace's Threads app and its connected account (lib/threads.ts, 2026-11-21).
+  "THREADS_APP_SECRET",
+  "THREADS_VERIFY_TOKEN",
+  "THREADS_ACCESS_TOKEN",
+  // A workspace's OWN Meta app (lib/metaWorkspaceApp.ts): its secret signs every delivery to it.
+  "META_OWN_APP_SECRET",
+  "META_OWN_VERIFY_TOKEN",
   "WA_ACCESS_TOKEN",
   "BULKSMS_TOKEN_ID",
   "BULKSMS_TOKEN_SECRET",
