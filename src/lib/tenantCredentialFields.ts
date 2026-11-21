@@ -90,9 +90,14 @@ export const TENANT_CREDENTIAL_INTEGRATIONS: readonly TenantCredentialIntegratio
     id: "meta",
     label: "Meta (Messenger & Instagram)",
     description:
-      "Route Messenger and Instagram DMs through this workspace's own Meta page.",
+      "Route Messenger and Instagram DMs and comments through this workspace's own Meta page and Instagram account.",
     fields: [
       { key: "META_PAGE_ACCESS_TOKEN", label: "Page access token (System User)", placeholder: "EAAG…" },
+      // This workspace's OWN Meta app (Sean, 2026-11-21: "Each workspace will have its own"): it delivers to this
+      // workspace's own webhook address, checked with these (lib/metaWorkspaceApp.ts). Independent: they belong to the
+      // workspace whichever token is in use, and leaving them blank changes nothing.
+      { key: "META_OWN_APP_SECRET", label: "Your Meta app's secret (own app only)", placeholder: "Meta app → App settings → Basic → App secret", required: false, independent: true },
+      { key: "META_OWN_VERIFY_TOKEN", label: "Webhook verify token (own app only)", placeholder: "Any long random text — type the same in your Meta app's Webhooks", required: false, independent: true },
     ],
   },
   /*

@@ -17,6 +17,7 @@ import { decideComment, type FeedChangeValue } from "@/lib/socialComments";
 import { recordPostCommentSafely } from "@/lib/commentThreads";
 import { inboundRetryResponse, noteInboundRetry, noteLeasedInbound } from "@/lib/webhookRetry";
 import { secretEquals } from "@/lib/secretCompare";
+import { workspaceMetaApp } from "@/lib/metaWorkspaceApp";
 import {
   claimInboundBotEvent,
   completeInboundBotEvent,
@@ -29,7 +30,11 @@ export async function GET(req: NextRequest) {
   const mode = params.get("hub.mode");
   const token = params.get("hub.verify_token");
   const challenge = params.get("hub.challenge");
-  const verifyToken = await validateInSystemScope(() => getSetting("META_VERIFY_TOKEN"));
+  // A workspace's own Meta app (?workspace=<slug>) is verified with ITS token (lib/metaWorkspaceApp.ts).
+  const workspace = params.get("workspace");
+  const own = workspace ? await validateInSystemScope(() => workspaceMetaApp(workspace)) : null;
+  if (workspace && !own) return new NextResponse("Verification failed", { status: 403 });
+  const verifyToken = own ? own.verifyToken : await validateInSystemScope(() => getSetting("META_VERIFY_TOKEN"));
   if (mode === "subscribe" && secretEquals(token, verifyToken) && challenge) return new NextResponse(challenge, { status: 200 });
   return new NextResponse("Verification failed", { status: 403 });
 }
@@ -57,7 +62,13 @@ async function latestPersistedDmAttachment(platform: DmPlatform, senderId: strin
 
 export async function POST(req: NextRequest) {
   const rawBody = await req.text();
-  const appSecret = await validateInSystemScope(() => getSetting("META_APP_SECRET"));
+  // A workspace's own Meta app (?workspace=<slug>): checked against ITS app secret, and every event in it is
+  // processed only for that workspace's own Page / Instagram account (`only` below). Otherwise the platform's app.
+  const workspace = req.nextUrl.searchParams.get("workspace");
+  const own = workspace ? await validateInSystemScope(() => workspaceMetaApp(workspace)) : null;
+  if (workspace && !own) return NextResponse.json({ error: "Unknown workspace" }, { status: 404 });
+  const only = { onlyTenantId: own?.tenantId ?? null };
+  const appSecret = own ? own.appSecret : await validateInSystemScope(() => getSetting("META_APP_SECRET"));
   if (!appSecret) return NextResponse.json({ error: "Webhook not configured" }, { status: 503 });
   const signature = req.headers.get("x-hub-signature-256") ?? "";
   const expected = "sha256=" + crypto.createHmac("sha256", appSecret).update(rawBody, "utf8").digest("hex");
@@ -157,7 +168,7 @@ export async function POST(req: NextRequest) {
             throw await noteInboundRetry("meta-dm-webhook", "failed", `${platform} ${providerId}`);
           }
         }
-      }, () => reportUnmappedEndpoint(platform, endpointId, (entry.messaging ?? []).length));
+      }, () => reportUnmappedEndpoint(platform, endpointId, (entry.messaging ?? []).length), only);
     }
     } catch (error) {
       return inboundRetryResponse("meta-dm-webhook", error);
@@ -199,6 +210,7 @@ export async function POST(req: NextRequest) {
           // of that change: an endpoint nobody claims must be readable, not a
           // console line on Vercel that nobody sees.
           () => reportUnmappedEndpoint("messenger", pageId, 1),
+          only,
         );
         continue;
       }
@@ -228,7 +240,7 @@ export async function POST(req: NextRequest) {
             source: "facebook", externalId: leadgenId, raw: change.value,
           }).catch(() => {});
         }
-      }, () => reportUnmappedEndpoint("messenger", pageId, 1));
+      }, () => reportUnmappedEndpoint("messenger", pageId, 1), only);
     }
   }
   return NextResponse.json({ received: true });

@@ -34,6 +34,7 @@ import { DEFAULT_TENANT_ID } from "@/lib/tenant";
 import { hasIntegrationFlow, getIntegrationFlow, flowFieldKeys } from "@/lib/integrationFlow";
 import { getIntegrationConnections, type IntegrationConnectionState } from "@/lib/integrationConnection";
 import { IntegrationConfigFlow } from "@/components/integration-config-flow";
+import MetaOwnAppBox from "@/components/settings/MetaOwnAppBox";
 
 export const dynamic = "force-dynamic";
 
@@ -266,6 +267,9 @@ export default async function IntegrationsPage({ searchParams }: { searchParams?
                     )}
                   </div>
                 )}
+
+                {/* A workspace's own Meta app (Sean, 2026-11-21): where it delivers, and what to subscribe. */}
+                {integration.id === "meta" && <MetaOwnAppBox tenantId={tenantId} />}
 
                 {connection && (
                   <div

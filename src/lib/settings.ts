@@ -20,6 +20,9 @@ const SECRET_KEYS = new Set([
   "META_PAGE_ACCESS_TOKEN",
   "META_APP_SECRET",
   "META_VERIFY_TOKEN",
+  // A workspace's OWN Meta app (lib/metaWorkspaceApp.ts): its secret signs every delivery to it.
+  "META_OWN_APP_SECRET",
+  "META_OWN_VERIFY_TOKEN",
   "WA_ACCESS_TOKEN",
   "BULKSMS_TOKEN_ID",
   "BULKSMS_TOKEN_SECRET",
