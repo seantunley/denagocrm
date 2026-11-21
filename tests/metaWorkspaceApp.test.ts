@@ -33,7 +33,7 @@ test("the webhook: ?workspace= is checked with that workspace's own app, the pla
   // Every per-event scope in the route is restricted to that workspace: DMs, Page comments, lead ads.
   const scopes = route.match(/withChannelTenantScope\(/g)?.length ?? 0;
   const restricted = route.match(/,\s*only,?\s*\)/g)?.length ?? 0;
-  assert.equal(scopes, 3, "DMs, Page comments, lead ads");
+  assert.equal(scopes, 4, "DMs, Instagram comments, Page comments, lead ads");
   assert.equal(restricted, scopes, "every withChannelTenantScope call passes `only`");
   // An unknown or inactive slug resolves to nothing; slugs are checked before any lookup.
   const lib = code("src/lib/metaWorkspaceApp.ts");
