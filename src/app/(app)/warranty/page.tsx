@@ -16,6 +16,9 @@ import {
 
 import { getActiveTenantId, isTenantOwner } from "@/lib/auth";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
+import { getWorkspaceSetting } from "@/lib/settings";
+import { WARRANTY_PARTS_KEY, parsePartList } from "@/lib/warrantyParts";
+import { saveWarrantyPartList } from "@/app/actions/warrantyParts";
 import { saveWarrantyTransferRule } from "@/app/actions/vehicleTransfer";
 import { withClaimants } from "@/lib/warrantyClaimant";
 import { warrantyTransferRule } from "@/lib/vehicleOwnership";
@@ -48,6 +51,8 @@ export default async function WarrantyPage() {
   // Each claim names its claimant (the owner when it was logged), not whoever owns the vehicle now.
   const claims = await withClaimants(loadedClaims);
   const transferRule = isOwner && tenantId ? await warrantyTransferRule(tenantId) : null;
+  // The owner names the parts a warranty can cover (lib/warrantyParts.ts).
+  const partList = isOwner && tenantId ? parsePartList(await getWorkspaceSetting(tenantId, WARRANTY_PARTS_KEY)) : null;
 
   const expiring = vehicles
     .map((vehicle) => ({ vehicle, warranty: computeWarranty(vehicle) }))
@@ -178,6 +183,20 @@ export default async function WarrantyPage() {
           ))}
         </div>
       </section>
+
+      {partList && (
+        <section className="space-y-3">
+          <h2 className="font-semibold">Warranty parts</h2>
+          <SaveForm action={saveWarrantyPartList} success="Saved" resetOnSuccess={false} className="card space-y-3 max-w-xl">
+            <p className="text-sm text-muted-foreground">
+              The parts a warranty can cover, one per line — offered in the dropdowns on each product and vehicle. Set each
+              model&apos;s cover on its product page (for example Battery 5 years, Cart 2 years, Chassis lifetime).
+            </p>
+            <textarea name="parts" className="input" rows={5} defaultValue={partList.join("\n")} />
+            <SaveButton className="btn-primary btn-sm">Save parts</SaveButton>
+          </SaveForm>
+        </section>
+      )}
     </div>
   );
 }
