@@ -32,6 +32,7 @@ import channels from "./data/channels.json";
 import admin from "./data/admin.json";
 import { signatureBannerArticles } from "./articles/signature-banners";
 import { emailSignatureArticles } from "./articles/email-signatures";
+import { vehicleTransferArticles } from "./articles/vehicle-transfer";
 
 // data/marketing.json is the original generated marketing set. Where an article
 // has since been re-authored by hand under the SAME slug, the generated one is
@@ -94,6 +95,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
   ...signingAndInboxArticles.filter((article) => article.category === "sales"),
   ...generated(stock),
   ...generated(workshop),
+  ...vehicleTransferArticles,
   ...generated(testDrives),
   ...generated(documents),
   ...documentStudioArticles.filter((article) => article.category === "documents"),
