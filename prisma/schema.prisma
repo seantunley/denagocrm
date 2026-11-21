@@ -2025,6 +2025,10 @@ model Document {
   // Multi-tenancy (Phase B — additive/inert): owning tenant. See Contact.tenantId.
   tenantId   String?
 
+  /// A vehicle's document that passes to its next owner on a transfer (service book, warranty certificate).
+  /// Off: only the owner of the time it was added sees it in the portal (lib/portalAccess.ts).
+  staysWithVehicle Boolean @default(false)
+
   deletedAt     DateTime?
   deletedByName String?
   deleteReason  String?

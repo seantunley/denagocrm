@@ -76,7 +76,8 @@ test("off: the portal shows no cover or warranty requests, and a warranty reques
   const portal = code("src/app/portal/page.tsx");
   assert.match(portal, /const warrantyOn = await isModuleEnabled\("warranty"\);/);
   assert.match(portal, /\{warrantyOn && <span className=\{`badge \$\{warrantyColors\[warranty\.status\]\}`\}>/);
-  assert.match(portal, /\{warrantyOn && vehicle\.warrantyClaims\.length > 0 && \(/);
+  // This owner's claims only (claimsSince, vehicle transfer), and only with the module on.
+  assert.match(portal, /\{warrantyOn && claims\.length > 0 && \(/);
   assert.match(code("src/components/PortalExpansionForms.tsx"), /\{warranty && <option value="warranty">Warranty request<\/option>\}/);
   assert.match(code("src/app/portal/support/page.tsx"), /warranty=\{warrantyOn\}/);
   assert.match(code("src/app/actions/portalExpansion.ts"), /if \(type === "warranty" && !\(await isModuleEnabled\("warranty"\)\)\) type = "support";/);
