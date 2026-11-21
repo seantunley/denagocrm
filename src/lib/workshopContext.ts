@@ -84,6 +84,7 @@ export async function customerVehicles(user: PermissionUser, args: { search?: st
     take: take + 1,
     select: {
       id: true, model: true, regNumber: true, color: true, purchaseDate: true, warrantyMonths: true,
+      warrantyParts: true, warrantyStartsAt: true,
       serviceIntervalKm: true, serviceIntervalMonths: true,
       contact: { select: { ...ownerSelect, suburb: true } },
       fleet: { select: { name: true } },
@@ -153,6 +154,7 @@ export async function workshopOverview(
           where: { deletedAt: null, ...inScope(access.vehicles) },
           select: {
             id: true, model: true, regNumber: true, purchaseDate: true, warrantyMonths: true,
+            warrantyParts: true, warrantyStartsAt: true,
             serviceIntervalKm: true, serviceIntervalMonths: true,
             contact: { select: ownerSelect },
             serviceRecords: { orderBy: { serviceDate: "desc" }, take: 1, select: serviceSelect },
