@@ -8,7 +8,7 @@
 // touched — only whether an article is visible.
 
 import type { ModuleId } from "@/lib/modules/registry";
-import { MANDATORY_MODULE_IDS } from "@/lib/modules/registry";
+import { MANDATORY_MODULE_IDS, getModule } from "@/lib/modules/registry";
 import type { HelpArticle, HelpCategoryKey } from "./types";
 
 // Base map: the module a whole category belongs to. Two categories deliberately
@@ -37,6 +37,7 @@ const SLUG_MODULE: Record<string, ModuleId> = {
   "deliveries-board": "automotive", // /deliveries
   "referrals-overview": "marketing", // /referrals
   "admin-portal-access": "portal", // customer portal access, gone if portal is off
+  "warranty-claims-recalls": "warranty", // /warranty — its own module since 2026-11-21
 };
 
 // Slug-prefix overrides: whole article families that split out of a mixed
@@ -66,5 +67,7 @@ export function isArticleEnabled(
 ): boolean {
   const id = moduleForArticle(article);
   if (MANDATORY_MODULE_IDS.includes(id)) return true;
-  return enabled.has(id);
+  // A module built on another (Warranty on Automotive) is off with its parent.
+  const parent = getModule(id)?.requires;
+  return enabled.has(id) && (!parent || enabled.has(parent));
 }

@@ -16,6 +16,7 @@ export default function VehicleOwnershipPanel({
   entries,
   canTransfer,
   canDecideWarranty,
+  showWarranty = true,
   undoBlocked,
   transferButton,
 }: {
@@ -23,6 +24,8 @@ export default function VehicleOwnershipPanel({
   entries: OwnershipEntry[];
   canTransfer: boolean;
   canDecideWarranty: boolean;
+  /** The Warranty module on: the pending-approval note and each transfer's warranty badge. */
+  showWarranty?: boolean;
   /** Null = the latest transfer may be undone; otherwise why not. */
   undoBlocked: string | null;
   transferButton: ReactNode;
@@ -35,7 +38,7 @@ export default function VehicleOwnershipPanel({
         <h2 className="font-semibold">Ownership</h2>
         {transferButton}
       </div>
-      {current?.warranty === "pending" && (
+      {showWarranty && current?.warranty === "pending" && (
         <div className="mb-3 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
           <p>The warranty transfer to the current owner is waiting for approval.</p>
           {canDecideWarranty && (
@@ -70,7 +73,7 @@ export default function VehicleOwnershipPanel({
                   {formatDate(e.ownedFrom)} – {e.ownedUntil ? formatDate(e.ownedUntil) : "now"} · {e.reasonLabel}
                 </span>
                 {e.reversedAt && <span className="badge bg-slate-800 text-slate-400">Undone</span>}
-                {e.reason !== "registered" && !e.reversedAt && e.warranty !== "carried" && (
+                {showWarranty && e.reason !== "registered" && !e.reversedAt && e.warranty !== "carried" && (
                   <span className="badge bg-amber-500/15 text-amber-300">{OWNERSHIP_WARRANTY_LABELS[e.warranty]}</span>
                 )}
               </div>

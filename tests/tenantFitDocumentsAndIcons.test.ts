@@ -12,8 +12,12 @@ test("automotive documents only for a workspace with the automotive module", () 
   const without = new Set(["marketing", "automation"]);
   for (const key of ["jobcard", "service-report", "warranty-claim", "indemnity", "delivery"]) {
     assert.equal(docKeyAvailable(key, without), false, key);
-    assert.equal(docKeyAvailable(key, new Set(["automotive"])), true, key);
+    assert.equal(docKeyAvailable(key, new Set(["automotive", "warranty"])), true, key);
   }
+  // The warranty claim is the Warranty module's (2026-11-21), which itself needs Automotive.
+  assert.equal(docKeyAvailable("warranty-claim", new Set(["automotive"])), false);
+  assert.equal(docKeyAvailable("warranty-claim", new Set(["warranty"])), false);
+  assert.equal(docKeyAvailable("jobcard", new Set(["automotive"])), true);
   for (const key of ["quote", "invoice", "statement", "agreement", "proposal", "custom"]) {
     assert.equal(docKeyAvailable(key, without), true, key);
   }

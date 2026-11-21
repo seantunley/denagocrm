@@ -25,7 +25,8 @@ import { computeWarranty, warrantyColors, warrantyLabels, claimColors, claimStat
 import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { StatusPill } from "@/components/visual-system";
 import { requireUser } from "@/lib/auth";
-import { hasPermission } from "@/lib/permissions";
+import { hasAnyPermission, hasPermission } from "@/lib/permissions";
+import { WARRANTY_READ } from "@/lib/warrantyAccess";
 import CustomFieldsCard from "@/components/custom-fields/CustomFieldsCard";
 import ChecklistCard from "@/components/checklists/ChecklistCard";
 import { runsForHost, templatesForHostRecord } from "@/lib/checklists/store";
@@ -61,6 +62,8 @@ export default async function VehicleDetailPage({
   if (!vehicle) notFound();
   const currentUser = await requireUser();
   const canManageChecklists = await hasPermission(currentUser, "vehicles.manage");
+  // The Warranty module on, and the warranty grant (lib/warrantyAccess.ts): its cover, claims and battery hint.
+  const canSeeWarranty = await hasAnyPermission(currentUser, ...WARRANTY_READ);
   const checklistTenantId = vehicle.tenantId ?? "";
   const [conditionTemplates, conditionRuns] = canManageChecklists && checklistTenantId
     ? await Promise.all([
@@ -148,7 +151,7 @@ export default async function VehicleDetailPage({
           </p>
           <p className="text-xs text-slate-400 mt-1">
             Purchased {formatDate(vehicle.purchaseDate)}
-            {vehicle.warrantyMonths ? ` · ${vehicle.warrantyMonths} mo warranty` : ""}
+            {canSeeWarranty && vehicle.warrantyMonths ? ` · ${vehicle.warrantyMonths} mo warranty` : ""}
           </p>
         </div>
       </div>
@@ -349,7 +352,7 @@ export default async function VehicleDetailPage({
                       {analysis.projectedMonthsToWarning != null && (
                         <span className="badge bg-amber-500/15 text-amber-300">~{analysis.projectedMonthsToWarning} mo to 60%</span>
                       )}
-                      {analysis.warrantyEligible && (
+                      {canSeeWarranty && analysis.warrantyEligible && (
                         <span className="badge bg-sky-500/15 text-sky-300">⚠ Warranty claim eligible</span>
                       )}
                       {analysis.replacementOpportunity && (
@@ -419,7 +422,7 @@ export default async function VehicleDetailPage({
             );
           })()}
 
-          {(() => {
+          {canSeeWarranty && (() => {
             const w = computeWarranty(vehicle);
             const claims = vehicle.warrantyClaims;
             return (

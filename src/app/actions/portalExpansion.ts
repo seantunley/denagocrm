@@ -176,6 +176,8 @@ export async function createPortalCase(
       vehicleId = null;
       if (type === "service" || type === "warranty" || type === "delivery") type = "support";
     }
+    // The Warranty module off: a warranty request (a hand-made post — the form no longer offers it) is plain support.
+    if (type === "warranty" && !(await isModuleEnabled("warranty"))) type = "support";
 
     if (subject.length < 3 || description.length < 10) {
       return { error: "Add a subject and a little more detail." };

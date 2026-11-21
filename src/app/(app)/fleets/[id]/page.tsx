@@ -122,6 +122,7 @@ export default async function FleetDetailPage({ params }: { params: Promise<{ id
 
   const dues = fleet.vehicles.map((v) => computeDue(v));
   const dueCount = dues.filter((d) => d.status === "overdue" || d.status === "due_soon").length;
+  const warrantyOn = await isModuleEnabled("warranty");
   const inWarranty = fleet.vehicles.filter((v) => computeWarranty(v).status === "active").length;
   const plannedCount = activities.filter((activity) => activity.status === "planned").length;
   const path = `/fleets/${fleet.id}`;
@@ -180,7 +181,7 @@ export default async function FleetDetailPage({ params }: { params: Promise<{ id
         { label: "Vehicles", value: fleet.vehicles.length },
         { label: "Contacts", value: members.length },
         { label: "Due for service", value: dueCount },
-        { label: "In warranty", value: inWarranty },
+        ...(warrantyOn ? [{ label: "In warranty", value: inWarranty }] : []),
       ]}
       actions={
         <ConfirmDelete
@@ -190,7 +191,7 @@ export default async function FleetDetailPage({ params }: { params: Promise<{ id
         />
       }
     >
-      <div className="grid grid-cols-3 gap-3">
+      <div className={`grid gap-3 ${warrantyOn ? "grid-cols-3" : "grid-cols-2"}`}>
         <div className="card">
           <p className="text-xs uppercase tracking-wide text-slate-400">Carts</p>
           <p className="text-3xl font-bold mt-1">{fleet.vehicles.length}</p>
@@ -199,10 +200,12 @@ export default async function FleetDetailPage({ params }: { params: Promise<{ id
           <p className="text-xs uppercase tracking-wide text-slate-400">Due for service</p>
           <p className="text-3xl font-bold mt-1 text-amber-300">{dueCount}</p>
         </div>
-        <div className="card">
-          <p className="text-xs uppercase tracking-wide text-slate-400">In warranty</p>
-          <p className="text-3xl font-bold mt-1 text-emerald-300">{inWarranty}</p>
-        </div>
+        {warrantyOn && (
+          <div className="card">
+            <p className="text-xs uppercase tracking-wide text-slate-400">In warranty</p>
+            <p className="text-3xl font-bold mt-1 text-emerald-300">{inWarranty}</p>
+          </div>
+        )}
       </div>
 
       {/*
@@ -428,14 +431,14 @@ export default async function FleetDetailPage({ params }: { params: Promise<{ id
                           <th>Cart</th>
                           <th>Owner / contact</th>
                           <th>Service</th>
-                          <th>Warranty</th>
+                          {warrantyOn && <th>Warranty</th>}
                           <th></th>
                         </tr>
                       </thead>
                       <tbody>
                         {fleet.vehicles.length === 0 && (
                           <tr>
-                            <td colSpan={5} className="text-center text-slate-400 py-8">
+                            <td colSpan={warrantyOn ? 5 : 4} className="text-center text-slate-400 py-8">
                               No carts in this fleet yet — add some on the right.
                             </td>
                           </tr>
@@ -455,9 +458,11 @@ export default async function FleetDetailPage({ params }: { params: Promise<{ id
                               <td>
                                 <span className={`badge ${dueColors[due.status]}`}>{dueLabels[due.status]}</span>
                               </td>
-                              <td>
-                                <span className={`badge ${warrantyColors[w.status]}`}>{warrantyLabels[w.status]}</span>
-                              </td>
+                              {warrantyOn && (
+                                <td>
+                                  <span className={`badge ${warrantyColors[w.status]}`}>{warrantyLabels[w.status]}</span>
+                                </td>
+                              )}
                               <td className="text-right">
                                 <form action={removeVehicleFromFleet.bind(null, v.id, fleet.id)}>
                                   <button className="text-xs text-red-400 hover:text-red-300">Remove</button>

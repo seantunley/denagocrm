@@ -25,7 +25,8 @@ export async function GET(
 ) {
   return withActingStaffScope(async () => {
     // The (print) layout's module guard does not run above a route handler.
-    if (!(await isModuleEnabled("automotive"))) {
+    // Warranty is its own module (it needs Automotive, so this covers both).
+    if (!(await isModuleEnabled("warranty"))) {
       return new Response("Not found", { status: 404 });
     }
     const { id } = await context.params;

@@ -1169,6 +1169,7 @@ export async function consumeReservation(reservationId: string, jobCardId: strin
 export async function setJobWarranty(jobCardId: string, formData: FormData) {
   return asActionResult(async () => {
     await requireJobCardAccess(jobCardId, "jobcards.manage");
+    if (!(await isModuleEnabled("warranty"))) refuse("Warranty is switched off for this workspace.");
     const underWarranty = formData.get("underWarranty") === "on";
     const warrantyRecoveredCents = (await moneyCents(formData, "warrantyRecovered", "Warranty recovered")) ?? 0;
     await prisma.jobCard.update({ where: { id: jobCardId }, data: { underWarranty, warrantyRecoveredCents } });

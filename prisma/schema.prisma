@@ -3242,7 +3242,7 @@ model SignatureLink {
   id          String    @id @default(cuid())
   tenantId    String
   userId      String
-  /// website | whatsapp | booking | facebook | instagram | privacy | link
+  /// website | whatsapp | booking | facebook | instagram | privacy | contact | link
   kind        String
   url         String
   token       String    @unique

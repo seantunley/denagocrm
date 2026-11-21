@@ -66,7 +66,7 @@ test("the portal: one document rule for the list and the download, by ownership 
   const home = code("src/app/portal/page.tsx");
   assert.match(home, /const services = splitServices\(vehicle\.serviceRecords, from\);/);
   assert.match(home, /const claims = claimsSince\(vehicle\.warrantyClaims, from\)\.slice\(0, 3\);/);
-  const earlier = home.slice(home.indexOf("Services before you owned it"), home.indexOf("{claims.length > 0"));
+  const earlier = home.slice(home.indexOf("Services before you owned it"), home.indexOf("{warrantyOn && claims.length > 0"));
   assert.doesNotMatch(earlier, /details|summary|performedBy|jobCard|price|contactName/, "nothing typed for the previous owner");
   assert.doesNotMatch(home, /vehicle\.serviceRecords\.slice|vehicle\.warrantyClaims\.map/, "nothing reads the uncut history");
 });
