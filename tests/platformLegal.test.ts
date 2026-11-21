@@ -54,6 +54,17 @@ test("deletion removes every connection that person made, each in its own worksp
   assert.match(code("src/lib/metaConnect.ts"), /\[CONNECTED\.byUser\]: pending\.metaUserId,/, "Connect Facebook records who connected");
 });
 
+test("Connect Facebook signs in through the platform's own address; the CRM's base address is untouched", () => {
+  // Sean, 2026-11-21: "platform address yes (do not affect Denago yet)".
+  const lib = code("src/lib/metaConnect.ts");
+  assert.match(lib, /export function metaCallbackUrl\(\): string \{\s*return `\$\{PLATFORM_URL\}\/api\/integrations\/meta\/callback`;/);
+  assert.match(lib, /if \(url\.origin === new URL\(appBaseUrl\(\)\)\.origin \|\| url\.origin === PLATFORM_URL\) return true;/);
+  assert.match(code("src/lib/campaigns.ts"), /process\.env\.NEXT_PUBLIC_APP_URL \|\| "https:\/\/crm\.denagocpt\.co\.za"/, "the base address is unchanged");
+  // Public replies to Page comments (Sean: "Public replies: Yes").
+  assert.match(lib, /"pages_manage_engagement",/);
+  assert.doesNotMatch(code("src/lib/messenger.ts"), /Denago CRM app/, "staff of any workspace read this message");
+});
+
 test("the pages are public, in the platform's name, and say so plainly while company details are missing", () => {
   const proxy = code("src/proxy.ts");
   const list = proxy.slice(proxy.indexOf("const PUBLIC_PATHS"), proxy.indexOf("];", proxy.indexOf("const PUBLIC_PATHS")));
