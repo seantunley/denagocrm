@@ -1,6 +1,6 @@
 // Client-safe battery-health analysis (no server-only imports).
 
-import { addMonths } from "date-fns";
+import { partCovered } from "./warrantyParts";
 
 export const BATTERY = {
   healthy: 80, // ≥ = green
@@ -32,7 +32,8 @@ export type BatteryAnalysis = {
 /** Analyse a vehicle's battery history (checks newest-first). */
 export function analyzeBattery(
   checksDesc: Check[],
-  opts: { purchaseDate?: Date | string | null; warrantyMonths?: number | null; now: Date },
+  /** The vehicle's warranty fields: the Battery part's own cover when it has parts (lib/warrantyParts.ts). */
+  opts: { purchaseDate?: Date | string | null; warrantyMonths?: number | null; warrantyParts?: unknown; warrantyStartsAt?: Date | null; now: Date },
 ): BatteryAnalysis {
   const withSoh = checksDesc.filter((c) => c.stateOfHealth != null);
   const latestSoh = withSoh[0]?.stateOfHealth ?? null;
@@ -54,10 +55,7 @@ export function analyzeBattery(
   }
 
   let warrantyEligible = false;
-  if (latestSoh != null && latestSoh <= BATTERY.warrantyClaimSoh && opts.purchaseDate && opts.warrantyMonths) {
-    // Clamped to the month's last day, as every warranty date is (lib/warranty.ts).
-    warrantyEligible = opts.now <= addMonths(new Date(opts.purchaseDate), opts.warrantyMonths);
-  }
+  if (latestSoh != null && latestSoh <= BATTERY.warrantyClaimSoh) warrantyEligible = partCovered(opts, "Battery", opts.now);
 
   const replacementOpportunity = latestSoh != null && latestSoh < BATTERY.warning;
 

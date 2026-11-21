@@ -33,6 +33,9 @@ export type WorkshopVehicle = {
   regNumber: string | null;
   purchaseDate: Date | null;
   warrantyMonths: number | null;
+  /** The vehicle's own warranty parts (lib/warrantyParts.ts), from warrantyStartsAt. */
+  warrantyParts?: unknown;
+  warrantyStartsAt?: Date | null;
   serviceIntervalKm: number | null;
   serviceIntervalMonths: number | null;
   /** Newest first. */
@@ -62,7 +65,7 @@ export function jobFacts(j: OpenJob, now: Date) {
 function verdicts(v: WorkshopVehicle, now: Date) {
   return {
     due: computeDue(v, now),
-    battery: analyzeBattery(v.batteryChecks, { purchaseDate: v.purchaseDate, warrantyMonths: v.warrantyMonths, now }),
+    battery: analyzeBattery(v.batteryChecks, { ...v, now }),
     warranty: computeWarranty(v, now),
   };
 }

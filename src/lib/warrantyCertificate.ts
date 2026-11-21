@@ -33,13 +33,16 @@ export type CertificateVehicle = {
 const lines = (...values: (string | null | undefined)[]) => values.filter(Boolean).join("\n");
 
 /**
- * "WCERT-7F3K2A-2611-K4P9": the vehicle's short id, the issue month and a part of its own, so every issue — a reissue
- * the same day included — has a number nobody else's has (review of #1173). Printed on the PDF, in its file name and
- * in the audit line.
+ * "WCERT-7F3K2A-2611-1A2B-3C4D-5E6F": the vehicle's short id, the issue month and 12 random hex characters of its own
+ * (48 bits: two issues of one vehicle in one month share a number about once in 280 trillion), so every issue — a
+ * reissue the same day included — has a number nobody else's has (reviews of #1173). Printed on the PDF, in its file
+ * name and in the audit line.
  */
 export function certificateNumber(vehicleId: string, issuedAt: Date, unique: string): string {
   const yymm = `${String(issuedAt.getFullYear()).slice(2)}${String(issuedAt.getMonth() + 1).padStart(2, "0")}`;
-  return `WCERT-${vehicleId.slice(-6).toUpperCase()}-${yymm}-${unique.replace(/[^a-z0-9]/gi, "").slice(0, 4).toUpperCase()}`;
+  const own = unique.replace(/[^a-z0-9]/gi, "").slice(0, 12).toUpperCase();
+  if (own.length < 12) throw new Error("certificateNumber needs 12 random characters");
+  return `WCERT-${vehicleId.slice(-6).toUpperCase()}-${yymm}-${own.match(/.{4}/g)!.join("-")}`;
 }
 
 /** One line per part: "Battery · 5 years · until 21 Nov 2031", "Chassis · Lifetime". */

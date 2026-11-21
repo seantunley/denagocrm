@@ -121,6 +121,23 @@ export function vehicleCover(
   return [];
 }
 
+/**
+ * Is a part (e.g. "Battery") under cover on `now`? With parts: that part's own term — a part the vehicle's terms don't
+ * list isn't covered (a chassis for life never extends the battery). Without parts: the single term, as before.
+ */
+export function partCovered(
+  v: { warrantyParts?: unknown; warrantyStartsAt?: Date | null; purchaseDate?: Date | string | null; warrantyMonths?: number | null },
+  part: string,
+  now: Date,
+): boolean {
+  const terms = parseTerms(v.warrantyParts);
+  if (terms.length > 0 && v.warrantyStartsAt) {
+    const row = coverOf(terms, v.warrantyStartsAt, now).find((c) => c.part.toLowerCase().includes(part.toLowerCase()));
+    return !!row && row.status !== "expired";
+  }
+  return !!(v.purchaseDate && v.warrantyMonths) && now <= addMonths(new Date(v.purchaseDate), v.warrantyMonths);
+}
+
 /** "5 years", "18 months", "Lifetime". */
 export function termLabel(months: number | null): string {
   if (months == null) return "Lifetime";
