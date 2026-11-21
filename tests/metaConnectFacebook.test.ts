@@ -74,6 +74,18 @@ test("connecting: tokens never reach the browser, another workspace's Page is re
   const store = connect.indexOf("await putTenantCredentialBundle(");
   assert.ok(refused > 0 && refused < subscribe && subscribe < store, "refuse → subscribe → store");
   assert.match(connect, /if \(!subscribed\.ok \|\| result\?\.success !== true\) throw new Error\(/);
+  // Review of #1182: CLAIMED atomically (lib/channelClaim.ts) before Meta is asked or a token stored; what this call
+  // newly took is released on any later failure; after registering, every endpoint must be active and ours, or the
+  // connection is removed — a losing workspace never keeps a usable token.
+  assert.match(connect, /if \(!\(await claimChannelEndpoint\(input\.tenantId, endpoint\.channel, endpoint\.externalId, endpoint\.label\)\)\) \{\s*await release\(\);\s*throw new Error\(endpoint\.refusal\);/);
+  assert.ok(connect.indexOf("claimChannelEndpoint(") < connect.indexOf("/subscribed_apps`"));
+  assert.match(connect, /\} catch \(error\) \{\s*await release\(\);\s*throw error;\s*\}/);
+  assert.match(connect, /if \(row\?\.tenantId !== input\.tenantId \|\| row\.disabledAt\) \{\s*await basePrisma\.tenantIntegrationCredential\.deleteMany\(\{ where: \{ tenantId: input\.tenantId, key: \{ in: Object\.values\(CONNECTED\) \} \} \}\);/);
+  assert.doesNotMatch(connect, /channelIdentity\.upsert\(/);
+  // The state is consumed once: only the request whose delete removed it may go on.
+  assert.match(lib, /const \{ count \} = await basePrisma\.appSetting\.deleteMany\(\{ where: \{ tenantId: input\.tenantId, key \} \}\);\s*const record = saved && count === 1 \?/);
+  // The public return leg is named in the security registry, exactly.
+  assert.match(code("tests/apiAuth.test.ts"), /"integrations\/meta\/callback\/",/);
   assert.match(connect, /await reconcileTenantChannels\(input\.tenantId, \{ force: true \}\);/);
   // Disconnect: unsubscribed, every connected key forgotten, endpoints released.
   const disconnect = lib.slice(lib.indexOf("export async function disconnectMetaPage"));

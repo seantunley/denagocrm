@@ -6,6 +6,7 @@ import { getSetting, getWorkspaceSetting, putTenantCredentialBundle, putWorkspac
 import { withSystemScope } from "./tenantScopeEntry";
 import { CONNECTED, metaPageCredential } from "./metaPage";
 import { reconcileTenantChannels } from "./channelRegistration";
+import { claimChannelEndpoint } from "./channelClaim";
 
 /**
  * CONNECT FACEBOOK (Sean, 2026-11-21: "Build this and lets test it" — DenagoCRM_Meta_Commercial_App_Review_Steps.md,
@@ -117,8 +118,10 @@ async function graph(path: string, params: Record<string, string>): Promise<Reco
 export async function finishMetaConnect(input: { tenantId: string; state: string; code: string }): Promise<PendingPage[]> {
   const key = STATE_PREFIX + sha(input.state);
   const saved = await getWorkspaceSetting(input.tenantId, key);
-  await basePrisma.appSetting.deleteMany({ where: { tenantId: input.tenantId, key } });
-  const record = saved ? (JSON.parse(saved) as { userId?: string; expiresAt?: number }) : null;
+  // CONSUMED ONCE (review of #1182): only the request whose delete removed the row may go on — a second, concurrent
+  // /finish for the same state deletes nothing and stops here.
+  const { count } = await basePrisma.appSetting.deleteMany({ where: { tenantId: input.tenantId, key } });
+  const record = saved && count === 1 ? (JSON.parse(saved) as { userId?: string; expiresAt?: number }) : null;
   if (!record || (record.expiresAt ?? 0) <= Date.now()) throw new Error("That sign-in has expired. Press Connect Facebook again.");
   const app = await metaPlatformApp();
   if (!app) throw new Error("Connect Facebook isn't set up on this CRM yet.");
@@ -168,20 +171,42 @@ export async function connectMetaPage(input: { tenantId: string; pageId: string 
   const pending = await readPending(input.tenantId);
   const page = pending?.pages.find((candidate) => candidate.id === input.pageId);
   if (!pending || !page) throw new Error("That choice has expired. Press Connect Facebook again.");
-  for (const [channel, externalId] of [["messenger", page.id], ["instagram", page.igId]] as const) {
-    if (!externalId) continue;
-    const held = await basePrisma.channelIdentity.findUnique({ where: { channel_externalId: { channel, externalId } }, select: { tenantId: true, disabledAt: true } });
-    if (held && held.tenantId !== input.tenantId && !held.disabledAt) {
-      throw new Error(channel === "messenger" ? "That Facebook Page is already connected to another workspace." : "That Page's Instagram account is already connected to another workspace.");
+
+  // CLAIMED ATOMICALLY FIRST (review of #1182): the Page, then its Instagram account — first workspace wins, an active
+  // owner elsewhere is never moved — before Meta is asked anything or any token is stored. What THIS call newly took is
+  // released again if a later step fails; a row that was already ours stays ours.
+  const endpoints = [
+    { channel: "messenger" as const, externalId: page.id, label: page.name, refusal: "That Facebook Page is already connected to another workspace." },
+    ...(page.igId ? [{ channel: "instagram" as const, externalId: page.igId, label: page.igUsername ? `@${page.igUsername}` : null, refusal: "That Page's Instagram account is already connected to another workspace." }] : []),
+  ];
+  const newlyClaimed: { channel: "messenger" | "instagram"; externalId: string }[] = [];
+  const release = async () => {
+    for (const row of newlyClaimed) {
+      await basePrisma.channelIdentity.updateMany({ where: { tenantId: input.tenantId, channel: row.channel, externalId: row.externalId }, data: { disabledAt: new Date() } });
     }
+  };
+  for (const endpoint of endpoints) {
+    const before = await basePrisma.channelIdentity.findUnique({ where: { channel_externalId: { channel: endpoint.channel, externalId: endpoint.externalId } }, select: { tenantId: true, disabledAt: true } });
+    const alreadyOurs = before?.tenantId === input.tenantId && !before.disabledAt;
+    if (!(await claimChannelEndpoint(input.tenantId, endpoint.channel, endpoint.externalId, endpoint.label))) {
+      await release();
+      throw new Error(endpoint.refusal);
+    }
+    if (!alreadyOurs) newlyClaimed.push(endpoint);
   }
-  const subscribed = await fetch(`${GRAPH}/${page.id}/subscribed_apps`, {
-    method: "POST",
-    body: new URLSearchParams({ subscribed_fields: PAGE_SUBSCRIBED_FIELDS.join(","), access_token: page.token }),
-    signal: AbortSignal.timeout(TIMEOUT),
-  });
-  const result = (await subscribed.json().catch(() => null)) as { success?: boolean; error?: { message?: string } } | null;
-  if (!subscribed.ok || result?.success !== true) throw new Error(`Meta didn't subscribe the Page to messages: ${result?.error?.message ?? subscribed.status}`);
+
+  try {
+    const subscribed = await fetch(`${GRAPH}/${page.id}/subscribed_apps`, {
+      method: "POST",
+      body: new URLSearchParams({ subscribed_fields: PAGE_SUBSCRIBED_FIELDS.join(","), access_token: page.token }),
+      signal: AbortSignal.timeout(TIMEOUT),
+    });
+    const result = (await subscribed.json().catch(() => null)) as { success?: boolean; error?: { message?: string } } | null;
+    if (!subscribed.ok || result?.success !== true) throw new Error(`Meta didn't subscribe the Page to messages: ${result?.error?.message ?? subscribed.status}`);
+  } catch (error) {
+    await release();
+    throw error;
+  }
   await putTenantCredentialBundle(input.tenantId, {
     [CONNECTED.pageToken]: page.token,
     [CONNECTED.pageId]: page.id,
@@ -199,6 +224,16 @@ export async function connectMetaPage(input: { tenantId: string; pageId: string 
   if (blanks.length) await basePrisma.tenantIntegrationCredential.deleteMany({ where: { tenantId: input.tenantId, key: { in: blanks } } });
   await basePrisma.appSetting.deleteMany({ where: { tenantId: input.tenantId, key: PENDING_KEY } });
   await reconcileTenantChannels(input.tenantId, { force: true });
+  // VERIFIED, not assumed: every endpoint is active and THIS workspace's. Anything else and the connection is removed,
+  // so no workspace is ever left holding a usable token for a Page it doesn't own.
+  for (const endpoint of endpoints) {
+    const row = await basePrisma.channelIdentity.findUnique({ where: { channel_externalId: { channel: endpoint.channel, externalId: endpoint.externalId } }, select: { tenantId: true, disabledAt: true } });
+    if (row?.tenantId !== input.tenantId || row.disabledAt) {
+      await basePrisma.tenantIntegrationCredential.deleteMany({ where: { tenantId: input.tenantId, key: { in: Object.values(CONNECTED) } } });
+      await release();
+      throw new Error(endpoint.refusal);
+    }
+  }
   return page.name;
 }
 
