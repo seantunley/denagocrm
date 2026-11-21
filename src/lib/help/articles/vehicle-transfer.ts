@@ -32,7 +32,7 @@ export const vehicleTransferArticles: HelpArticle[] = [
           "**Ownership** lists every owner with their dates and the reason, newest first. The old owner's contact page lists the vehicle under **Previously owned**.",
           "**Transfer certificate** prints a certificate for the new owner: the vehicle, VIN, transfer date, odometer and the warranty's expiry and cover remaining, under your logo.",
           "**Send welcome** sends the new owner your “Welcome to a vehicle's new owner” message (by email, or SMS if they can only be texted). Nothing is sent until you press Send; edit its wording in **Settings → Email templates**.",
-          "Service-due and recall reminders go to the new owner. Any reminder already waiting for the old owner about this vehicle is cancelled.",
+          "Service-due and recall reminders go to the new owner. Any reminder still waiting to go to the old owner about this vehicle is cancelled (one already being sent at that moment can't be recalled). Their other messages, like a birthday greeting, carry on.",
           "Each warranty claim still names the person who made it.",
           "**Undo the last transfer** gives the vehicle back to its previous owner — until the new owner has a warranty claim, job card or service on it. Then it tells you why it can't, and you transfer it back with the reason Correction.",
         ],
@@ -42,7 +42,7 @@ export const vehicleTransferArticles: HelpArticle[] = [
         type: "table",
         headers: ["Who", "What they see"],
         rows: [
-          ["The new owner", "The vehicle, its warranty, their own services and claims, and a short list of earlier services (date, what was done, odometer) — never the previous owner's name, details, invoices, prices or notes."],
+          ["The new owner", "The vehicle, its warranty, their own services and claims, and a short list of earlier services (date and odometer only) — never the previous owner's name, details, invoices, prices, or anything typed on their services."],
           ["The previous owner", "The vehicle is gone from their portal from the transfer. Their own invoices and documents, and the vehicle's paperwork from their time, stay theirs."],
           ["Your team", "Everything, with the owner at the time named on each service, job card, claim and document."],
         ],
