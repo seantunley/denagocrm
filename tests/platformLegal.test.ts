@@ -65,5 +65,8 @@ test("the pages are public, in the platform's name, and say so plainly while com
   }
   assert.equal(PLATFORM.name, "Honeycomb 360");
   assert.equal(PLATFORM.domain, "crm.honeycombventures.co.za");
+  assert.equal(PLATFORM.companyName, "Honeycomb Ventures (Pty) Ltd");
+  assert.equal(PLATFORM.registrationNumber, "2025/378969/07");
+  assert.equal(PLATFORM.privacyEmail, "privacy@honeycombventures.co.za");
   assert.match(code("src/app/legal/LegalShell.tsx"), /\{!complete && \(/);
 });
