@@ -11,7 +11,7 @@ import { contactKeptBecause } from "../src/lib/contactKeep";
  */
 const code = (rel: string) => readFileSync(join(process.cwd(), rel), "utf8").replace(/\r\n/g, "\n");
 
-function fakeDb(counts: { vehicle?: number; vehicleOwnership?: number; lead?: number; quote?: number; document?: number }) {
+function fakeDb(counts: { vehicle?: number; vehicleOwnership?: number; lead?: number; quote?: number; document?: number; signatureRequest?: number; docInstance?: number }) {
   const seen: Record<string, unknown> = {};
   const model = (name: keyof typeof counts) => ({
     count: async (args: { where: unknown }) => {
@@ -21,7 +21,10 @@ function fakeDb(counts: { vehicle?: number; vehicleOwnership?: number; lead?: nu
   });
   return {
     seen,
-    db: { vehicle: model("vehicle"), vehicleOwnership: model("vehicleOwnership"), lead: model("lead"), quote: model("quote"), document: model("document") },
+    db: {
+      vehicle: model("vehicle"), vehicleOwnership: model("vehicleOwnership"), lead: model("lead"), quote: model("quote"), document: model("document"),
+      signatureRequest: model("signatureRequest"), docInstance: model("docInstance"),
+    },
   };
 }
 
@@ -39,6 +42,9 @@ test("a sale of any kind, or a filed document, keeps the contact — and says wh
     await contactKeptBecause(fakeDb({ lead: 1, document: 3 }).db, "t1", "c1"),
     "This customer has a won deal and has 3 filed documents, so they're kept for good and can't be deleted.",
   );
+  // Sent for signature, or generated for them: paperwork too.
+  assert.match((await contactKeptBecause(fakeDb({ signatureRequest: 1 }).db, "t1", "c1"))!, /has a filed document/);
+  assert.match((await contactKeptBecause(fakeDb({ docInstance: 1, document: 1 }).db, "t1", "c1"))!, /has 2 filed documents/);
 });
 
 test("counted in the contact's own workspace; trashed deals/quotes/documents and undone transfers don't count", async () => {

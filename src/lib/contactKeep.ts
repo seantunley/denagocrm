@@ -3,20 +3,25 @@
  * not from the contact page, not by the 60-day trash purge — even after the vehicle they bought has changed hands.
  *
  * A sale is any of: a vehicle they own now, a vehicle they owned before (ownership history, undone transfers aside),
- * a won deal, an accepted quote. Filed paperwork is any document on their record that isn't in the trash.
+ * a won deal, an accepted quote. Filed paperwork is any document on their record that isn't in the trash, anything sent
+ * to them for signature, and any document generated for them.
  *
  * Takes the caller's client so the delete action can ask inside its own transaction, with the contact row held.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function contactKeptBecause(db: any, tenantId: string | null, contactId: string): Promise<string | null> {
   const mine = { tenantId, contactId };
-  const [vehicles, owned, won, accepted, documents] = await Promise.all([
+  const [vehicles, owned, won, accepted, filed, signed, generated] = await Promise.all([
     db.vehicle.count({ where: { ...mine, deletedAt: null } }),
     db.vehicleOwnership.count({ where: { ...mine, reversedAt: null } }),
     db.lead.count({ where: { ...mine, status: "won", deletedAt: null } }),
     db.quote.count({ where: { ...mine, status: "accepted", deletedAt: null } }),
     db.document.count({ where: { ...mine, deletedAt: null } }),
+    // Paperwork sent for signature or generated for them counts too — the purge keeps those records (#1170).
+    db.signatureRequest.count({ where: mine }),
+    db.docInstance.count({ where: mine }),
   ]);
+  const documents = filed + signed + generated;
   const plural = (n: number, one: string, many: string) => (n === 1 ? one : `${n} ${many}`);
   const reasons = [
     vehicles > 0 && `owns ${plural(vehicles, "a vehicle", "vehicles")}`,
