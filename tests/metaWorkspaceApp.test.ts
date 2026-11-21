@@ -51,10 +51,27 @@ test("an event from a workspace's own app reaches only that workspace — anothe
   assert.ok(body.indexOf("opts.onlyTenantId") < body.indexOf("tenantEnforcing()"));
 });
 
+test("the WhatsApp webhook: ?workspace= is checked with that workspace's own app, and only its own number is processed", () => {
+  // Why (Sean, 2026-11-21): Denago becomes a tenant of the platform's (Honeycomb 360) app "eventually". Until it moves, its WhatsApp
+  // number stays on its own app — so the platform's META_APP_SECRET can become Honeycomb 360's without rejecting Denago's.
+  const route = code("src/app/api/webhooks/whatsapp/route.ts");
+  assert.match(route, /const own = workspace \? await validateInSystemScope\(\(\) => workspaceMetaApp\(workspace\)\) : null;\s*if \(workspace && !own\) return new NextResponse\("Verification failed", \{ status: 403 \}\);\s*const verifyToken = own \? own\.verifyToken : await validateInSystemScope\(\(\) => getSetting\("META_VERIFY_TOKEN"\)\);/);
+  assert.match(route, /if \(workspace && !own\) return NextResponse\.json\(\{ error: "Unknown workspace" \}, \{ status: 404 \}\);\s*const only = \{ onlyTenantId: own\?\.tenantId \?\? null \};/);
+  assert.match(route, /const appSecret = own \? own\.appSecret : await validateInSystemScope\(\(\) => getSetting\("META_APP_SECRET"\)\);/);
+  // Both scopes — the messages themselves, and DAX answers run after Meta is acknowledged — are restricted.
+  const scopes = route.match(/withChannelTenantScope\(/g)?.length ?? 0;
+  const restricted = route.match(/,\s*only\)/g)?.length ?? 0;
+  assert.equal(scopes, 2);
+  assert.equal(restricted, scopes, "every withChannelTenantScope call passes `only`");
+  // Settings shows the WhatsApp address too.
+  assert.match(code("src/components/settings/MetaOwnAppBox.tsx"), /workspaceMetaCallbackUrl\(appBaseUrl\(\), tenant\.slug, "whatsapp"\)/);
+  assert.match(code("src/lib/metaWorkspaceApp.ts"), /\/api\/webhooks\/\$\{hook\}\?workspace=\$\{encodeURIComponent\(slug\)\}/);
+});
+
 test("Settings shows the workspace its own callback address and what to subscribe", () => {
   assert.match(code("src/app/(app)/settings/integrations/page.tsx"), /\{integration\.id === "meta" && <MetaOwnAppBox tenantId=\{tenantId\} \/>\}/);
   const box = code("src/components/settings/MetaOwnAppBox.tsx");
   assert.match(box, /workspaceMetaCallbackUrl\(appBaseUrl\(\), tenant\.slug\)/);
   assert.match(box, /<b>Instagram<\/b> to <b>messages<\/b> and <b>comments<\/b>/);
-  assert.match(code("src/lib/metaWorkspaceApp.ts"), /\/api\/webhooks\/meta\?workspace=\$\{encodeURIComponent\(slug\)\}/);
+  assert.match(code("src/lib/metaWorkspaceApp.ts"), /hook: "meta" \| "whatsapp" = "meta"/);
 });

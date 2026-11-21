@@ -30,7 +30,10 @@ export async function workspaceMetaApp(slug: string): Promise<WorkspaceMetaApp |
   return { tenantId: tenant.id, appSecret, verifyToken };
 }
 
-/** Where a workspace's own Meta app delivers: the platform address plus `?workspace=<slug>`. */
-export function workspaceMetaCallbackUrl(origin: string, slug: string): string {
-  return `${origin.replace(/\/$/, "")}/api/webhooks/meta?workspace=${encodeURIComponent(slug)}`;
+/**
+ * Where a workspace's own Meta app delivers: the platform address plus `?workspace=<slug>` — Pages and Instagram to
+ * /api/webhooks/meta, WhatsApp to /api/webhooks/whatsapp (the same app secret and verify token check both).
+ */
+export function workspaceMetaCallbackUrl(origin: string, slug: string, hook: "meta" | "whatsapp" = "meta"): string {
+  return `${origin.replace(/\/$/, "")}/api/webhooks/${hook}?workspace=${encodeURIComponent(slug)}`;
 }
