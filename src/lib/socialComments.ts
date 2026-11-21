@@ -79,6 +79,11 @@ export type CommentDecision =
  */
 const ADDING_VERBS: ReadonlySet<string> = new Set(["add", "added"]);
 
+/** The story part of a Facebook id: "{pageId}_{storyId}" and "{albumId}_{storyId}" share it; a bare id is itself. */
+function storyId(id: string): string {
+  return id.split("_").pop() ?? id;
+}
+
 export function decideComment(value: FeedChangeValue | null | undefined): CommentDecision {
   const v = value ?? {};
 
@@ -109,7 +114,10 @@ export function decideComment(value: FeedChangeValue | null | undefined): Commen
       // Meta sets parent_id to the POST for a top-level comment, and to the
       // parent COMMENT for a reply. Treat "parent is the post" as top-level, so
       // callers can tell a reply from an original without knowing that quirk.
-      parentId: v.parent_id && v.parent_id !== postId ? String(v.parent_id) : null,
+      // Compared by the TRAILING story id: on a photo post a top-level comment's
+      // parent is "{albumId}_{storyId}", not the post's "{pageId}_{storyId}"
+      // (ChatbotX's trap 1, 2026-11-21) — the raw strings differ, the story doesn't.
+      parentId: v.parent_id && storyId(String(v.parent_id)) !== storyId(postId) ? String(v.parent_id) : null,
       message,
       authorId: v.from?.id ? String(v.from.id) : null,
       authorName: v.from?.name ? String(v.from.name) : null,

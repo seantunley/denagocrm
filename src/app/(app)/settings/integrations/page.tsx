@@ -35,6 +35,7 @@ import { hasIntegrationFlow, getIntegrationFlow, flowFieldKeys } from "@/lib/int
 import { getIntegrationConnections, type IntegrationConnectionState } from "@/lib/integrationConnection";
 import { IntegrationConfigFlow } from "@/components/integration-config-flow";
 import ThreadsConnectBox from "@/components/settings/ThreadsConnectBox";
+import MetaOwnAppBox from "@/components/settings/MetaOwnAppBox";
 
 export const dynamic = "force-dynamic";
 
@@ -271,6 +272,8 @@ export default async function IntegrationsPage({ searchParams }: { searchParams?
 
                 {/* Threads (2026-11-21): its own app's addresses, and Connect Threads. */}
                 {integration.id === "threads" && <ThreadsConnectBox tenantId={tenantId} connected={hasOverride.THREADS_USER_ID} notice={params?.threads ?? null} />}
+                {/* A workspace's own Meta app (Sean, 2026-11-21): where it delivers, and what to subscribe. */}
+                {integration.id === "meta" && <MetaOwnAppBox tenantId={tenantId} />}
 
                 {connection && (
                   <div
