@@ -220,14 +220,16 @@ export async function transferVehicleOwnership(
       }
       // ANYTHING ALREADY SCHEDULED FOR THE OLD OWNER ABOUT THIS VEHICLE IS CANCELLED (PR 3): a service-due, recall or
       // warranty journey queued or waiting for them. New reminders go to the new owner — they are addressed from
-      // Vehicle.contactId when they run. The vehicle's id in the run's context is how a run names its vehicle.
+      // Vehicle.contactId when they run. A run names its vehicle in the event that started it (lib/journeyScheduling.ts
+      // payload.vehicleId → context.event). NOT a text search of the context: every contact's context lists all their
+      // vehicles, so that would also stop their birthday or marketing journeys (review of #1169).
       const stopped = await tx.$executeRaw`
         UPDATE "JourneyRun"
         SET "status" = 'cancelled', "completedAt" = now(), "lastError" = 'The vehicle was transferred to a new owner'
         WHERE "tenantId" = ${tenantId}
           AND ("contactId" = ${vehicle.contactId} OR ("entityType" = 'contact' AND "entityId" = ${vehicle.contactId}))
           AND "status" IN ('queued', 'running', 'waiting', 'blocked')
-          AND "context"::text LIKE ${`%${vehicleId}%`}`;
+          AND "context"->'event'->>'vehicleId' = ${vehicleId}`;
       const fromName = previous ? contactName(previous) : "the previous owner";
       await logAuditStrict(
         {

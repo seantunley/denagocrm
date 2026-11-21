@@ -146,13 +146,27 @@ async function main() {
     check("before the transfer: the owner sees the vehicle's documents and their own", JSON.stringify(await seen([prev.id], ids())) === JSON.stringify(sorted(oldService.id, serviceBook.id, sellersInvoice.id)));
     check("before the transfer: the buyer sees nothing", (await seen([next.id], ids())).length === 0);
     // PR 3: a reminder already queued for the seller about this vehicle (the fixture's queued run, pointed at it).
-    await basePrisma.journeyRun.update({
+    // The real context shape: the triggering event, and the contact with ALL their vehicles listed.
+    const sellerContext = { contact: { id: prev.id, vehicles: [{ id: sold.id, model: "Sold cart" }] } };
+    const queued = await basePrisma.journeyRun.update({
       where: { id: a.rows.journeyRunQueuedId },
-      data: { status: "queued", contactId: prev.id, entityType: "contact", entityId: prev.id, context: { vehicleId: sold.id, model: "Sold cart" } },
+      data: { status: "queued", contactId: prev.id, entityType: "contact", entityId: prev.id, context: { ...sellerContext, event: { vehicleId: sold.id, model: "Sold cart" } } },
+    });
+    // The seller's birthday journey also lists the vehicle (in contact.vehicles) but isn't about it: it must carry on.
+    const birthday = await basePrisma.journeyRun.create({
+      data: {
+        tenantId: A, journeyId: queued.journeyId, journeyVersionId: queued.journeyVersionId, entityType: "contact", entityId: prev.id,
+        contactId: prev.id, currentStepId: queued.currentStepId, status: "queued", idempotencyKey: `birthday-${SFX}`,
+        context: { ...sellerContext, event: { kind: "birthday" } },
+      },
+      select: { id: true },
     });
     await asOwner(a, () => transferVehicleOwnership({ tenantId: A, vehicleId: sold.id, newContactId: next.id, date: day("2026-01-01"), reason: "sold_privately", odometerKm: null, note: null, proofDocumentId: null, actor }));
     const run = await basePrisma.journeyRun.findUniqueOrThrow({ where: { id: a.rows.journeyRunQueuedId }, select: { status: true } });
     check("a reminder queued for the seller about the vehicle is cancelled by the transfer", run.status === "cancelled", run.status);
+    const other = await basePrisma.journeyRun.findUniqueOrThrow({ where: { id: birthday.id }, select: { status: true } });
+    check("the seller's other journeys carry on, even though their context lists the vehicle", other.status === "queued", other.status);
+    await basePrisma.journeyRun.delete({ where: { id: birthday.id } });
     const newPaper = await doc("new-service", { vehicleId: sold.id, createdAt: day("2026-02-01") });
     const all = [...ids(), newPaper.id];
     check("after: the new owner sees their own paperwork and what stays with the vehicle — not the seller's", JSON.stringify(await seen([next.id], all)) === JSON.stringify(sorted(serviceBook.id, newPaper.id)));

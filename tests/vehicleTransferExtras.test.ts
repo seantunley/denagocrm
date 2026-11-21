@@ -31,6 +31,10 @@ test("reminders: anything queued for the old owner about this vehicle is cancell
   assert.match(transfer, /const stopped = await tx\.\$executeRaw`\s*UPDATE "JourneyRun"\s*SET "status" = 'cancelled'/);
   assert.match(transfer, /WHERE "tenantId" = \$\{tenantId\}\s*AND \("contactId" = \$\{vehicle\.contactId\} OR \("entityType" = 'contact' AND "entityId" = \$\{vehicle\.contactId\}\)\)/);
   assert.match(transfer, /"status" IN \('queued', 'running', 'waiting', 'blocked'\)/);
+  // By the event that started the run — never a text search: every contact's context lists all their vehicles.
+  assert.match(transfer, /AND "context"->'event'->>'vehicleId' = \$\{vehicleId\}`;/);
+  assert.doesNotMatch(transfer, /"context"::text LIKE/);
+  assert.match(code("src/lib/journeyScheduling.ts"), /payload: \{ vehicleId: vehicle\.id,/, "vehicle journeys name it in their event");
   // New reminders are addressed when they run, from the vehicle's owner — the new one.
   assert.match(code("src/lib/serviceReminders.ts"), /contactId: vehicle\.contactId/);
 });
