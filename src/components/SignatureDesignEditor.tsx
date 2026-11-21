@@ -15,6 +15,7 @@ import {
 import type { SignatureExtras } from "@/lib/signaturePeople";
 import { accentOf, BRAND_STYLES, BRAND_STYLE_LABELS, isBrandStyle } from "@/lib/signatureDesigns";
 import { drawSignatureBanner } from "@/lib/signatureBanner";
+import { PREVIEW_SANDBOX, previewDocument } from "@/components/SignatureVisualEditor";
 
 /**
  * Settings → My account → Email signature, for the workspace owner: the ONE
@@ -90,8 +91,8 @@ export default function SignatureDesignEditor({
           custom HTML signature on purpose: this is the design being edited. */}
       <iframe
         title="Signature preview"
-        sandbox="allow-same-origin"
-        srcDoc={buildEmailHtml("", buildSignature({ ...user, signatureHtml: null }, { ...company, design }))}
+        sandbox={PREVIEW_SANDBOX}
+        srcDoc={previewDocument(buildEmailHtml("", buildSignature({ ...user, signatureHtml: null }, { ...company, design })))}
         onLoad={(e) => {
           const doc = e.currentTarget.contentDocument;
           if (doc) e.currentTarget.style.height = `${doc.documentElement.scrollHeight + 4}px`;

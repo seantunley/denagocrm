@@ -110,9 +110,10 @@ export default async function EmailSignaturesPage() {
         }}
         clicks={isOwner ? await signatureLinkReport(tenantId).catch(() => null) : null}
         staff={others.map(asPerson)}
+        // Copy my signature (#1161): this person's signature exactly as their emails carry it, for Gmail, Outlook or a
+        // phone — inside Your signature, under the preview, for everyone.
+        copy={<CopySignature {...copyableSignature({ ...me, ...details }, company)} usesOwnHtml={Boolean(me.signatureHtml?.trim())} />}
       />
-      {/* Copy my signature (#1161): this person's signature exactly as their emails carry it, for Gmail, Outlook or a phone. */}
-      <CopySignature {...copyableSignature({ ...me, ...details }, company)} usesOwnHtml={Boolean(me.signatureHtml?.trim())} />
       {/* The design is the owner's; anyone else sees this only to clear an old HTML signature of their own. */}
       {(isOwner || Boolean(me.signatureHtml?.trim())) && (
         <section className="card space-y-3 p-5">

@@ -115,8 +115,12 @@ test("the copy is the sender's signature: their details and team line, the desig
 
 test("Copy is on the pack's page for everyone, and on Settings while the pack is off — each with its own signature", () => {
   const pack = code("src/app/(app)/email-signatures/page.tsx");
-  // Outside the owner/own-HTML section, so staff get it too; with the sender's details from senderSignatureDetails.
-  assert.match(pack, /staff=\{others\.map\(asPerson\)\}\s*\/>\s*\{\/\*[^*]*\*\/\}\s*<CopySignature \{\.\.\.copyableSignature\(\{ \.\.\.me, \.\.\.details \}, company\)\}/);
+  // Inside Your signature (everyone has that section, staff too), with the sender's details from senderSignatureDetails.
+  assert.match(pack, /copy=\{<CopySignature \{\.\.\.copyableSignature\(\{ \.\.\.me, \.\.\.details \}, company\)\}/);
+  const details = code("src/components/EmailSignatureDetails.tsx");
+  assert.match(details, /\{editor\(me, saveMySignatureDetails, "Save my signature"[^\n]*\n\s*\{copy\}\n/, "under your own signature's preview");
+  // The buttons are never folded away inside a closed box (Sean: "There is no copy button").
+  assert.doesNotMatch(code("src/components/CopySignature.tsx"), /<details className="rounded-lg border border-border">\s*<summary[^>]*>Use this signature/);
   assert.match(pack, /senderSignatureDetails\(tenantId, user\.id, design, company\.assetBase\)/);
   const settings = code("src/app/(app)/settings/page.tsx");
   assert.match(settings, /\{signaturesOn \? \([\s\S]*?href="\/email-signatures"[\s\S]*?\) : \(\s*<>[\s\S]*?<CopySignature \{\.\.\.copyableSignature\(currentUser, signatureCompany\)\}/);

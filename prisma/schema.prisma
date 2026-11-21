@@ -585,6 +585,7 @@ model Contact {
   referredIn        Referral[]      @relation("ReferredIn")
   documents         Document[]
   vehicles          Vehicle[]
+  vehicleOwnerships VehicleOwnership[]
   jobCards          JobCard[]
   activities        Activity[]
   tags              Tag[]
@@ -2090,6 +2091,7 @@ model Vehicle {
   documents      Document[]
   batteryChecks  BatteryCheck[]
   warrantyClaims WarrantyClaim[]
+  ownerships     VehicleOwnership[]
 
   @@index([fleetId])
   @@index([tenantId])

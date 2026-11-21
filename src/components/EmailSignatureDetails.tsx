@@ -5,6 +5,7 @@ import type { ActionResult } from "@/lib/actionResultTypes";
 import type { SignatureCompany } from "@/lib/signature";
 import Link from "next/link";
 import SignatureNotices, { type NoticeItem } from "@/components/SignatureNotices";
+import type { ReactNode } from "react";
 import { LEGAL_LINE_MAX } from "@/lib/emailLegalLine";
 import { SIGNATURE_LINK_KIND_LABELS, type SignatureLinkKind } from "@/lib/signatureLinks";
 import {
@@ -41,9 +42,12 @@ export default function EmailSignatureDetails({
   clicks,
   staff,
   notices,
+  copy,
 }: {
   /** Dated lines on now and to come (lib/signatureNotices.ts): your own, and (owner) everyone's. */
   notices: { mine: NoticeItem[]; everyone: NoticeItem[]; today: string };
+  /** Copy my signature (components/CopySignature), shown under your own signature where it is seen. */
+  copy?: ReactNode;
   me: SignaturePerson;
   locked: readonly SignatureField[];
   isOwner: boolean;
@@ -93,6 +97,7 @@ export default function EmailSignatureDetails({
           </p>
         )}
         {editor(me, saveMySignatureDetails, "Save my signature", isOwner, sendMySignatureTest)}
+        {copy}
         <div className="space-y-2 border-t border-border pt-4">
           <h3 className="text-sm font-semibold">Dated lines</h3>
           <p className="text-xs text-muted-foreground">
