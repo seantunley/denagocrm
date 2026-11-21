@@ -18,6 +18,7 @@ test("all operational templates use the current document model", () => {
     "jobcard",
     "service-report",
     "warranty-claim",
+    "warranty-certificate",
   ]);
 
   for (const key of STANDARD_TEMPLATE_KEYS) {

@@ -14,6 +14,7 @@ import { asActionResult, refuse } from "@/lib/actionResult";
 import { requiredReason } from "@/lib/deleteReason";
 import { registrationQueueForQuote } from "@/lib/quoteDelivery";
 import { vehicleWarrantyFrom } from "@/lib/warrantyParts";
+import { issueCertificatesAtDelivery } from "@/lib/warrantyCertificateStore";
 import {
   requireContactAccess,
   requirePermission,
@@ -102,6 +103,8 @@ export async function createVehicle(formData: FormData) {
      */
     const deliveryQuoteId = String(formData.get("deliveryQuoteId") ?? "").trim();
     if (deliveryQuoteId) {
+      // Registered as part of a delivery: its warranty certificate, filed on the customer (never sent).
+      if (vehicle.tenantId) await issueCertificatesAtDelivery(vehicle.tenantId, [vehicle.id], user);
       const queue = await registrationQueueForQuote(deliveryQuoteId);
       const next = (Number.parseInt(String(formData.get("deliverySeq") ?? "0"), 10) || 0) + 1;
       if (next < queue.length) {

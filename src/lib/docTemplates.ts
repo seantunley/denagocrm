@@ -12,7 +12,8 @@ export type DocKey =
   | "delivery"
   | "jobcard"
   | "service-report"
-  | "warranty-claim";
+  | "warranty-claim"
+  | "warranty-certificate";
 
 export type SignaturePosition = "left-right" | "right-left" | "strip";
 
@@ -161,11 +162,25 @@ export const DOC_DEFS: Record<DocKey, DocDef> = {
     ],
     defaultIntro: "Warranty claim as recorded by {{company.name}}.",
   },
+  // Sean, 2026-11-21: generated at delivery and filed to the customer's record — "professional with the logos and
+  // details. A certificate sort of feel." Each part's cover from the vehicle's own warranty (lib/warrantyParts.ts).
+  "warranty-certificate": {
+    label: "Warranty certificate",
+    group: "Fulfilment",
+    module: "warranty",
+    description: "Certificate of warranty given at delivery: the owner, the vehicle and each part's cover.",
+    sections: [
+      { id: "cover", label: "Cover by part" },
+      { id: "terms", label: "Warranty terms" },
+      { id: "signatures", label: "Signature block" },
+      { id: "footer", label: "Branded footer" },
+    ],
+  },
 };
 
 export const DOC_GROUPS: { name: DocDef["group"]; keys: DocKey[] }[] = [
   { name: "Sales", keys: ["quote", "invoice", "statement", "agreement", "indemnity"] },
-  { name: "Fulfilment", keys: ["delivery"] },
+  { name: "Fulfilment", keys: ["delivery", "warranty-certificate"] },
   { name: "Workshop", keys: ["jobcard", "service-report", "warranty-claim"] },
 ];
 

@@ -146,6 +146,8 @@ export function BlockView({ block, active }: { block: DocumentBlock; active: boo
       return <PrintedBlock block={block} hint="🔗 Fills from the customer's account when the statement prints" />;
     case "divider": case "banner": case "infoCard": case "totalBand": case "terms": case "footer": case "handoverChecklist":
       return <PrintedBlock block={block} />;
+    case "warrantyCover":
+      return <PrintedBlock block={block} hint="🔗 Each part's cover fills from the vehicle when the certificate is made" />;
     // Details grid, payment schedule, comparison, callout, gallery, QR code: drawn by the print renderer; edited in the panel.
     case "detailsGrid": case "paymentSchedule": case "comparison": case "callout": case "gallery": case "qr":
       return <PrintedBlock block={block} />;

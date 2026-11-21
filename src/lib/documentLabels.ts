@@ -55,6 +55,7 @@ export const SYSTEM_TAG_LABELS: Readonly<Record<string, string>> = {
   "delivery-photo": "Delivery photo",
   "delivery-signature": "Handover signature",
   checkin: "Check-in",
+  "warranty-certificate": "Warranty certificate",
 };
 
 export const DOCUMENT_TYPE_MAX = 60;

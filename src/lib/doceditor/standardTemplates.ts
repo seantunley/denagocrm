@@ -19,6 +19,7 @@ import { CLASSIC_FOOTER_HEIGHT, FOOTER_BAND_HEIGHT, SHOWCASE_COMPACT_HEADER_HEIG
 import { SHOWCASE_FOOTER_IMAGE, SHOWCASE_HEADER_IMAGE } from "./showcaseAssets";
 import { inlineLegacyText } from "./inlineLegacyText";
 import { DOC_DEFS } from "../docTemplates";
+import { warrantySealDataUri } from "./warrantyCoverBlock";
 import { statementLayoutFromInvoice } from "./statementLayout";
 
 export type StandardDocKey =
@@ -30,7 +31,8 @@ export type StandardDocKey =
   | "delivery"
   | "jobcard"
   | "service-report"
-  | "warranty-claim";
+  | "warranty-claim"
+  | "warranty-certificate";
 
 const INK = "#020617";
 const ACCENT = "#ea580c";
@@ -521,6 +523,81 @@ function warrantyClaimTemplate(): DocumentModel {
 }
 
 /**
+ * The warranty certificate (Sean, 2026-11-21: "professional with the logos and details. A certificate sort of feel"):
+ * the workspace's banner and logo, who owns what, each part's cover from the vehicle's own warranty, the terms, a
+ * signature and the branded footer. Bound to a vehicle (lib/warrantyCertificate.ts), edited in Document Studio.
+ */
+function warrantyCertificateTemplate(): DocumentModel {
+  // Sean, 2026-11-21: "make the certificate more engaging. Its boring." — a framed page, a serif title, the owner's name
+  // set large, the vehicle in a band, a real table of cover, and a seal.
+  const GOLD = "#b8892e";
+  const style = (block: DocumentBlock, settings: DocumentBlock["settings"]): DocumentBlock => {
+    block.settings = { ...block.settings, ...settings };
+    return block;
+  };
+  const centre = (value: string, settings: DocumentBlock["settings"] = {}) => style(text(value, "center"), { textAlign: "centre", ...settings });
+  const title = style(heading("Certificate of Warranty"), { textAlign: "centre", fontScale: 2, margin: { top: 12, bottom: 0 } });
+  const certify = centre("THIS IS TO CERTIFY THAT", { fontScale: 0.8, letterSpacing: 3, fontWeight: "bold", margin: { top: 6, bottom: 0 } });
+  const owner = style(heading("{{customer.name}}"), { textAlign: "centre", fontScale: 2, margin: { top: 0, bottom: 0 } });
+  // A signature line sized to its third of the row, so it never runs under the seal beside it.
+  const signature = (label: string) => {
+    const block = newBlock("text");
+    if (block.type === "text") block.value = ["", "", "_______________________________", label].map((line) => ({ type: "p", align: "center", children: [{ text: line }] }));
+    return style(block, { fontScale: 0.8, textAlign: "centre" });
+  };
+  const rule = newBlock("divider");
+  if (rule.type === "divider") { rule.color = GOLD; rule.thickness = 1; }
+  rule.settings = { width: 40, horizontalAlignment: "centre" };
+  const statement = centre("is the owner of the vehicle below, delivered on {{warranty.start}}, and is covered by the warranty of {{company.name}} on each part for the period shown.", { margin: { top: 4, bottom: 6 } });
+  const vehicleBand = newBlock("detailsGrid");
+  if (vehicleBand.type === "detailsGrid") {
+    vehicleBand.items = [
+      { label: "MODEL", value: "{{vehicle}}" },
+      { label: "VIN / SERIAL", value: "{{vehicle.vin}}" },
+      // No registration (Sean, 2026-11-21: "Registration does not apply").
+      { label: "COLOUR", value: "{{vehicle.color}}" },
+    ];
+    vehicleBand.columns = 3;
+    vehicleBand.layout = "stacked";
+    vehicleBand.boxed = true;
+    vehicleBand.accent = ACCENT;
+  }
+  const cover = newBlock("warrantyCover");
+  const terms = style(textBox(
+    "WARRANTY TERMS",
+    "Each part is covered from the delivery date for the period shown. The warranty covers defects in materials and workmanship under normal use. It does not cover normal wear and tear, accident damage, misuse, neglect, or repairs and modifications not made or approved by {{company.name}}. Keep this certificate with the vehicle's service records, and have the vehicle serviced as scheduled.",
+  ), { fontScale: 0.9 });
+  const seal = newBlock("image");
+  if (seal.type === "image") { seal.src = warrantySealDataUri(ACCENT); seal.alt = "Warranty seal"; seal.widthPct = 62; }
+  seal.settings = { horizontalAlignment: "centre" };
+  const frame = (inset: number, width: number, colour: string, radius: number) => {
+    const box = newBlock("spacer");
+    if (box.type === "spacer") box.height = PAGE_SIZES.A4.h - inset * 2 - width * 2;
+    box.settings = { borderColor: colour, borderWidth: width, radius };
+    return { id: uid(), x: inset, y: inset, width: PAGE_SIZES.A4.w - inset * 2, block: box };
+  };
+
+  const doc = documentModel("Warranty certificate", [
+    [banner("WARRANTY CERTIFICATE", "{{certificate.number}}")],
+    [title],
+    [certify],
+    [owner],
+    [rule],
+    [statement],
+    [vehicleBand],
+    [cover],
+    [terms],
+    [signature("For {{company.name}} · Date"), seal, signature("Owner · Date")],
+    [centre("Issued {{certificate.date}} · Certificate {{certificate.number}}", { fontScale: 0.75, margin: { top: 4, bottom: 0 } })],
+    [footer()],
+  ]);
+  doc.style = { ...doc.style, margin: 56, headingFont: "serif" };
+  // The frame: an accent rule round the sheet and a fine gold one inside it.
+  doc.pages[0].floatingBlocks = [frame(16, 3, ACCENT, 12), frame(25, 1, GOLD, 8)];
+  return doc;
+}
+
+/**
  * The premium "showcase" quotation: dark header band, info strip, a vehicle hero
  * bound to the quote's primary vehicle (its Product's photo, tagline and specs),
  * line items, a totals box, terms + acceptance cards and a dark footer band.
@@ -845,6 +922,7 @@ const BUILDERS: Record<StandardDocKey, (options: StandardTemplateOptions) => Doc
   jobcard: jobcardTemplate,
   "service-report": serviceReportTemplate,
   "warranty-claim": warrantyClaimTemplate,
+  "warranty-certificate": warrantyCertificateTemplate,
 };
 
 export const STANDARD_TEMPLATE_KEYS = Object.keys(BUILDERS) as StandardDocKey[];
@@ -859,6 +937,7 @@ export const STANDARD_TEMPLATE_NAMES: Record<StandardDocKey, string> = {
   jobcard: "Job card",
   "service-report": "Service report",
   "warranty-claim": "Warranty claim",
+  "warranty-certificate": "Warranty certificate",
 };
 
 export function standardTemplateFor(key: StandardDocKey, options: StandardTemplateOptions = {}): DocumentModel {
