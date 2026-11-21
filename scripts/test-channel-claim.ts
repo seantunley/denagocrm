@@ -29,14 +29,14 @@ async function main() {
   const B = fixture.b.tenantId;
   const ids: string[] = [];
   const owner = async (externalId: string) =>
-    basePrisma.channelIdentity.findUnique({ where: { channel_externalId: { channel: "threads", externalId } }, select: { tenantId: true, disabledAt: true } });
+    basePrisma.channelIdentity.findUnique({ where: { channel_externalId: { channel: "x", externalId } }, select: { tenantId: true, disabledAt: true } });
   try {
     // 1. A brand-new account, both workspaces at once — ten rounds.
     let racesOk = 0;
     for (let round = 0; round < 10; round++) {
       const id = `race-${SFX}-${round}`;
       ids.push(id);
-      const [a, b] = await Promise.all([claimChannelEndpoint(A, "threads", id, "@a"), claimChannelEndpoint(B, "threads", id, "@b")]);
+      const [a, b] = await Promise.all([claimChannelEndpoint(A, "x", id, "@a"), claimChannelEndpoint(B, "x", id, "@b")]);
       const row = await owner(id);
       const winner = a ? A : B;
       if (a !== b && row?.tenantId === winner && row.disabledAt === null) racesOk++;
@@ -46,21 +46,21 @@ async function main() {
     // 2. An account A actively holds: B is refused, and the row stays A's.
     const held = `held-${SFX}`;
     ids.push(held);
-    await claimChannelEndpoint(A, "threads", held, "@a");
-    check("another workspace can't take an account that is actively held", (await claimChannelEndpoint(B, "threads", held, "@b")) === false);
+    await claimChannelEndpoint(A, "x", held, "@a");
+    check("another workspace can't take an account that is actively held", (await claimChannelEndpoint(B, "x", held, "@b")) === false);
     check("…and it is still the holder's", (await owner(held))?.tenantId === A);
-    check("the holder re-connecting its own account is fine", (await claimChannelEndpoint(A, "threads", held, "@a2")) === true);
+    check("the holder re-connecting its own account is fine", (await claimChannelEndpoint(A, "x", held, "@a2")) === true);
 
     // 3. A retired account, raced: exactly one takes it.
     const retired = `retired-${SFX}`;
     ids.push(retired);
-    await claimChannelEndpoint(A, "threads", retired, "@a");
-    await basePrisma.channelIdentity.updateMany({ where: { channel: "threads", externalId: retired }, data: { disabledAt: new Date() } });
-    const [ra, rb] = await Promise.all([claimChannelEndpoint(A, "threads", retired, "@a"), claimChannelEndpoint(B, "threads", retired, "@b")]);
+    await claimChannelEndpoint(A, "x", retired, "@a");
+    await basePrisma.channelIdentity.updateMany({ where: { channel: "x", externalId: retired }, data: { disabledAt: new Date() } });
+    const [ra, rb] = await Promise.all([claimChannelEndpoint(A, "x", retired, "@a"), claimChannelEndpoint(B, "x", retired, "@b")]);
     const after = await owner(retired);
     check("a retired account raced by two workspaces: exactly one takes it", ra !== rb && after?.disabledAt === null && after?.tenantId === (ra ? A : B));
   } finally {
-    await basePrisma.channelIdentity.deleteMany({ where: { channel: "threads", externalId: { in: ids } } });
+    await basePrisma.channelIdentity.deleteMany({ where: { channel: "x", externalId: { in: ids } } });
     await teardown(fixture);
   }
   console.log(`\n${passed} passed, ${failed} failed`);
