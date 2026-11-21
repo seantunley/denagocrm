@@ -137,7 +137,9 @@ export async function advanceFlow(
     routeEntry: existing?.ownership === "ai_handoff" && !input.choiceId && (await messageIsRouteEntry(channel, input.text)),
   });
   if (decision.act === "suppress") return { messages: [], done: true, suppressed: true };
-  const restart = decision.act === "restart";
+  // A comment that matched a Comment keyword route (lib/instagramCommentFlow.ts) always starts its flow afresh — it is
+  // never an answer to whatever the bot last asked this person. Suppressed above when a person owns the conversation.
+  const restart = decision.act === "restart" || Boolean(entryContext?.commentText);
 
   const state: SessionState = !existing || restart
     ? { nodeId: null, vars: { ...builtins, ...(seedVars ?? {}) }, msgs: [], flowVersionId: null }

@@ -218,6 +218,8 @@ export type FlowCtx = {
   loadSubflow?: (flowId: string, versionId?: string) => Promise<Flow | null>;
   /** Open now, for an Opening hours step (chatbotHours.chatbotOpenNow). Absent: treated as open. */
   openNow?: (holidaysClosed: boolean) => Promise<boolean>;
+  /** Does this Instagram person follow the business account? (lib/instagramFollow.ts) — fills {{follows_us}}. */
+  followsUs?: () => Promise<boolean>;
   /** The card a Send-contact-card node sends; null when this workspace cannot build one. */
   contactCard?: (staffUserId: string | undefined) => Promise<ContactCard | null>;
   /** Each step as the engine enters it, with the stored values at that moment (the conversation replay; read-only). */
@@ -341,6 +343,9 @@ export function pinSubflows<T extends Flow>(flow: T, latest: ReadonlyMap<string,
   }
   return { ...flow, nodes };
 }
+
+/** The Instagram follow gate's variable: "yes" / "no" (FlowCtx.followsUs). */
+export const FOLLOWS_US = "follows_us";
 
 export function evaluateCondition(condition: FlowCondition, vars: Record<string, string>): boolean {
   const actual = (vars[condition.variable] ?? "").trim();
@@ -715,6 +720,9 @@ export async function runFlow(flow: Flow, session: FlowSession, input: FlowInput
       // Unreachable — nothing can be wired to them — but a conversation that somehow lands here simply ends.
       nodeId = null;
     } else if (node.type === "condition") {
+      // Instagram follow gate: {{follows_us}} is asked of Instagram each time a Condition reads it — a person who has
+      // just followed passes the second time round. Absent (another channel, the simulator) it stays as it was.
+      if (node.condition.variable === FOLLOWS_US && ctx.followsUs) vars[FOLLOWS_US] = (await ctx.followsUs()) ? "yes" : "no";
       nodeId = evaluateCondition(node.condition, vars) ? node.trueNext ?? null : node.falseNext ?? null;
     } else if (node.type === "ai") {
       const ai = await ctx.aiReply(vars); messages.push({ type: "text", text: ai.reply });

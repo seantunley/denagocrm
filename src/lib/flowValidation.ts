@@ -15,6 +15,8 @@ const BUILTIN_VARS = new Set([
   "greeting", "first_name", "name", "known", "slot", "channel", "current_date", "current_time",
   "booking_identity", "booking_found", "booking_id", "booking_slot", "booking_summary", "booking_cancelled", "booking_rescheduled",
   "journey_started", "journey_reason", "journey_run_id", "open_now",
+  // Instagram follow gate (2026-11-21): yes / no, asked of Instagram when a Condition reads it (flow.ts).
+  "follows_us",
 ]);
 const AUTO_TYPES = new Set<FlowNode["type"]>(["message", "image", "document", "contactCard", "answer", "set", "switch", "http", "knowledge", "extract", "subflow", "booking", "journey", "condition", "hours", "goto", "crm", "notify"]);
 
@@ -296,7 +298,7 @@ export function validateFlow(flow: Flow, channels: FlowChannel[] = ["whatsapp"],
         issues.push(issue("error", "document.too_many", `Send a document sends at most ${MAX_DOCUMENTS_PER_STEP} files — remove some, or add another step.`, id));
       }
       for (const channel of channels) {
-        if (channel === "instagram" || channel === "telegram") issues.push(issue("warning", "channel.document_fallback", `${channel === "instagram" ? "Instagram" : "Telegram"} can't receive files from the chatbot, so this sends the file's name with "the team will send it to you" instead.`, id, channel));
+        if (channel === "telegram") issues.push(issue("warning", "channel.document_fallback", `Telegram can't receive files from the chatbot, so this sends the file's name with "the team will send it to you" instead.`, id, channel));
       }
       if (str(node.caption).length > 1024) issues.push(issue("error", "document.caption", "WhatsApp document captions must be 1,024 characters or fewer.", id));
     }

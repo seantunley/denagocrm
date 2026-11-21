@@ -48,6 +48,14 @@ export function documentFallbackText(fileName: string | undefined, caption: stri
   ].filter(Boolean).join("\n");
 }
 
+/**
+ * Instagram, when it won't take the file itself: a link that expires (7 days, botOutbox) — not a permanent copy of the
+ * workspace's file in the chat, which is the rule above.
+ */
+export function documentLinkText(fileName: string | undefined, caption: string | undefined, link: string): string {
+  return [`📄 ${fileName || "Document"}`, caption, link, "This link works for 7 days."].filter(Boolean).join("\n");
+}
+
 /** What the document is called on the timeline and in transcripts. */
 export function documentLabel(message: { fileName?: string; caption?: string }): string {
   return `📄 ${message.fileName || "[document]"}${message.caption ? `\n${message.caption}` : ""}`;
