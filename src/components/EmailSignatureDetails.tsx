@@ -4,6 +4,7 @@ import SignatureVisualEditor, { type PersonDetails } from "@/components/Signatur
 import type { ActionResult } from "@/lib/actionResultTypes";
 import type { SignatureCompany } from "@/lib/signature";
 import Link from "next/link";
+import type { ReactNode } from "react";
 import { LEGAL_LINE_MAX } from "@/lib/emailLegalLine";
 import { SIGNATURE_LINK_KIND_LABELS, type SignatureLinkKind } from "@/lib/signatureLinks";
 import { CONTACT_CARD_CHOICES, CONTACT_CARD_LABELS, type ContactCardChoice } from "@/lib/contactCard";
@@ -41,9 +42,12 @@ export default function EmailSignatureDetails({
   contactCard,
   clicks,
   staff,
+  copy,
 }: {
   /** The owner's "Save my contact" choice (lib/contactCard.ts); undefined = off. */
   contactCard?: ContactCardChoice;
+  /** Copy my signature (components/CopySignature), shown under your own signature where it is seen. */
+  copy?: ReactNode;
   me: SignaturePerson;
   locked: readonly SignatureField[];
   isOwner: boolean;
@@ -93,6 +97,7 @@ export default function EmailSignatureDetails({
           </p>
         )}
         {editor(me, saveMySignatureDetails, "Save my signature", isOwner, sendMySignatureTest)}
+        {copy}
       </section>
 
       {isOwner && (
