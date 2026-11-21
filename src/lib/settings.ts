@@ -20,6 +20,10 @@ const SECRET_KEYS = new Set([
   "META_PAGE_ACCESS_TOKEN",
   "META_APP_SECRET",
   "META_VERIFY_TOKEN",
+  // A workspace's Threads app and its connected account (lib/threads.ts, 2026-11-21).
+  "THREADS_APP_SECRET",
+  "THREADS_VERIFY_TOKEN",
+  "THREADS_ACCESS_TOKEN",
   "WA_ACCESS_TOKEN",
   "BULKSMS_TOKEN_ID",
   "BULKSMS_TOKEN_SECRET",

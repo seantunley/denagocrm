@@ -29,6 +29,8 @@ const EXPECTED_KEYS_BY_INTEGRATION: Record<string, string[]> = {
   xero: ["XERO_SALES_ACCOUNT", "XERO_TENANT_ID", "XERO_ORG_NAME", "XERO_REFRESH_TOKEN"],
   whatsapp: ["WA_PHONE_NUMBER_ID", "WA_ACCESS_TOKEN"],
   meta: ["META_PAGE_ACCESS_TOKEN"],
+  // Threads (2026-11-21): the workspace's own app, then the account Connect Threads fills in.
+  threads: ["THREADS_APP_ID", "THREADS_APP_SECRET", "THREADS_VERIFY_TOKEN", "THREADS_USER_ID", "THREADS_USERNAME", "THREADS_ACCESS_TOKEN", "THREADS_TOKEN_EXPIRES_AT"],
   // TELEGRAM IS DELIBERATELY ABSENT.
   //
   // Storing a bot token as an override put it in TenantIntegrationCredential,
@@ -80,6 +82,9 @@ test("secret-vs-plain classification (isSecretSettingKey) matches what each fiel
   const expectedSecret = new Set([
     "WA_ACCESS_TOKEN",
     "META_PAGE_ACCESS_TOKEN",
+    "THREADS_APP_SECRET",
+    "THREADS_VERIFY_TOKEN",
+    "THREADS_ACCESS_TOKEN",
     "TELEGRAM_BOT_TOKEN",
     "SMTP_PASS",
     "IMAP_PASS",
