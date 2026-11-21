@@ -17,6 +17,14 @@ export type InstagramCommentValue = {
   media?: { id?: string; media_product_type?: string };
 };
 
+/**
+ * The chatbot's one private reply to a PERSON on a POST (Sean, 2026-11-21: once per person per post — someone who
+ * comments "GUIDE" three times gets one reply). The reservation's unique key (lib/instagramCommentFlow.ts).
+ */
+export function commentFlowReplyKey(tenantId: string, postId: string, commenterId: string): string {
+  return `igcommentflow:${tenantId}:${postId}:${commenterId}`;
+}
+
 export function decideInstagramComment(value: InstagramCommentValue | null | undefined): CommentDecision {
   const v = value ?? {};
   const commentId = String(v.id ?? "").trim();

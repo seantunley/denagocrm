@@ -2,7 +2,7 @@ import { DEFAULT_FLOW, type Flow, type FlowNode } from "./flow";
 
 export type FlowTemplateId =
   | "blank" | "general" | "sales" | "service" | "lead_capture" | "booking_management" | "qr_brochure"
-  | "front_desk" | "smart_enquiry" | "feedback";
+  | "front_desk" | "smart_enquiry" | "feedback" | "instagram_follow_guide";
 export type FlowTemplate = {
   id: FlowTemplateId;
   name: string;
@@ -221,6 +221,41 @@ const BLANK_FLOW: Flow = {
 };
 
 /**
+ * INSTAGRAM: FOLLOW TO GET THE GUIDE (Sean, 2026-11-21 — Breastfeeding Art). Someone comments your keyword on a post
+ * (Routing → Instagram → Comment keyword); the first message goes to them as the comment's private reply and asks them
+ * to answer — Instagram only says whether someone follows you once they have messaged you. Their answer is checked
+ * ({{follows_us}}): a follower gets the guide; anyone else is asked to follow and tap Done, twice, then thanked and left
+ * to message again later. The guide is left for the owner to choose — publishing is blocked until it is.
+ */
+const INSTAGRAM_FOLLOW_GUIDE_FLOW: Flow = {
+  start: "hello",
+  onFailure: "teamHelp",
+  nodes: {
+    hello: { id: "hello", type: "capture", text: "Thanks for your comment! 💛 Reply here with anything at all and I'll send you the guide.", variable: "guide_reply", next: "check1" },
+    check1: { id: "check1", type: "condition", condition: { variable: "follows_us", operator: "equals", value: "yes" }, trueNext: "guide", falseNext: "follow1" },
+    follow1: {
+      id: "follow1",
+      type: "choice",
+      text: "The guide is for our followers. Follow us here on Instagram, then tap Done and I'll send it straight over.",
+      options: [{ id: "done", label: "✅ Done", next: "check2" }],
+    },
+    check2: { id: "check2", type: "condition", condition: { variable: "follows_us", operator: "equals", value: "yes" }, trueNext: "guide", falseNext: "follow2" },
+    follow2: {
+      id: "follow2",
+      type: "choice",
+      text: "I can't see your follow just yet — it can take a moment to show. Follow us, then tap Done once more.",
+      options: [{ id: "done", label: "✅ Done", next: "check3" }],
+    },
+    check3: { id: "check3", type: "condition", condition: { variable: "follows_us", operator: "equals", value: "yes" }, trueNext: "guide", falseNext: "notYet" },
+    notYet: { id: "notYet", type: "message", text: "I still can't see it — no problem. Once you've followed us, just message GUIDE here and I'll send it. 💛", next: "end" },
+    guide: { id: "guide", type: "document", documentId: "", caption: "Here's your guide — enjoy! 💛", next: "thanks" },
+    thanks: { id: "thanks", type: "message", text: "Anything else you'd like to know? Just ask here and we'll help.", next: "end" },
+    teamHelp: TEAM_HELP,
+    end: { id: "end", type: "end" },
+  },
+};
+
+/**
  * For a QR code on a poster or flyer (Chatbot → Routes → QR codes): the customer scans, taps Send, and gets the
  * brochure, the price list and the business's contact card at once, then is asked whether someone should contact
  * them. The two files are left for the owner to choose — publishing is blocked until they are.
@@ -403,6 +438,12 @@ export const FLOW_TEMPLATES: FlowTemplate[] = [
     name: "QR code: brochure pack",
     description: "For a QR code on a poster or flyer: sends your brochure, price list and contact card, then offers a call back. Choose the two files, publish, then make the QR code under Routing.",
     definition: QR_BROCHURE_FLOW,
+  },
+  {
+    id: "instagram_follow_guide",
+    name: "Instagram: follow to get the guide",
+    description: "For Instagram: someone comments your keyword on a post, gets a private reply, and receives your guide once they follow you. Choose the guide, publish on Instagram, then add a Comment keyword route under Routing.",
+    definition: INSTAGRAM_FOLLOW_GUIDE_FLOW,
   },
   {
     id: "general",

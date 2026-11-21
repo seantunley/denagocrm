@@ -71,6 +71,11 @@ async function exchangeForPageToken(sysToken: string): Promise<string | null> {
   }
 }
 
+/** The Page token for this workspace's Meta calls beyond sending (lib/instagramFollow.ts). */
+export async function metaPageToken(): Promise<string | null> {
+  return getPageToken();
+}
+
 async function getPageToken(): Promise<string | null> {
   // ONCE. Both the key and the lookup below must describe the same tenant.
   const tenantId = ambientTenantId();
@@ -279,6 +284,31 @@ export async function sendDirectAttachment(
     recipientId,
     humaniseSendError,
   );
+}
+
+/**
+ * A FILE on Instagram (a PDF guide — Instagram follow gate, 2026-11-21). Instagram takes a file only as an uploaded
+ * attachment: upload it to the Page's attachments by URL with `platform: "instagram"`, then send its id — the route
+ * ChatbotX's working Instagram integration uses. Any refusal comes back as a failure, so the caller can fall back.
+ */
+export async function sendInstagramFile(recipientId: string, url: string): Promise<MetaSendResult> {
+  const token = await getPageToken();
+  if (!token) return { ok: false, error: "Meta page token is not configured (Settings → Integrations)." };
+  let attachmentId: string | null = null;
+  try {
+    const res = await fetch(`${GRAPH}/me/message_attachments`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ platform: "instagram", message: { attachment: { type: "file", payload: { url, is_reusable: true } } } }),
+      signal: AbortSignal.timeout(OUTBOUND_TIMEOUT_MS),
+    });
+    const json = await res.json().catch(() => null);
+    if (!res.ok || typeof json?.attachment_id !== "string") return { ok: false, error: humaniseSendError(json?.error?.message ?? `Attachment upload error ${res.status}`) };
+    attachmentId = json.attachment_id;
+  } catch {
+    return { ok: false, error: "The file could not be uploaded to Instagram." };
+  }
+  return postToSendApi({ attachment: { type: "file", payload: { attachment_id: attachmentId } } }, recipientId, humaniseSendError);
 }
 
 export type InboundAttachment = { type: string; url: string };

@@ -385,7 +385,9 @@ test("it never holds up or breaks the bot's reply to the customer", async () => 
 test("every handoff goes through the one door, with the customer and the chat — and that door cannot message a customer", () => {
   const flowRun = code("src/lib/flowRun.ts");
   assert.match(flowRun, /handoff: async \(vars, context\) => \{\s*await notifyHandoff\(\{\s*channel: "WhatsApp",[\s\S]*?customer: \{ contactId: match\.contactId, leadId: match\.leadId, waDigits: digits \},\s*answers: vars,\s*chat: \(\) => whatsappHistory\(match\.contactId, match\.leadId, digits\),/);
-  assert.match(code("src/lib/flowDm.ts"), /await notifyHandoff\(\{ channel: platform === "instagram" \? "Instagram" : "Messenger", body: handoffBody\(context\), url: "\/inbox", customer: \{ contactId: contact\?\.id \?\? null, leadId: null \}, answers: vars, chat: \(\) => state\.msgs \}\);/);
+  // dmFlowCtx (2026-11-21) takes the contact's id as `contactId` — the same customer, shared with the comment-started flow.
+  assert.match(code("src/lib/flowDm.ts"), /await notifyHandoff\(\{ channel: platform === "instagram" \? "Instagram" : "Messenger", body: handoffBody\(context\), url: "\/inbox", customer: \{ contactId, leadId: null \}, answers: vars, chat: \(\) => state\.msgs \}\);/);
+  assert.match(code("src/lib/flowDm.ts"), /dmFlowCtx\(platform, senderId, contact\?\.id \?\? null\)/, "runDmFlow passes the DM's own contact");
   assert.match(code("src/lib/telegram.ts"), /await notifyHandoff\(\{ channel: "Telegram", body: handoffBody\(context\), url: "\/inbox", customer: \{ contactId: contact\?\.id \?\? null, leadId: null \}, answers: vars, chat: \(\) => state\.msgs \}\);/);
   assert.match(code("src/lib/bot.ts"), /await notifyHandoff\(\{\s*channel: "WhatsApp",[\s\S]*?customer: \{ contactId, leadId, waDigits: fromDigits \},/);
   for (const file of ["src/lib/flowRun.ts", "src/lib/flowDm.ts", "src/lib/telegram.ts", "src/lib/bot.ts"]) {

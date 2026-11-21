@@ -12,7 +12,7 @@ export const SHARED_NAME = /^[a-z][a-z0-9_]{1,39}$/;
 export const RESERVED_NAMES: ReadonlySet<string> = new Set([
   "greeting", "first_name", "name", "known", "slot", "channel", "current_date", "current_time",
   "booking_identity", "booking_found", "booking_id", "booking_slot", "booking_summary", "booking_cancelled", "booking_rescheduled",
-  "journey_started", "journey_reason", "journey_run_id", "open_now", "phone", "email",
+  "journey_started", "journey_reason", "journey_run_id", "open_now", "phone", "email", "follows_us",
 ]);
 
 export type SharedValue = { name: string; value: string };

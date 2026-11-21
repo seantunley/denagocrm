@@ -15,6 +15,7 @@ import { flowErrors, type FlowIssue } from "@/lib/flowValidation";
 import { builderTenantId, flowScope } from "@/lib/flowScope";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { FLOW_CHANNELS, FLOW_ROUTE_KINDS, normalizeRoutePattern, type FlowRouteKind } from "@/lib/flowRouting";
+import { routeKindAllowed } from "@/lib/flowRouteRule";
 import { FLOW_QR_KEY, parseQrCodes, qrPattern } from "@/lib/flowQr";
 import { getSetting, putSetting } from "@/lib/settings";
 import type { FlowChannel } from "@/lib/flowValidation";
@@ -243,6 +244,7 @@ export async function addFlowRoute(formData: FormData) {
     const flowId = String(formData.get("flowId") ?? "");
     const priority = Math.max(0, Math.min(10_000, Number.parseInt(String(formData.get("priority") ?? "100"), 10) || 100));
     if (!FLOW_CHANNELS.includes(channel) || !FLOW_ROUTE_KINDS.includes(kind) || pattern.length < 2 || !flowId) return { error: "Complete every route field with a valid value." };
+    if (!routeKindAllowed(kind, channel)) return { error: "A comment keyword starts a flow on Instagram only." };
 
     const flow = await prisma.botFlow.findFirst({ where: { id: flowId, tenantId, channel } });
     if (!flow) return { error: "Flow not found for this channel." };
