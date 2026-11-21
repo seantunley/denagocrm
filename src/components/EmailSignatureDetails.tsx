@@ -7,6 +7,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import { LEGAL_LINE_MAX } from "@/lib/emailLegalLine";
 import { SIGNATURE_LINK_KIND_LABELS, type SignatureLinkKind } from "@/lib/signatureLinks";
+import { CONTACT_CARD_CHOICES, CONTACT_CARD_LABELS, type ContactCardChoice } from "@/lib/contactCard";
 import {
   SIGNATURE_FIELDS, SIGNATURE_FIELD_LABELS, TEAM_LINE_MAX, missingBasics, type SignatureField, type TeamLine,
 } from "@/lib/signaturePeople";
@@ -38,10 +39,13 @@ export default function EmailSignatureDetails({
   legalLine,
   privacyUrl,
   trackLinks,
+  contactCard,
   clicks,
   staff,
   copy,
 }: {
+  /** The owner's "Save my contact" choice (lib/contactCard.ts); undefined = off. */
+  contactCard?: ContactCardChoice;
   /** Copy my signature (components/CopySignature), shown under your own signature where it is seen. */
   copy?: ReactNode;
   me: SignaturePerson;
@@ -130,6 +134,19 @@ export default function EmailSignatureDetails({
                   you can see which ones customers use. Phone numbers and email addresses aren&apos;t counted: they open an app
                   on the customer&apos;s device, and going through a web page first would break them.
                 </span>
+              </span>
+            </label>
+            <label className="block space-y-1 text-sm">
+              <span>Save my contact</span>
+              <select name="contactCard" defaultValue={contactCard ?? "off"} className="input max-w-xl">
+                {(["off", ...CONTACT_CARD_CHOICES] as const).map((choice) => (
+                  <option key={choice} value={choice}>{CONTACT_CARD_LABELS[choice]}</option>
+                ))}
+              </select>
+              <span className="block text-xs text-muted-foreground">
+                Under everyone&apos;s signature: a customer taps it and their phone offers to add the person to their contacts
+                (name, job title, numbers, email and the company&apos;s details — what the signature already shows, never the
+                photo). Someone who leaves the workspace stops being handed out from their old emails.
               </span>
             </label>
             <fieldset className="space-y-2">
