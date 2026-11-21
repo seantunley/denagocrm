@@ -27,6 +27,9 @@ export default async function VehicleOwnershipSection({
     contact: { firstName: string; lastName?: string | null; company?: string | null; isCompany?: boolean };
     purchaseDate: Date | null;
     warrantyMonths: number | null;
+    /** Its warranty in parts (lib/warrantyParts.ts): the transfer dialog shows each part's cover. */
+    warrantyParts?: unknown;
+    warrantyStartsAt?: Date | null;
     documents: { id: string; fileName: string }[];
   };
   openTransfer: boolean;

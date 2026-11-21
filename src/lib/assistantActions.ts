@@ -203,6 +203,17 @@ export const proposedAction = z.discriminatedUnion("type", [
     kmIn: z.number().int().min(0).max(1_000_000).optional(),
     reason,
   }).strict(),
+  // A customer's vehicle that changed hands (lib/assistantVehicleTransfer.ts): to an existing customer, from a date.
+  z.object({
+    type: z.literal("transfer_vehicle"),
+    vehicleId: leadId,
+    contactId: leadId,
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    because: z.enum(["sold_privately", "traded_in", "inherited", "company_change", "correction", "other"]),
+    odometerKm: z.number().int().min(0).max(2_000_000).optional(),
+    note: text.max(500).optional(),
+    reason,
+  }).strict(),
   // A personal calendar item: time blocked on the person's OWN calendar, tied to
   // no lead or customer. `when` with a time blocks `minutes` from then (an hour
   // if not given); a date alone blocks the whole day, through `until` if given.
@@ -964,6 +975,8 @@ export type ActionCard =
   // given, is the model; else the booking takes the deal's.
   | (Omit<LeadCard, "leadId"> & { kind: "test_drive"; leadId: string | null; contactId: string; demoVehicleId: string | null; productId?: string | null; branch: string; start: string; end: string; detail: string })
   // leadId null and leadLabel the vehicle's owner. contactId is the owner the card SHOWED: Confirm refuses if it changed.
+  // A vehicle transfer (lib/assistantVehicleTransfer.ts). fromContactId is the owner the card SHOWED: Confirm refuses if it changed.
+  | { id: string; kind: "transfer_vehicle"; leadId: null; leadLabel: string; title: string; vehicleId: string; fromContactId: string; toContactId: string; date: string; because: "sold_privately" | "traded_in" | "inherited" | "company_change" | "correction" | "other"; odometerKm?: number; note?: string; detail: string; reason?: string }
   | { id: string; kind: "job_card"; leadId: null; leadLabel: string; title: string; vehicleId: string; contactId: string; description: string; priority: "low" | "normal" | "high" | "urgent"; kmIn?: number; detail: string; reason?: string; confirmKey: string }
   | (LeadCard & { kind: "lost"; reason: string })
   // A lost deal reopened. `lostAt` is when the card SHOWED it lost: lost again since (or reopened) and Confirm refuses.
