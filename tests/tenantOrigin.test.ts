@@ -364,6 +364,8 @@ test("no outbound URL builder is left on the platform base by accident", () => {
       "the same fail-closed redirect for a signature-link token that resolved to nothing — a real token goes to the address stored for it, never to a URL built here",
     "src/app/actions/bot.ts":
       "the Telegram WEBHOOK we ask Telegram to call. Inbound, not outbound — it must be the platform's own address, and a tenant domain here would break the bot if that domain ever moved",
+    "src/components/settings/ThreadsConnectBox.tsx":
+      "a workspace's own Threads app's WEBHOOK callback and OAuth redirect (2026-11-21). Inbound, like Telegram's: the platform's own address, which keeps working whatever domain the workspace uses",
   };
   const root = path.join(root_, "src");
   const offenders: string[] = [];

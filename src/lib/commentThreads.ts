@@ -43,7 +43,7 @@ export type CommentIngestOutcome =
  */
 export async function recordPostComment(
   comment: IngestibleComment,
-  options: { platform: "facebook" | "instagram"; pageId: string | null },
+  options: { platform: "facebook" | "instagram" | "threads"; pageId: string | null },
 ): Promise<CommentIngestOutcome> {
   const tenantId = ownedWriteTenantId();
   const ref = commentThreadRef(options.platform, comment.postId);
@@ -182,7 +182,7 @@ export async function setCommentThreadMuted(conversationId: string, muted: boole
 /** Best-effort ingest for a webhook: never lets a comment fail the batch. */
 export async function recordPostCommentSafely(
   comment: IngestibleComment,
-  options: { platform: "facebook" | "instagram"; pageId: string | null },
+  options: { platform: "facebook" | "instagram" | "threads"; pageId: string | null },
 ): Promise<CommentIngestOutcome | null> {
   try {
     return await recordPostComment(comment, options);

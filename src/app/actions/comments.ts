@@ -6,7 +6,8 @@ import { prisma } from "@/lib/db";
 import { requireConversationAccess } from "@/lib/permissions";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { sendPrivateReplyToComment, sendPublicCommentReply } from "@/lib/messenger";
-import { commentDedupeKey, privateReplyDedupeKey } from "@/lib/socialComments";
+import { commentAllowsPrivateReply, commentDedupeKey, commentPlatform, privateReplyDedupeKey } from "@/lib/socialComments";
+import { hideOnThreads, replyOnThreads } from "@/lib/threads";
 import { setCommentThreadMuted } from "@/lib/commentThreads";
 import { deleteCommunicationsAndReconcile } from "@/lib/conversations";
 import { isDedupeKeyConflict } from "@/lib/inboundMessageKey";
@@ -73,9 +74,11 @@ export async function privateReplyToComment(
         // Conversation(tenantId, id)` is a composite foreign key, so a message
         // claiming a different owner than the thread it attaches to cannot be
         // inserted at all — and the thread is the one that already knows.
-        select: { id: true, tenantId: true },
+        select: { id: true, tenantId: true, externalRef: true },
       });
       if (!thread) refuse("That comment thread no longer exists.");
+      // Threads has no private messages (lib/threads.ts): only Facebook and Instagram comments get a private reply.
+      if (!commentAllowsPrivateReply(commentPlatform(thread.externalRef))) refuse("This platform has no private replies — reply publicly instead.");
 
       /*
        * ONE PER COMMENT — RESERVED BEFORE THE SEND, NOT RECORDED AFTER IT.
@@ -194,12 +197,14 @@ export async function publicReplyToComment(
 
       const thread = await prisma.conversation.findFirst({
         where: { id: conversationId, channel: "comment" },
-        select: { id: true, tenantId: true },
+        select: { id: true, tenantId: true, externalRef: true },
       });
       if (!thread) refuse("That comment thread no longer exists.");
 
-      const sent = await sendPublicCommentReply(commentId, body);
-      if (!sent.ok) refuse(sent.error ?? "Meta refused the reply.");
+      // A Threads post is answered through the workspace's Threads connection (lib/threads.ts); the rest through Meta.
+      const onThreads = commentPlatform(thread.externalRef) === "threads";
+      const sent = onThreads ? await replyOnThreads(commentId, body) : await sendPublicCommentReply(commentId, body);
+      if (!sent.ok) refuse(sent.error ?? (onThreads ? "Threads refused the reply." : "Meta refused the reply."));
 
       // Recorded only on success. Our own reply also comes back through the
       // `feed` webhook as a Page comment, which the ingest files as outbound —
@@ -245,6 +250,33 @@ export async function publicReplyToComment(
  * "dealt with": it leaves the queue but keeps listening, so a new comment on an
  * archived post still lands and can bring it back to attention.
  */
+/**
+ * Hide a comment from the post (Threads, 2026-11-21) — it stays in the inbox. Same guard as the replies: the person
+ * may reply in this inbox, and it is a Threads comment thread of this workspace.
+ */
+export async function hideComment(conversationId: string, commentId: string): Promise<ActionResult> {
+  return asActionResult(async () =>
+    withActingStaffScope(async () => {
+      const user = await requireConversationAccess(conversationId, "inbox.reply");
+      if (!commentId.trim()) refuse("That comment can no longer be hidden.");
+      const thread = await prisma.conversation.findFirst({
+        where: { id: conversationId, channel: "comment" },
+        select: { id: true, externalRef: true },
+      });
+      if (!thread) refuse("That comment thread no longer exists.");
+      if (commentPlatform(thread.externalRef) !== "threads") refuse("Hiding is available for Threads comments.");
+      // The comment must be one filed on this thread.
+      const filed = await prisma.communication.findFirst({ where: { conversationId: thread.id, messageId: commentId }, select: { id: true } });
+      if (!filed) refuse("That comment isn't on this thread.");
+      const hidden = await hideOnThreads(commentId, true);
+      if (!hidden.ok) refuse(hidden.error ?? "Threads refused it.");
+      await logAudit({ action: "comment.hidden", summary: `Hid a Threads comment (${commentId})`, userName: user.name });
+      revalidatePath("/inbox");
+      return { success: "Hidden from the post. It stays here in the inbox." };
+    }),
+  );
+}
+
 export async function setCommentThreadArchived(
   conversationId: string,
   archived: boolean,
