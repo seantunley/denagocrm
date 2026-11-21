@@ -44,6 +44,8 @@ export const PERMISSIONS = [
   "campaigns.test_send", "campaigns.manage_audiences", "campaigns.manage_templates",
   "surveys.view", "surveys.manage",
   "vehicles.view_all", "vehicles.view_owned", "vehicles.manage",
+  // Transfer a vehicle (and its warranty) to a new owner, and undo the last transfer (warranty-transfer-brief.md).
+  "vehicles.transfer",
   "jobcards.view_all", "jobcards.view_owned", "jobcards.manage",
   "parts.view", "parts.manage", "warranty.view", "warranty.manage",
   "fleets.view", "fleets.manage", "stock.view", "stock.manage",

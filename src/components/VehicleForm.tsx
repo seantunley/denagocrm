@@ -51,6 +51,7 @@ export default function VehicleForm({
   variant = "compact",
   hiddenFields,
   showWarranty = true,
+  ownerLocked,
 }: {
   /** The Warranty module on: the warranty term is offered. Off, the field isn't there and the save leaves it alone. */
   showWarranty?: boolean;
@@ -70,6 +71,11 @@ export default function VehicleForm({
    * this form.
    */
   hiddenFields?: Record<string, string>;
+  /**
+   * Editing: the owner is shown, not chosen — a change of owner is a transfer, with a record (warranty-transfer-brief.md).
+   * `transferHref` is where to do it, when this person may.
+   */
+  ownerLocked?: { label: string; transferHref: string | null };
 }) {
   const [contactId, setContactId] = useState(defaults.contactId ?? "");
   const [productId, setProductId] = useState(defaults.productId ?? "");
@@ -116,17 +122,32 @@ export default function VehicleForm({
         title="Owner & model"
         description="Link the vehicle to the correct customer and select a catalogue model where possible."
       >
-        <CaptureField label="Customer *" wide>
-          <ContactPicker
-            name="contactId"
-            options={contacts}
-            required
-            value={contactId}
-            onChange={(id, option) => {
-              setContactId(id);
-              setPicked(option);
-            }}
-          />
+        <CaptureField label={ownerLocked ? "Owner" : "Customer *"} wide>
+          {ownerLocked ? (
+            <div className="space-y-1">
+              <input type="hidden" name="contactId" value={contactId} />
+              <p className="text-sm font-medium">{ownerLocked.label}</p>
+              <p className="text-xs text-muted-foreground">
+                The owner changes by a transfer, which keeps a record of who owned it when.{" "}
+                {ownerLocked.transferHref ? (
+                  <a href={ownerLocked.transferHref} className="text-primary hover:underline">Transfer to new owner</a>
+                ) : (
+                  "Ask someone who may transfer vehicles."
+                )}
+              </p>
+            </div>
+          ) : (
+            <ContactPicker
+              name="contactId"
+              options={contacts}
+              required
+              value={contactId}
+              onChange={(id, option) => {
+                setContactId(id);
+                setPicked(option);
+              }}
+            />
+          )}
         </CaptureField>
         <CaptureField label="Catalogue product">
           <select name="productId" className="input" value={productId} onChange={(event) => onProductChange(event.target.value)}>

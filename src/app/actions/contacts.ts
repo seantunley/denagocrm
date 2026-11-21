@@ -8,6 +8,7 @@ import { actingTenantId } from "@/lib/actingTenant";
 import { activeTenantPredicate } from "@/lib/tenantPredicate";
 import { logAudit } from "@/lib/audit";
 import { softDeleteRecord } from "@/lib/trash";
+import { contactKeptBecause } from "@/lib/contactKeep";
 import { contactName } from "@/lib/format";
 import { parseBirthday } from "@/lib/birthdays";
 import { resolveAssignableUser } from "@/lib/tenantActor";
@@ -316,7 +317,16 @@ export async function deleteContact(id: string, formData: FormData) {
   return asActionResult(async () => {
     const user = await requireContactAccess(id, "contacts.delete");
     const reason = String(formData.get("reason") ?? "").trim() || "No reason given";
-    const contact = await softDeleteRecord("contact", id, reason, user.name);
+    // A CUSTOMER WITH A SALE OR FILED PAPERWORK IS NEVER DELETED (lib/contactKeep.ts) — the 60-day purge would delete
+    // them for good, breaking the chain of documents. The contact row is held so a transfer TO them (which holds it too,
+    // lib/vehicleOwnership.ts) can't land between the check and the delete.
+    const contact = await prisma.$transaction(async (tx) => {
+      const held = await tx.$queryRaw<{ tenantId: string | null }[]>`SELECT "tenantId" FROM "Contact" WHERE "id" = ${id} FOR UPDATE`;
+      if (held.length !== 1) refuse("That contact could not be found.");
+      const kept = await contactKeptBecause(held[0].tenantId, id);
+      if (kept) refuse(kept);
+      return softDeleteRecord("contact", id, reason, user.name, tx);
+    });
     // Nothing matched — another tenant's id, or already gone. Never audit a
     // deletion that did not happen.
     if (!contact) refuse("That contact could not be found.");
