@@ -24,8 +24,9 @@ const render = (kind: SigningEmailKind, body?: DocumentModel, over: Record<strin
 const blocks = (doc: DocumentModel) => doc.pages.flatMap((p) => p.rows.flatMap((r) => r.columns.flatMap((c) => c.blocks)));
 
 test("every email has a default design: valid, its subject, its action, and a headline from its own fields only", () => {
-  // 13, and the warranty certificate sent to a vehicle's owner (2026-11-21).
-  assert.equal(EMAIL_KINDS.length, 14);
+  // 13, the welcome to a vehicle's new owner (warranty-transfer-brief.md, 2026-11-20) and the warranty certificate
+  // sent to a vehicle's owner (2026-11-21).
+  assert.equal(EMAIL_KINDS.length, 15);
   for (const kind of EMAIL_KINDS) {
     const def = SIGNING_EMAILS[kind];
     const body = defaultEmailBody(kind);

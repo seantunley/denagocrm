@@ -48,6 +48,8 @@ export type SigningEmailKind =
   | "recall"
   | "recall_sms"
   | "warranty_certificate"
+  | "vehicle_welcome"
+  | "vehicle_welcome_sms"
   | "review_delivery"
   | "review_service"
   | "survey_invite"
@@ -124,6 +126,7 @@ export const SIGNING_FIELD_HELP: Record<string, string> = {
   recall_title: "Recall title",
   recall_description: "What the recall is about",
   cover_lines: "Each part's warranty cover, one per line",
+  warranty_line: "The vehicle's warranty, e.g. Under warranty until 3 Mar 2027",
   item: "What was delivered or serviced",
   review_link: "Your Google review link (required — shown as a button)",
   survey_link: "The customer's personal survey link (required — shown as a button)",
@@ -330,6 +333,31 @@ export const SIGNING_EMAILS: Record<SigningEmailKind, SigningEmailDef> = {
     subject: "Your warranty certificate — {{model}}",
     body: "Dear {{first_name}},\n\nThank you for choosing {{company_name}}. Your warranty certificate for your {{model}} is attached — please keep it with your vehicle's service records.\n\n{{cover_lines}}\n\nIf we can help with anything at all, please contact {{company_contact}}.\n\nKind regards,\n{{company_name}}",
     fields: [...PERSON, ...COMPANY, "model", "cover_lines"],
+    action: null,
+  },
+  // A vehicle's new owner, after a transfer (warranty-transfer-brief.md, PR 3). Sent only when someone presses
+  // Send on the vehicle's Ownership panel — never automatically.
+  vehicle_welcome: {
+    kind: "vehicle_welcome",
+    group: "Service & aftersales",
+    label: "Welcome to a vehicle's new owner (email)",
+    description: "Sent to a vehicle's new owner after a transfer, when someone presses Send on the vehicle's Ownership panel.",
+    settingKey: "SYSTEM_EMAIL_VEHICLE_WELCOME",
+    subject: "Welcome — your {{model}} is now registered to you",
+    body: "Dear {{first_name}},\n\nWelcome to {{company_name}}. Your {{model}} is now registered to you, and its service history stays with it.\n\n{{warranty_line}}\n\nWe will remind you when its next service is due. If we can help with anything at all, please contact {{company_contact}}.\n\nKind regards,\n{{company_name}}",
+    fields: [...PERSON, ...COMPANY, "model", "warranty_line"],
+    action: null,
+  },
+  vehicle_welcome_sms: {
+    kind: "vehicle_welcome_sms",
+    group: "Service & aftersales",
+    channel: "sms",
+    label: "Welcome to a vehicle's new owner (SMS)",
+    description: "Texted to a vehicle's new owner who can't be emailed, when someone presses Send.",
+    settingKey: "SYSTEM_SMS_VEHICLE_WELCOME",
+    subject: "",
+    body: "Hi {{first_name}}, welcome to {{company_name}}. Your {{model}} is now registered to you. {{warranty_line}} Questions? Call {{company_contact}}.",
+    fields: [...PERSON, ...COMPANY, "model", "warranty_line"],
     action: null,
   },
 

@@ -19,6 +19,7 @@ import {
   type TeamLine,
 } from "./signaturePeople";
 import { accentOf, brandSignature, DEFAULT_ACCENT, isBrandStyle, type BrandStyle } from "./signatureDesigns";
+import { parseContactCard, type ContactCardChoice } from "./contactCard";
 
 /**
  * Where the signature's static assets (the social glyphs) are served from.
@@ -100,6 +101,8 @@ export type SignatureDesign = {
   legal?: SignatureLegal;
   /** Count clicks on the signature's web links (lib/signatureLinks.ts). Off unless the owner switches it on. */
   trackLinks?: boolean;
+  /** "Save my contact" under everyone's signature (lib/contactCard.ts): a link, or a link and a QR code. Absent = off. */
+  contactCard?: ContactCardChoice;
 };
 
 export const SIGNATURE_DESIGN_KEY = "EMAIL_SIGNATURE";
@@ -128,6 +131,7 @@ export function parseSignatureDesign(raw: string | null | undefined): SignatureD
       shortReplies: v?.shortReplies === true,
       legal: parseLegal(v?.legal),
       trackLinks: v?.trackLinks === true,
+      ...(parseContactCard(v?.contactCard) ? { contactCard: parseContactCard(v?.contactCard) } : {}),
     };
   } catch {
     return DEFAULT_SIGNATURE_DESIGN;

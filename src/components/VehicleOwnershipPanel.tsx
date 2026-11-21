@@ -2,7 +2,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
-import { decideVehicleWarrantyTransfer, undoVehicleTransfer } from "@/app/actions/vehicleTransfer";
+import { decideVehicleWarrantyTransfer, sendVehicleWelcome, undoVehicleTransfer } from "@/app/actions/vehicleTransfer";
 import { formatDate } from "@/lib/format";
 import { OWNERSHIP_WARRANTY_LABELS } from "@/lib/vehicleTransferRules";
 import type { OwnershipEntry } from "@/lib/vehicleOwnership";
@@ -85,6 +85,24 @@ export default function VehicleOwnershipPanel({
                 ].filter(Boolean).join(" · ")}
               </p>
               {e.note && <p className="text-sm text-slate-400 whitespace-pre-wrap">{e.note}</p>}
+              {e.reason !== "registered" && !e.reversedAt && (
+                <div className="mt-1 flex flex-wrap items-center gap-3 text-xs">
+                  <a href={`/vehicles/${vehicleId}/transfer-certificate?o=${e.id}`} target="_blank" rel="noreferrer" className="text-orange-400 hover:underline">
+                    Transfer certificate
+                  </a>
+                  {/* Never automatic: a person presses Send, after reading what goes (warranty-transfer-brief.md). */}
+                  {canTransfer && !e.ownedUntil && e.ownerName && (
+                    <ConfirmActionDialog
+                      trigger={<button type="button" className="text-orange-400 hover:underline">Send welcome</button>}
+                      title={`Send ${e.ownerName} a welcome?`}
+                      description={`Sends this workspace's "Welcome to a vehicle's new owner" message — by email, or by SMS if they can only be texted — with the vehicle${showWarranty ? " and its warranty" : ""}. Edit its wording in Settings → Email templates. It is logged on their timeline.`}
+                      confirmLabel="Send"
+                      onConfirm={sendVehicleWelcome.bind(null, vehicleId)}
+                      success="Welcome sent"
+                    />
+                  )}
+                </div>
+              )}
             </li>
           ))}
         </ol>

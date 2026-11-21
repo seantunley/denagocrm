@@ -18,6 +18,7 @@
 import { basePrisma } from "../src/lib/db";
 import { runInTenantScope } from "../src/lib/tenantScope";
 import { transferVehicleOwnership, undoLastTransfer } from "../src/lib/vehicleOwnership";
+import { portalAllowedDocumentIds, portalOwnershipStarts } from "../src/lib/portalAccess";
 import { seedTwoTenants, teardown } from "./harness/seed";
 import { actAsStaff } from "./harness/actAs";
 
@@ -129,6 +130,54 @@ async function main() {
     check("…every ownership row stays, theirs without the person", (await basePrisma.vehicleOwnership.count({ where: { vehicleId: vehicle.id } })) === historyBefore && (await basePrisma.vehicleOwnership.count({ where: { vehicleId: vehicle.id, contactId: null } })) >= 1);
     check("…and the claims and services stay", (await basePrisma.warrantyClaim.count({ where: { vehicleId: vehicle.id } })) === 1 && (await basePrisma.serviceRecord.count({ where: { vehicleId: vehicle.id } })) === 2);
 
+    // ── PR 2: what each viewer sees, before and after the transfer date ──────────────────────────────────────────────
+    const prev = await contact("Seller");
+    const next = await contact("Buyer");
+    const sold = await basePrisma.vehicle.create({ data: { tenantId: A, model: `Sold cart ${SFX}`, contactId: prev.id, purchaseDate: day("2025-01-01"), warrantyMonths: 24 }, select: { id: true } });
+    const doc = (name: string, data: { vehicleId?: string; contactId?: string; staysWithVehicle?: boolean; createdAt: Date }) =>
+      basePrisma.document.create({ data: { tenantId: A, fileName: `${name} ${SFX}`, storedName: `vt-${SFX}-${name}`, mimeType: "application/pdf", sizeBytes: 1, uploadedById: a.ownerUserId, ...data }, select: { id: true } });
+    const oldService = await doc("old-service", { vehicleId: sold.id, createdAt: day("2025-06-01") });
+    const serviceBook = await doc("service-book", { vehicleId: sold.id, staysWithVehicle: true, createdAt: day("2025-06-01") });
+    const sellersInvoice = await doc("sellers-invoice", { contactId: prev.id, createdAt: day("2025-06-01") });
+    const ids = () => [oldService.id, serviceBook.id, sellersInvoice.id];
+    const seen = async (contactIds: string[], docIds: string[]) => [...(await portalAllowedDocumentIds({ contactIds, fleetIds: [] }, docIds))].sort();
+    const sorted = (...list: string[]) => [...list].sort();
+
+    check("before the transfer: the owner sees the vehicle's documents and their own", JSON.stringify(await seen([prev.id], ids())) === JSON.stringify(sorted(oldService.id, serviceBook.id, sellersInvoice.id)));
+    check("before the transfer: the buyer sees nothing", (await seen([next.id], ids())).length === 0);
+    // PR 3: a reminder already queued for the seller about this vehicle (the fixture's queued run, pointed at it).
+    // The real context shape: the triggering event, and the contact with ALL their vehicles listed.
+    const sellerContext = { contact: { id: prev.id, vehicles: [{ id: sold.id, model: "Sold cart" }] } };
+    const queued = await basePrisma.journeyRun.update({
+      where: { id: a.rows.journeyRunQueuedId },
+      data: { status: "queued", contactId: prev.id, entityType: "contact", entityId: prev.id, context: { ...sellerContext, event: { vehicleId: sold.id, model: "Sold cart" } } },
+    });
+    // The seller's birthday journey also lists the vehicle (in contact.vehicles) but isn't about it: it must carry on.
+    const birthday = await basePrisma.journeyRun.create({
+      data: {
+        tenantId: A, journeyId: queued.journeyId, journeyVersionId: queued.journeyVersionId, entityType: "contact", entityId: prev.id,
+        contactId: prev.id, currentStepId: queued.currentStepId, status: "queued", idempotencyKey: `birthday-${SFX}`,
+        context: { ...sellerContext, event: { kind: "birthday" } },
+      },
+      select: { id: true },
+    });
+    await asOwner(a, () => transferVehicleOwnership({ tenantId: A, vehicleId: sold.id, newContactId: next.id, date: day("2026-01-01"), reason: "sold_privately", odometerKm: null, note: null, proofDocumentId: null, actor }));
+    const run = await basePrisma.journeyRun.findUniqueOrThrow({ where: { id: a.rows.journeyRunQueuedId }, select: { status: true } });
+    check("a reminder queued for the seller about the vehicle is cancelled by the transfer", run.status === "cancelled", run.status);
+    const other = await basePrisma.journeyRun.findUniqueOrThrow({ where: { id: birthday.id }, select: { status: true } });
+    check("the seller's other journeys carry on, even though their context lists the vehicle", other.status === "queued", other.status);
+    await basePrisma.journeyRun.delete({ where: { id: birthday.id } });
+    const newPaper = await doc("new-service", { vehicleId: sold.id, createdAt: day("2026-02-01") });
+    const all = [...ids(), newPaper.id];
+    check("after: the new owner sees their own paperwork and what stays with the vehicle — not the seller's", JSON.stringify(await seen([next.id], all)) === JSON.stringify(sorted(serviceBook.id, newPaper.id)));
+    check("after: the previous owner keeps their own documents and the vehicle's from their time — not the buyer's", JSON.stringify(await seen([prev.id], all)) === JSON.stringify(sorted(oldService.id, serviceBook.id, sellersInvoice.id)));
+    const starts = await runInTenantScope({ tenantId: A, system: false }, () => portalOwnershipStarts([sold.id]));
+    check("after: the new owner's history starts on the transfer date", starts.get(sold.id)?.ownedFrom.getTime() === day("2026-01-01").getTime() && starts.get(sold.id)?.reason === "sold_privately");
+    check("after: the vehicle is the new owner's (the portal's vehicle access follows it)", (await basePrisma.vehicle.findUniqueOrThrow({ where: { id: sold.id }, select: { contactId: true } })).contactId === next.id);
+    // Undone: the paperwork goes back with the vehicle.
+    await asOwner(a, () => undoLastTransfer({ tenantId: A, vehicleId: sold.id, actor }));
+    check("undone: the buyer sees nothing of it any more", (await seen([next.id], all)).length === 0);
+
     // The whole database: every vehicle has exactly one current owner.
     const wrong = await basePrisma.$queryRaw<{ n: number }[]>`
       SELECT count(*)::int AS n FROM "Vehicle" v
@@ -137,6 +186,7 @@ async function main() {
   } finally {
     for (const tenantId of [A, B]) {
       await basePrisma.mileageLog.deleteMany({ where: { tenantId } }).catch(() => 0);
+      await basePrisma.document.deleteMany({ where: { tenantId, storedName: { startsWith: `vt-${SFX}-` } } }).catch(() => 0);
       await basePrisma.serviceRecord.deleteMany({ where: { tenantId } }).catch(() => 0);
       await basePrisma.warrantyClaim.deleteMany({ where: { tenantId } }).catch(() => 0);
       await basePrisma.vehicleOwnership.deleteMany({ where: { tenantId } }).catch(() => 0);

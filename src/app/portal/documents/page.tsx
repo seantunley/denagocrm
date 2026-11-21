@@ -3,7 +3,7 @@ import { portalBrand } from "@/lib/portalBrand";
 import { Download, FileText, FolderOpen, UploadCloud } from "lucide-react";
 import { basePrisma, prisma } from "@/lib/db";
 import { getPortalContact } from "@/lib/portal";
-import { requirePortalScope } from "@/lib/portalAccess";
+import { portalAllowedDocumentIds, requirePortalScope } from "@/lib/portalAccess";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { AUTOMOTIVE_DELIVERY_TAGS } from "@/lib/modules/registry";
 import { PortalUploadForm } from "@/components/PortalExpansionForms";
@@ -37,7 +37,7 @@ export default async function PortalDocumentsPage() {
     })
   ).map((quote) => quote.id);
 
-  const [vehicles, documents, uploads, cases] = await Promise.all([
+  const [vehicles, candidates, uploads, cases] = await Promise.all([
     prisma.vehicle.findMany({
       where: {
         deletedAt: null,
@@ -57,6 +57,8 @@ export default async function PortalDocumentsPage() {
           // off the customer must not see or download it, so drop those branches
           // (the contact-owned and quote-linked branches are core and stay).
           ...(automotiveOn ? [{ vehicle: { contactId: { in: scope.contactIds } } }] : []),
+          // A vehicle they owned before: the paperwork from their own ownership stays theirs (filtered below).
+          ...(automotiveOn ? [{ vehicle: { ownerships: { some: { contactId: { in: scope.contactIds }, reversedAt: null } } } }] : []),
           ...(automotiveOn && scope.fleetIds.length ? [{ vehicle: { fleetId: { in: scope.fleetIds } } }] : []),
           ...(quoteIds.length ? [{ quoteId: { in: quoteIds } }] : []),
         ],
@@ -91,6 +93,10 @@ export default async function PortalDocumentsPage() {
       ORDER BY "updatedAt" DESC LIMIT 100
     `,
   ]);
+  // The one document rule (lib/portalAccess.ts), as the download applies it: a vehicle's paperwork is its owner's of the
+  // time — never the previous owner's to a new one, unless staff marked it "stays with the vehicle".
+  const allowed = await portalAllowedDocumentIds(scope, candidates.map((d) => d.id));
+  const documents = candidates.filter((d) => allowed.has(d.id));
 
   return (
     <div className="space-y-10">

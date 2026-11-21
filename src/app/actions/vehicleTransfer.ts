@@ -10,8 +10,14 @@ import { putWorkspaceSetting } from "@/lib/settings";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { hasPermission, requireContactAccess, requireVehicleAccess } from "@/lib/permissions";
 import { decideWarrantyTransfer, transferVehicleOwnership, undoLastTransfer } from "@/lib/vehicleOwnership";
+import { sendEmail } from "@/lib/email";
+import { sendSms } from "@/lib/sms";
+import { tenantEmailContent, tenantSmsContent } from "@/lib/signing/signingEmail";
+import { describeBlockedReason, firstAllowedChannel } from "@/lib/communicationPolicy";
 import {
+  coverRemaining,
   isTransferReason,
+  parseOwnershipWarranty,
   parseWarrantyTransferRule,
   transferDay,
   WARRANTY_TRANSFER_KEY,
@@ -121,6 +127,63 @@ export async function decideVehicleWarrantyTransfer(vehicleId: string, formData:
       await decideWarrantyTransfer({ tenantId, vehicleId, approve, actor: { id: user.id, name: user.name } });
       revalidate(vehicleId);
       return { success: approve ? "Approved: the warranty now covers the new owner." : "Declined: the warranty does not cover the new owner." };
+    }),
+  );
+}
+
+/**
+ * Welcome the vehicle's NEW owner (PR 3) — only when someone presses Send, never automatically. The workspace's own
+ * editable "Welcome to a vehicle's new owner" email (or SMS when they can't be emailed), through the same consent
+ * check as every service message; logged on the new owner's timeline.
+ */
+export async function sendVehicleWelcome(vehicleId: string) {
+  return withActingStaffScope(() =>
+    asActionResult(async () => {
+      const user = await requireVehicleAccess(vehicleId, "vehicles.transfer");
+      const tenantId = await tenant();
+      const vehicle = await prisma.vehicle.findFirst({
+        where: { id: vehicleId, tenantId, deletedAt: null },
+        select: {
+          model: true, purchaseDate: true, warrantyMonths: true, warrantyParts: true, warrantyStartsAt: true,
+          contact: { select: { id: true, firstName: true, lastName: true } },
+        },
+      });
+      if (!vehicle) return refuse("This vehicle is in the trash or no longer exists.");
+      const open = await prisma.vehicleOwnership.findFirst({ where: { tenantId, vehicleId, ownedUntil: null }, select: { reason: true, contactId: true, warranty: true } });
+      if (!open || open.reason === "registered" || open.contactId !== vehicle.contact.id) refuse("There's no new owner to welcome on this vehicle.");
+      const c = vehicle.contact;
+      const warranty = parseOwnershipWarranty(open!.warranty);
+      const vars = {
+        first_name: c.firstName,
+        recipient_name: [c.firstName, c.lastName].filter(Boolean).join(" "),
+        model: vehicle.model,
+        // The Warranty module off: the message says nothing about a warranty.
+        warranty_line: !(await isModuleEnabled("warranty"))
+          ? ""
+          : warranty === "carried" ? `Warranty: ${coverRemaining(vehicle)}.` : warranty === "pending" ? "We'll confirm its warranty with you shortly." : "",
+      };
+      const verdict = await firstAllowedChannel({ contactId: c.id, tenantId, purpose: "service", channels: ["email", "sms"] });
+      if (!verdict.allowed || !verdict.destination) {
+        await logAudit({ action: "communication.suppressed", summary: `Welcome to the new owner of ${vehicle.model} not sent — ${describeBlockedReason(verdict.reason)}`, contactId: c.id, user });
+        return refuse(`Not sent: ${describeBlockedReason(verdict.reason)}.`);
+      }
+      let body: string;
+      let ok: boolean;
+      if (verdict.channel === "email") {
+        const message = await tenantEmailContent("vehicle_welcome", tenantId, vars);
+        body = message.text;
+        ok = (await sendEmail({ to: verdict.destination, subject: message.subject, text: message.text, html: message.html })).ok;
+      } else {
+        body = await tenantSmsContent("vehicle_welcome_sms", tenantId, vars);
+        ok = (await sendSms(verdict.destination, body)).ok;
+      }
+      if (!ok) refuse("The message didn't send. Check the email and SMS settings, then try again.");
+      await prisma.communication.create({
+        data: { type: verdict.channel === "email" ? "email" : "sms", direction: "outbound", subject: `Welcome — ${vehicle.model}`, body, contactId: c.id, userId: user.id, tenantId },
+      });
+      await logAudit({ action: "vehicle.welcome_sent", summary: `Sent the new owner a welcome for ${vehicle.model} (${verdict.channel})`, contactId: c.id, entityType: "Vehicle", entityId: vehicleId, user });
+      revalidate(vehicleId, c.id);
+      return { success: `Welcome sent by ${verdict.channel === "email" ? "email" : "SMS"}` };
     }),
   );
 }

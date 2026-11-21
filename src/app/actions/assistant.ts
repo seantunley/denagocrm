@@ -25,6 +25,7 @@ import { splitFreeFees } from "@/lib/quoteFreeItems";
 import { CONFIRM_KEY, CUSTOMER_FIELDS, leadQuotesReply, QUOTE_ADD_MAX_FEES, QUOTE_ADD_MAX_FEE_RANDS, QUOTE_BUILD_MAX_LINES, STALE_CARD, type ActionCard } from "@/lib/assistantActions";
 import { editorDefaults, quoteFromLeadDefaults } from "@/lib/quoteFromLead";
 import { QUOTE_PDF_SOURCE } from "@/lib/assistantWhatsAppRules";
+import { confirmTransferCard } from "@/lib/assistantVehicleTransfer";
 import { tenantOrigin } from "@/lib/tenantOrigin";
 import { payableTotalCents } from "@/lib/pricing";
 import { formatZAR } from "@/lib/format";
@@ -571,6 +572,7 @@ export async function runAssistantAction(
         await logAudit({ action: "assistant.action_confirmed", summary: `Confirmed the assistant's proposal: open job card #${opened.number}`, user, contactId: vehicle.contactId, metadata: { kind: card.kind, ...cardRecords(card) } });
         return { ok: true, success: `Job card #${opened.number} opened. The customer has not been contacted.`, href: `/jobcards/${opened.id}` };
       }
+      case "transfer_vehicle": return confirmTransferCard(user, card);
       case "block_time": {
         // A personal calendar item. No assignee is passed, so it is the
         // signed-in person's OWN calendar — the card cannot name anybody else's.

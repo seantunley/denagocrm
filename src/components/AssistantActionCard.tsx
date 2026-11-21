@@ -89,6 +89,7 @@ export default function AssistantActionCard({
     : card.kind === "update_customer" ? `/contacts/${card.contactId}`
     : card.kind === "create_lead" && card.lead.contactId ? `/contacts/${card.lead.contactId}`
     : card.kind === "job_card" ? `/vehicles/${card.vehicleId}`
+    : card.kind === "transfer_vehicle" ? `/vehicles/${card.vehicleId}`
     // A quote for a customer directly (no deal): the link is to the customer.
     : (card.kind === "quote_build" || card.kind === "quote_add" || card.kind === "quote_change") && !card.leadId ? `/contacts/${card.contactId}`
     : card.leadId ? `/leads/${card.leadId}` : null;
@@ -128,6 +129,8 @@ export default function AssistantActionCard({
       {card.kind === "schedule" && <p className="mt-2 whitespace-pre-line text-xs">&ldquo;{card.question}&rdquo;</p>}
       {/* A call to file: its notes, next step and follow-up — everything Confirm saves. */}
       {card.kind === "log_call" && <p className="mt-1 whitespace-pre-line text-xs text-muted-foreground">{card.detail}</p>}
+      {/* A vehicle transfer: the date, reason, odometer and what happens to the warranty — all of what Confirm does. */}
+      {card.kind === "transfer_vehicle" && <p className="mt-1 whitespace-pre-line text-xs text-muted-foreground">{card.detail}</p>}
       {(card.kind === "job_card" || card.kind === "meeting" || card.kind === "test_drive" || card.kind === "block_time") && <p className="mt-1 whitespace-pre-line text-xs text-muted-foreground">{card.detail}</p>}
       {/* The screenshot Confirm will attach to the note — seen before it is saved. */}
       {(card.kind === "note" || card.kind === "customer_note") && card.image && (

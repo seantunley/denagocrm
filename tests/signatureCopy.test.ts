@@ -118,7 +118,7 @@ test("Copy is on the pack's page for everyone, and on Settings while the pack is
   // Inside Your signature (everyone has that section, staff too), with the sender's details from senderSignatureDetails.
   assert.match(pack, /copy=\{<CopySignature \{\.\.\.copyableSignature\(\{ \.\.\.me, \.\.\.details \}, company\)\}/);
   const details = code("src/components/EmailSignatureDetails.tsx");
-  assert.match(details, /\{editor\(me, saveMySignatureDetails, "Save my signature"[^\n]*\n\s*\{copy\}\n\s*<\/section>/, "under your own signature's preview");
+  assert.match(details, /\{editor\(me, saveMySignatureDetails, "Save my signature"[^\n]*\n\s*\{copy\}\n/, "under your own signature's preview");
   // The buttons are never folded away inside a closed box (Sean: "There is no copy button").
   assert.doesNotMatch(code("src/components/CopySignature.tsx"), /<details className="rounded-lg border border-border">\s*<summary[^>]*>Use this signature/);
   assert.match(pack, /senderSignatureDetails\(tenantId, user\.id, design, company\.assetBase\)/);
