@@ -554,10 +554,10 @@ function warrantyCertificateTemplate(): DocumentModel {
     vehicleBand.items = [
       { label: "MODEL", value: "{{vehicle}}" },
       { label: "VIN / SERIAL", value: "{{vehicle.vin}}" },
-      { label: "REGISTRATION", value: "{{vehicle.reg}}" },
+      // No registration (Sean, 2026-11-21: "Registration does not apply").
       { label: "COLOUR", value: "{{vehicle.color}}" },
     ];
-    vehicleBand.columns = 4;
+    vehicleBand.columns = 3;
     vehicleBand.layout = "stacked";
     vehicleBand.boxed = true;
     vehicleBand.accent = ACCENT;
@@ -568,7 +568,7 @@ function warrantyCertificateTemplate(): DocumentModel {
     "Each part is covered from the delivery date for the period shown. The warranty covers defects in materials and workmanship under normal use. It does not cover normal wear and tear, accident damage, misuse, neglect, or repairs and modifications not made or approved by {{company.name}}. Keep this certificate with the vehicle's service records, and have the vehicle serviced as scheduled.",
   ), { fontScale: 0.9 });
   const seal = newBlock("image");
-  if (seal.type === "image") { seal.src = warrantySealDataUri(ACCENT); seal.alt = "Warranty seal"; seal.widthPct = 52; }
+  if (seal.type === "image") { seal.src = warrantySealDataUri(ACCENT); seal.alt = "Warranty seal"; seal.widthPct = 62; }
   seal.settings = { horizontalAlignment: "centre" };
   const frame = (inset: number, width: number, colour: string, radius: number) => {
     const box = newBlock("spacer");

@@ -50,22 +50,32 @@ export function warrantyCoverHtml(block: WarrantyCoverBlock, ctx: { vars?: Recor
   </div>`;
 }
 
-/** The certificate's seal: a rosette in the accent colour with "WARRANTY · CERTIFIED". A data URL for an image block. */
+/**
+ * The certificate's seal (Sean, 2026-11-21: "This must be improved"): a starburst in the accent colour, a dark medallion
+ * with a fine gold ring, "WARRANTY · CERTIFIED ·" set round it on a circle, and a shield with a tick in the middle. A data
+ * URL for an image block.
+ */
 export function warrantySealDataUri(accent = "#ea580c"): string {
   const c = hex(accent, "#ea580c");
-  const teeth = Array.from({ length: 24 }, (_, i) => {
-    const a = (i / 24) * Math.PI * 2;
-    const x = 60 + Math.cos(a) * 56;
-    const y = 60 + Math.sin(a) * 56;
-    return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="6" fill="${c}"/>`;
-  }).join("");
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
-    ${teeth}<circle cx="60" cy="60" r="54" fill="${c}"/>
-    <circle cx="60" cy="60" r="46" fill="none" stroke="#fff" stroke-width="1.5" stroke-dasharray="2 3"/>
-    <circle cx="60" cy="60" r="38" fill="#fff"/>
-    <text x="60" y="48" text-anchor="middle" font-family="Georgia, serif" font-size="9" font-weight="700" fill="${c}" letter-spacing="1.5">WARRANTY</text>
-    <path d="M46 61 l9 9 l19 -19" fill="none" stroke="${c}" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
-    <text x="60" y="86" text-anchor="middle" font-family="Georgia, serif" font-size="8" font-weight="700" fill="${c}" letter-spacing="1.5">CERTIFIED</text>
+  const INK = "#0f172a";
+  const GOLD = "#d4a64a";
+  const points = 40;
+  const burst = Array.from({ length: points * 2 }, (_, i) => {
+    const a = (i / (points * 2)) * Math.PI * 2 - Math.PI / 2;
+    const r = i % 2 === 0 ? 78 : 70;
+    return `${(80 + Math.cos(a) * r).toFixed(2)},${(80 + Math.sin(a) * r).toFixed(2)}`;
+  }).join(" ");
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" width="160" height="160">
+    <defs><path id="ring" d="M80,80 m-49,0 a49,49 0 1,1 98,0 a49,49 0 1,1 -98,0"/></defs>
+    <polygon points="${burst}" fill="${c}"/>
+    <circle cx="80" cy="80" r="66" fill="${INK}"/>
+    <circle cx="80" cy="80" r="62" fill="none" stroke="${GOLD}" stroke-width="1.2"/>
+    <circle cx="80" cy="80" r="37" fill="none" stroke="${GOLD}" stroke-width="1.2"/>
+    <text font-family="Helvetica, Arial, sans-serif" font-size="11" font-weight="700" fill="#ffffff">
+      <textPath href="#ring" startOffset="0" textLength="304" lengthAdjust="spacing">WARRANTY ★ CERTIFIED ★ WARRANTY ★ CERTIFIED ★</textPath>
+    </text>
+    <path d="M80 54 L101 62 V80 C101 94 92 103 80 108 C68 103 59 94 59 80 V62 Z" fill="${c}"/>
+    <path d="M70 81 L77.5 88.5 L91 74" fill="none" stroke="#ffffff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
   </svg>`;
   // URL-encoded, not base64: this module also runs in the editor (the browser), which has no Buffer.
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg.replace(/\s+/g, " "))}`;
