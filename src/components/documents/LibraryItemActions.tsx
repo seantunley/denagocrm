@@ -76,8 +76,9 @@ export default function LibraryItemActions({
             action={deleteLibraryDocument.bind(null, documentId)}
             title={`Delete “${name}”?`}
             description="The document and all its versions move to the Trash for 60 days."
-            trigger="Remove from library"
-            triggerClass="text-xs text-muted-foreground hover:text-red-500 cursor-pointer"
+            // A button beside New version, not faint text (Sean, 2026-11-21: "So nothing can be deleted from the library?").
+            trigger="Delete"
+            triggerClass="btn-danger btn-sm"
           />
         </div>
       )}

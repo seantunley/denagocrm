@@ -100,6 +100,23 @@ export const TENANT_CREDENTIAL_INTEGRATIONS: readonly TenantCredentialIntegratio
       { key: "META_OWN_VERIFY_TOKEN", label: "Webhook verify token (own app only)", placeholder: "Any long random text — type the same in your Meta app's Webhooks", required: false, independent: true },
     ],
   },
+  {
+    id: "threads",
+    label: "Threads",
+    description:
+      "Comments on this workspace's Threads posts in the inbox, answered (or hidden) from there. Threads has no direct messages. Uses this workspace's own Meta app with the Threads use case.",
+    // The APP is the set: id, secret and the webhook's verify token come from this workspace's own Meta app. The
+    // connected ACCOUNT's token and identity are filled by Connect Threads (lib/threads.ts) and belong to it.
+    fields: [
+      { key: "THREADS_APP_ID", label: "Threads app ID", placeholder: "Meta app → App settings → Basic (Threads app ID)" },
+      { key: "THREADS_APP_SECRET", label: "Threads app secret", placeholder: "Meta app → App settings → Basic (Threads app secret)" },
+      { key: "THREADS_VERIFY_TOKEN", label: "Webhook verify token", placeholder: "Any long random text — type the same in your app's Webhooks" },
+      { key: "THREADS_USER_ID", label: "Connected Threads account ID", placeholder: "Filled by Connect Threads", required: false, independent: true },
+      { key: "THREADS_USERNAME", label: "Connected @username", placeholder: "Filled by Connect Threads", required: false, independent: true },
+      { key: "THREADS_ACCESS_TOKEN", label: "Access token", placeholder: "Filled by Connect Threads", required: false, independent: true },
+      { key: "THREADS_TOKEN_EXPIRES_AT", label: "Token expires", placeholder: "Filled by Connect Threads", required: false, independent: true },
+    ],
+  },
   /*
    * TELEGRAM IS DELIBERATELY NOT HERE.
    *
