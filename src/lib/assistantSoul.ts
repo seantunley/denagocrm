@@ -92,6 +92,7 @@ export function selfKnowledge(name: string, modules: ReadonlySet<ModuleId>): str
     stock && "stock",
     auto && `customers' own vehicles with their workshop picture (service due or overdue, recent services, battery health, ${warranty ? "warranty, open job cards and warranty claims" : "open job cards"})`,
     auto && `the workshop as a whole (overdue services, job cards that haven't moved, ${warranty ? "warranties running out, " : ""}batteries to replace)`,
+    auto && warranty && "warranties: who owns which vehicle and what they bought, each part's cover and until when, and the warranty certificate — which you send to the person asking (on WhatsApp, to their own phone), never to the customer",
   ].filter(Boolean).join(", ");
   return [
     `ABOUT YOU (${name}) — answer questions about yourself from this; if something isn't covered, say you're not sure rather than guess:`,

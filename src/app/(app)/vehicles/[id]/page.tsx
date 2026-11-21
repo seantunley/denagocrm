@@ -31,6 +31,7 @@ import VehicleWarrantyParts from "@/components/VehicleWarrantyParts";
 import { WARRANTY_PARTS_KEY, parsePartList, vehicleCover } from "@/lib/warrantyParts";
 import { getWorkspaceSetting } from "@/lib/settings";
 import { CERTIFICATE_TAG } from "@/lib/warrantyCertificate";
+import { certificateState } from "@/lib/warrantyCertificateState";
 import CustomFieldsCard from "@/components/custom-fields/CustomFieldsCard";
 import ChecklistCard from "@/components/checklists/ChecklistCard";
 import { runsForHost, templatesForHostRecord } from "@/lib/checklists/store";
@@ -73,6 +74,8 @@ export default async function VehicleDetailPage({
   const warrantyPartList = canManageWarranty && vehicle.tenantId
     ? parsePartList(await getWorkspaceSetting(vehicle.tenantId, WARRANTY_PARTS_KEY))
     : [];
+  // The filed certificate; Send only while it is current (lib/warrantyCertificateState.ts).
+  const filedCertificate = vehicle.documents.find((d) => d.tag === CERTIFICATE_TAG && !d.replacedById) ?? null;
   const checklistTenantId = vehicle.tenantId ?? "";
   const [conditionTemplates, conditionRuns] = canManageChecklists && checklistTenantId
     ? await Promise.all([
@@ -445,7 +448,11 @@ export default async function VehicleDetailPage({
                   cover={vehicleCover(vehicle, new Date())}
                   parts={warrantyPartList}
                   canManage={canManageWarranty}
-                  certificate={vehicle.documents.find((d) => d.tag === CERTIFICATE_TAG && !d.replacedById) ?? null}
+                  certificate={
+                    filedCertificate
+                      ? { ...filedCertificate, state: certificateState(filedCertificate, { ...vehicle, ownerships: [{ warranty: ownerWarranty }] }) }
+                      : null
+                  }
                   ownerCovered={ownerWarranty === "carried"}
                 />
                 {ownerWarranty !== "carried" && (

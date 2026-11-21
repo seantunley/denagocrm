@@ -9,6 +9,7 @@ import { customerVehicles, workshopOverview } from "../../workshopContext";
 import { vehicleArgs } from "../../crmAssistantPlan";
 import { DAY, ToolOutput, User, fuzzy, refused } from "../lookupKit";
 import { when } from "./schedule";
+import { vehicleWarranty } from "./vehicleWarranty";
 import { vehicleOwnershipLookup } from "./vehicleOwnership";
 
 /** Demo vehicles and their bookings, stock units, or customers' own vehicles. */
@@ -50,6 +51,8 @@ export async function vehicles(user: User, raw: z.infer<typeof vehicleArgs>): Pr
   }
 
   if (!(await isModuleEnabled("automotive"))) return { truncated: false, rows: [], data: [{ note: "Vehicles aren't switched on for this workspace." }] };
+  // Who owns what, each part's cover and the certificate (Warranty module; its own file).
+  if (args.kind === "warranty") return vehicleWarranty(user, { search: args.search, limit: args.limit });
 
   if (args.kind === "demo") {
     if (!(await hasAnyPermission(user, "vehicles.view_all", "vehicles.view_owned", "activities.view", "activities.manage"))) return refused("demo vehicles");

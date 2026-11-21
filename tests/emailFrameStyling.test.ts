@@ -247,10 +247,10 @@ function asStored(value: unknown): unknown {
 
 /**
  * The emails that existed when the October wordings were replaced (#806, #807) — the only ones with a replaced seed on
- * record. Emails added since (the vehicle welcome, 2026-11-20) were never seeded from those wordings, so there is no old
- * draft of theirs to recognise.
+ * record. Emails added since (the vehicle welcome, 2026-11-20; the warranty certificate, 2026-11-21) were never seeded
+ * from those wordings, so there is no old draft of theirs to recognise.
  */
-const ARCHIVED_KINDS = EMAIL_KINDS.filter((kind) => kind !== "vehicle_welcome");
+const ARCHIVED_KINDS = EMAIL_KINDS.filter((kind) => kind !== "vehicle_welcome" && kind !== "warranty_certificate");
 
 test("a draft is 'untouched' only when it is EXACTLY what was seeded — any edit, however early, keeps it", () => {
   // Review of #807: "untouched" was `updatedAt - createdAt < 5s`, but the editor

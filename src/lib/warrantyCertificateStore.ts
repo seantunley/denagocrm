@@ -10,6 +10,7 @@ import { printableRecordLayout } from "./docbuilder/leadWarrantyRecords";
 import { standardTemplateFor } from "./doceditor/standardTemplates";
 import { renderModelToPdf } from "./doceditor/generate";
 import { vehicleCover } from "./warrantyParts";
+import { certificateFingerprint } from "./warrantyCertificateState";
 import { CERTIFICATE_TAG, NOT_COVERED, buildWarrantyCertificateContext, certificateFileName, certificateNumber, ownerCovered } from "./warrantyCertificate";
 import { refuse } from "./actionResult";
 
@@ -66,6 +67,8 @@ export async function issueWarrantyCertificate(input: {
         data: {
           tenantId, contactId: vehicle.contactId, vehicleId: vehicle.id, fileName, storedName,
           mimeType: "application/pdf", sizeBytes: pdf.length, tag: CERTIFICATE_TAG, uploadedById: actor.id,
+          // What it was made from — read before the render, so an edit or transfer meanwhile shows as out of date.
+          issuedFrom: certificateFingerprint(vehicle),
         },
         select: { id: true },
       });

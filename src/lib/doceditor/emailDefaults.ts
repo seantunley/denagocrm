@@ -45,6 +45,7 @@ export const EMAIL_SAMPLE_FIELDS: Record<string, string> = {
   signing_link: "https://example.com/signing/preview-only", expiry_date: "14 Oct 2026", code: "482913",
   total: "R 125 000,00", model: "Rover XL", item: "Rover XL", due_date: "14 Oct 2026",
   recall_title: "Brake cable inspection", recall_description: "We're checking the rear brake cable on all Rover XL vehicles built before June 2026.",
+  cover_lines: "Battery · 5 years · until 21 Nov 2031\nCart · 2 years · until 21 Nov 2028\nChassis · Lifetime",
   review_link: "https://example.com/review/preview-only", survey_title: "Service feedback",
   survey_intro: "We'd love to hear how your service went.", survey_subject: "How was your service?",
   survey_link: "https://example.com/survey/preview-only",

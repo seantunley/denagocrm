@@ -2045,6 +2045,9 @@ model Document {
   quoteId      String? // fulfilment paperwork (invoice, proof of payment, delivery note)
   tag          String? // invoice | pop | delivery-note
   replacedById String? // newer version of this file (repository versioning)
+  /// A warranty certificate: the fingerprint of the owner, vehicle and cover it was made from (lib/warrantyCertificateState.ts).
+  /// A mismatch now = out of date, never sent as current.
+  issuedFrom   String?
   /// The supplier a supplier document is from (the deal file's per-supplier checklist). Never grants access.
   vendorId     String?
   vendor       Vendor?  @relation(fields: [vendorId], references: [id], onDelete: SetNull)

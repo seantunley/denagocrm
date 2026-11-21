@@ -473,6 +473,8 @@ const CUSTOMER_RECORD_WRITERS = [
   // The welcome a vehicle's new owner is sent on a Confirm (warranty-transfer-brief.md) — stamped with the acting workspace.
   "src/app/actions/vehicleTransfer.ts",
   "src/app/actions/warranty.ts",
+  // The warranty certificate emailed to the owner on a Send, logged on their timeline with its workspace.
+  "src/app/actions/warrantyCertificateSend.ts",
   "src/app/actions/whatsapp.ts",
   "src/app/api/bookings/route.ts",
   "src/lib/bookingSlots.ts",

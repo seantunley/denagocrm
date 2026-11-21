@@ -47,6 +47,7 @@ export type SigningEmailKind =
   | "service_reminder_sms"
   | "recall"
   | "recall_sms"
+  | "warranty_certificate"
   | "vehicle_welcome"
   | "vehicle_welcome_sms"
   | "review_delivery"
@@ -124,6 +125,7 @@ export const SIGNING_FIELD_HELP: Record<string, string> = {
   due_date: "Date the service is due",
   recall_title: "Recall title",
   recall_description: "What the recall is about",
+  cover_lines: "Each part's warranty cover, one per line",
   warranty_line: "The vehicle's warranty, e.g. Under warranty until 3 Mar 2027",
   item: "What was delivered or serviced",
   review_link: "Your Google review link (required — shown as a button)",
@@ -319,6 +321,18 @@ export const SIGNING_EMAILS: Record<SigningEmailKind, SigningEmailDef> = {
     subject: "",
     body: "{{recall_title}}: {{recall_description}} Call {{company_contact}}.",
     fields: [...PERSON, ...COMPANY, "model", "recall_title", "recall_description"],
+    action: null,
+  },
+  // Sean, 2026-11-21: the certificate filed at delivery, sent only when someone presses Send (Warranty module).
+  warranty_certificate: {
+    kind: "warranty_certificate",
+    group: "Service & aftersales",
+    label: "Warranty certificate (email)",
+    description: "Sent with the vehicle's warranty certificate attached, when someone presses Send on the vehicle's Warranty card.",
+    settingKey: "SYSTEM_EMAIL_WARRANTY_CERTIFICATE",
+    subject: "Your warranty certificate — {{model}}",
+    body: "Dear {{first_name}},\n\nThank you for choosing {{company_name}}. Your warranty certificate for your {{model}} is attached — please keep it with your vehicle's service records.\n\n{{cover_lines}}\n\nIf we can help with anything at all, please contact {{company_contact}}.\n\nKind regards,\n{{company_name}}",
+    fields: [...PERSON, ...COMPANY, "model", "cover_lines"],
     action: null,
   },
   // A vehicle's new owner, after a transfer (warranty-transfer-brief.md, PR 3). Sent only when someone presses
