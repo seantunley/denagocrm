@@ -11,6 +11,8 @@ import { actingScopeClass, withActingStaffScope } from "@/lib/actingScope";
 import { asActionResult, refuse } from "@/lib/actionResult";
 import { actingTenantId } from "@/lib/actingTenant";
 import { photoBlobAccess, type PhotoBlobAccess } from "@/lib/photoBlob";
+import { getWorkspaceSetting } from "@/lib/settings";
+import { LIBRARY_CATEGORIES_KEY, chosenLibraryCategory, parseLibraryCategories } from "@/lib/libraryCategories";
 
 export type UploadedFileMeta = {
   url: string;
@@ -127,6 +129,11 @@ export async function registerLibraryDocuments(
   return asActionResult(async () => {
   const user = await requirePermission("library.manage");
   if (files.length === 0) refuse("Choose at least one file.");
+  // From the workspace's own category list only (lib/libraryCategories.ts) — the browser's text is never stored as is.
+  const listed = parseLibraryCategories(await getWorkspaceSetting(await actingTenantId(), LIBRARY_CATEGORIES_KEY));
+  const chosen = chosenLibraryCategory(category, listed);
+  if (!chosen.ok) refuse("Choose one of your Library categories.");
+  category = chosen.category;
   // Resolve every upload through our own store BEFORE writing any of them, so a
   // batch containing one foreign URL registers nothing rather than half of it.
   const resolved = await Promise.all(files.map(resolveUpload));

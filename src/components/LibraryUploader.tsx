@@ -9,8 +9,7 @@ import {
   registerLibraryVersion,
   type UploadedFileMeta,
 } from "@/app/actions/library";
-
-const CATEGORIES = ["Brochure", "Price list", "Spec sheet", "Warranty", "Other"];
+import { DEFAULT_LIBRARY_CATEGORIES } from "@/lib/libraryCategories";
 
 async function uploadDirect(file: File): Promise<UploadedFileMeta> {
   // Into this workspace's own folder: the only place the library accepts files
@@ -29,12 +28,20 @@ async function uploadDirect(file: File): Promise<UploadedFileMeta> {
   };
 }
 
-export function AddDocumentsForm({ defaultCategory }: { defaultCategory?: string | null } = {}) {
+export function AddDocumentsForm({
+  defaultCategory,
+  categories = DEFAULT_LIBRARY_CATEGORIES,
+}: {
+  defaultCategory?: string | null;
+  /** The workspace's own Library categories (lib/libraryCategories.ts). */
+  categories?: readonly string[];
+} = {}) {
+  const CATEGORIES = categories;
   const router = useRouter();
   const [files, setFiles] = useState<File[]>([]);
   // The Documents page opens this inside a category; start there.
   const [category, setCategory] = useState(
-    defaultCategory && CATEGORIES.includes(defaultCategory) ? defaultCategory : "Brochure",
+    defaultCategory && CATEGORIES.includes(defaultCategory) ? defaultCategory : CATEGORIES[0] ?? "",
   );
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
