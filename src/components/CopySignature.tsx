@@ -65,9 +65,10 @@ export default function CopySignature({
   }
 
   return (
-    <details className="rounded-lg border border-border">
-      <summary className="cursor-pointer px-4 py-2.5 text-sm text-muted-foreground">Use this signature in Gmail, Outlook or on your phone</summary>
-      <div className="space-y-4 px-4 pb-4">
+    // Open, not folded away: a closed box at the foot of the page hid the buttons (Sean, 2026-11-20: "There is no copy button").
+    <div className="rounded-lg border border-border">
+      <h3 className="px-4 pt-3 text-sm font-semibold">Use this signature in Gmail, Outlook or on your phone</h3>
+      <div className="space-y-4 px-4 pb-4 pt-2">
         <p className="text-sm text-muted-foreground">
           Emails you write in the CRM are signed for you. Copy the same signature into your other mail apps so everything you send matches.
           {usesOwnHtml ? " This copies your own HTML signature, since that is what your emails use." : ""}
@@ -103,14 +104,14 @@ export default function CopySignature({
           ))}
         </div>
 
-        <div>
-          <p className="label">Plain text version</p>
-          <pre className="overflow-x-auto whitespace-pre-wrap rounded-lg border border-border bg-muted/40 p-3 text-sm text-foreground">{text}</pre>
-        </div>
+        <details className="rounded-lg border border-border">
+          <summary className="cursor-pointer px-3 py-2 text-sm font-medium">Plain text version</summary>
+          <pre className="mx-3 mb-3 overflow-x-auto whitespace-pre-wrap rounded-lg border border-border bg-muted/40 p-3 text-sm text-foreground">{text}</pre>
+        </details>
         <p className="text-xs text-muted-foreground">
           The pasted signature is a copy. If your details, the logo or the workspace design change, copy and paste it again. Menu names in Gmail and Outlook change from time to time — look for Signature in their settings.
         </p>
       </div>
-    </details>
+    </div>
   );
 }

@@ -4,6 +4,7 @@ import SignatureVisualEditor, { type PersonDetails } from "@/components/Signatur
 import type { ActionResult } from "@/lib/actionResultTypes";
 import type { SignatureCompany } from "@/lib/signature";
 import Link from "next/link";
+import type { ReactNode } from "react";
 import { LEGAL_LINE_MAX } from "@/lib/emailLegalLine";
 import { SIGNATURE_LINK_KIND_LABELS, type SignatureLinkKind } from "@/lib/signatureLinks";
 import {
@@ -39,7 +40,10 @@ export default function EmailSignatureDetails({
   trackLinks,
   clicks,
   staff,
+  copy,
 }: {
+  /** Copy my signature (components/CopySignature), shown under your own signature where it is seen. */
+  copy?: ReactNode;
   me: SignaturePerson;
   locked: readonly SignatureField[];
   isOwner: boolean;
@@ -89,6 +93,7 @@ export default function EmailSignatureDetails({
           </p>
         )}
         {editor(me, saveMySignatureDetails, "Save my signature", isOwner, sendMySignatureTest)}
+        {copy}
       </section>
 
       {isOwner && (

@@ -1,5 +1,7 @@
 // Client-safe battery-health analysis (no server-only imports).
 
+import { addMonths } from "date-fns";
+
 export const BATTERY = {
   healthy: 80, // ≥ = green
   warning: 60, // ≥ = amber, below = red
@@ -53,9 +55,8 @@ export function analyzeBattery(
 
   let warrantyEligible = false;
   if (latestSoh != null && latestSoh <= BATTERY.warrantyClaimSoh && opts.purchaseDate && opts.warrantyMonths) {
-    const end = new Date(opts.purchaseDate);
-    end.setMonth(end.getMonth() + opts.warrantyMonths);
-    warrantyEligible = opts.now <= end;
+    // Clamped to the month's last day, as every warranty date is (lib/warranty.ts).
+    warrantyEligible = opts.now <= addMonths(new Date(opts.purchaseDate), opts.warrantyMonths);
   }
 
   const replacementOpportunity = latestSoh != null && latestSoh < BATTERY.warning;

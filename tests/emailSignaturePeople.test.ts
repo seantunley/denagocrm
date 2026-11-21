@@ -140,7 +140,8 @@ test("the visual editor: the preview is the send path's own signature, redrawn f
   assert.match(editor, /problem\(field\) \? "" : values\[field\]\.trim\(\)/, "a detail that won't save isn't previewed");
   assert.match(editor, /<input value=\{values\[field\] \|\| "—"\} readOnly disabled/, "a locked detail has no name, so it is not sent");
   assert.match(editor, /photoUrl: photo && initial\.hasPhoto \? `\/api\/signature-photo\/\$\{person\.id\}` : null/);
-  assert.match(editor, /sandbox="allow-same-origin"/);
+  // No scripts; links open a new tab (#1164: a click used to load the site inside the frame). tests/signaturePreviewLinks.
+  assert.match(editor, /sandbox=\{PREVIEW_SANDBOX\}/);
 });
 
 test("the preview photo: the person and the owner see it before it is switched on; a sent email only when on", () => {

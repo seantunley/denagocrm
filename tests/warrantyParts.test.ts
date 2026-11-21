@@ -44,7 +44,18 @@ test("the cart's terms: battery 5 years, cart 2 years, chassis for life — each
   ]);
   assert.deepEqual(CART.map((t) => termLabel(t.months)), ["5 years", "2 years", "Lifetime"]);
   assert.equal(termLabel(18), "18 months");
-  assert.equal(termEnd(day("2026-01-31"), 1)?.getDate(), 3, "the same calendar arithmetic as delivery always used");
+});
+
+test("month-ends clamp to the last day of the month, as the single-term warranty does", () => {
+  const end = (iso: string, months: number) => termEnd(day(iso), months)?.toDateString();
+  assert.equal(end("2026-01-29", 1), day("2026-02-28").toDateString());
+  assert.equal(end("2026-01-30", 1), day("2026-02-28").toDateString());
+  assert.equal(end("2026-01-31", 1), day("2026-02-28").toDateString(), "never rolls into March");
+  assert.equal(end("2028-01-31", 1), day("2028-02-29").toDateString(), "leap year");
+  assert.equal(end("2028-02-29", 12), day("2029-02-28").toDateString(), "leap day + a year");
+  // One policy: a single 24-month term and a 24-month part end on the same day.
+  const legacy = computeWarranty({ purchaseDate: day("2028-02-29"), warrantyMonths: 24 }, day("2028-03-01")).expiryDate;
+  assert.equal(legacy?.toDateString(), end("2028-02-29", 24));
 });
 
 test("what is posted: parts from the workspace's own list only, years or months or lifetime, no duplicates", () => {

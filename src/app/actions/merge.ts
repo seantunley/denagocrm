@@ -80,6 +80,8 @@ export async function mergeContacts(keepId: string, otherIdsCsv: string, formDat
         // and queued bot messages were left on the deleted duplicate.
         await move(tx.lead, "contactId", "leads");
         await move(tx.vehicle, "contactId", "vehicles");
+        // Who owned each vehicle when (lib/vehicleOwnership.ts): the same person, so their rows come too.
+        await move(tx.vehicleOwnership, "contactId", "vehicle ownership records");
         await move(tx.jobCard, "contactId", "job cards");
         await move(tx.quote, "contactId", "quotes");
         await move(tx.communication, "contactId", "messages");
