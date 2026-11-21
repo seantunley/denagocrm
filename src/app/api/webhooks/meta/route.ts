@@ -14,6 +14,7 @@ import { applyReceipt } from "@/lib/messageReceipts";
 import { withChannelTenantScope, validateInSystemScope } from "@/lib/tenantScopeEntry";
 import { reportUnmappedEndpoint } from "@/lib/channelRegistration";
 import { decideComment, type FeedChangeValue } from "@/lib/socialComments";
+import { decideInstagramComment, type InstagramCommentValue } from "@/lib/instagramComments";
 import { recordPostCommentSafely } from "@/lib/commentThreads";
 import { inboundRetryResponse, noteInboundRetry, noteLeasedInbound } from "@/lib/webhookRetry";
 import { secretEquals } from "@/lib/secretCompare";
@@ -195,6 +196,26 @@ export async function POST(req: NextRequest) {
        * The Page id is `entry.id`, which is both the tenant discriminator and
        * the way to tell OUR reply apart from a customer's comment.
        */
+      /*
+       * INSTAGRAM COMMENTS (Instagram follow gate, part 2; Sean, 2026-11-21) — on the business account's posts and
+       * reels, `entry.id` being that account. Filed in the inbox under their post like a Page comment, for the
+       * workspace that holds the account (and, from its own app, only that workspace).
+       */
+      if (objectType === "instagram" && change.field === "comments") {
+        const igAccountId = String(entry.id ?? "");
+        const decision = decideInstagramComment(change.value as InstagramCommentValue);
+        if (!decision.ok) continue;
+        await withChannelTenantScope(
+          "instagram",
+          igAccountId,
+          async () => {
+            await recordPostCommentSafely(decision.comment, { platform: "instagram", pageId: igAccountId });
+          },
+          () => reportUnmappedEndpoint("instagram", igAccountId, 1),
+          only,
+        );
+        continue;
+      }
       if (change.field === "feed") {
         const pageId = String(entry.id ?? "");
         const decision = decideComment(change.value as FeedChangeValue);
