@@ -2,7 +2,8 @@ import { redirect } from "next/navigation";
 import { Prisma } from "@prisma/client";
 import { basePrisma } from "./db";
 import { requireUser, requireTenantOwner } from "./auth";
-import { requireModuleEnabled } from "./modules/enabled";
+import { isModuleEnabled, requireModuleEnabled } from "./modules/enabled";
+import { moduleForPermission } from "./modules/registry";
 import { actingScopeClass } from "./actingScope";
 import { TenantScopeError } from "./tenantGuard";
 import { governingDocumentLink } from "./documents/governing";
@@ -69,16 +70,30 @@ export async function getUserPermissionList(user: PermissionUser): Promise<strin
   return [...usablePermissions(await getUserPermissions(user.id))];
 }
 
+/**
+ * A permission that belongs to a switched-off module is held by NOBODY — the owner included. One rule here, so every
+ * screen, button and action that asks for warranty.* goes with the Warranty module (Sean, 2026-11-21: "everything
+ * warranty related needs to be removed from the CRM, should the warranty module be off").
+ */
+async function moduleHolds(permission: string): Promise<boolean> {
+  const id = moduleForPermission(permission);
+  return !id || (await isModuleEnabled(id));
+}
+
 export async function hasPermission(user: PermissionUser, permission: PermissionKey): Promise<boolean> {
+  if (!(await moduleHolds(permission))) return false;
   if (user.role === "owner") return true;
   const permissions = await getUserPermissions(user.id);
   return !permissions.has(RBAC_UNAVAILABLE) && permissions.has(RBAC_INITIALIZED) && permissions.has(permission);
 }
 
 export async function hasAnyPermission(user: PermissionUser, ...permissions: PermissionKey[]): Promise<boolean> {
+  const live: PermissionKey[] = [];
+  for (const permission of permissions) if (await moduleHolds(permission)) live.push(permission);
+  if (live.length === 0) return false;
   if (user.role === "owner") return true;
   const granted = await getUserPermissions(user.id);
-  return !granted.has(RBAC_UNAVAILABLE) && granted.has(RBAC_INITIALIZED) && permissions.some((permission) => granted.has(permission));
+  return !granted.has(RBAC_UNAVAILABLE) && granted.has(RBAC_INITIALIZED) && live.some((permission) => granted.has(permission));
 }
 
 export async function requirePermission(permission: PermissionKey): Promise<PermissionUser> {

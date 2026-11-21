@@ -4,6 +4,7 @@ import { updateVehicle } from "@/app/actions/vehicles";
 import { getAccessibleContactIds, requireVehicleAccess } from "@/lib/permissions";
 import VehicleForm from "@/components/VehicleForm";
 import { contactName } from "@/lib/format";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 
 export default async function EditVehiclePage({
   params,
@@ -46,6 +47,7 @@ export default async function EditVehiclePage({
             : "",
         }}
         submitLabel="Save changes"
+        showWarranty={await isModuleEnabled("warranty")}
       />
     </div>
   );

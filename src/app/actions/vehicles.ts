@@ -36,7 +36,8 @@ function vehicleData(formData: FormData) {
     regNumber: str("regNumber"),
     color: str("color"),
     purchaseDate: str("purchaseDate") ? new Date(String(formData.get("purchaseDate"))) : null,
-    warrantyMonths: int("warrantyMonths"),
+    // Only when the form offers it (the Warranty module on): a form without the field leaves the stored term alone.
+    ...(formData.has("warrantyMonths") ? { warrantyMonths: int("warrantyMonths") } : {}),
     serviceIntervalKm: int("serviceIntervalKm"),
     serviceIntervalMonths: int("serviceIntervalMonths"),
     notes: str("notes"),

@@ -4,6 +4,7 @@ import { johannesburgDateKey } from "./activityDay";
 import { contactName } from "./format";
 import { getAccessibleJobCardIds, getAccessibleVehicleIds, hasAnyPermission, type PermissionUser } from "./permissions";
 import { WARRANTY_READ } from "./warrantyAccess";
+import { isModuleEnabled } from "./modules/enabled";
 import {
   CLOSED_JOB_STATUSES,
   FULL_DETAIL_MAX,
@@ -35,15 +36,18 @@ type Row = { label: string; detail: string; href: string };
 
 /** What of the workshop this person may see. `false` = not theirs; ids `null` = all in the workspace. */
 async function workshopAccess(user: PermissionUser) {
-  const [vehicles, jobs, claims] = await Promise.all([
+  const [vehicles, jobs, claims, warrantyOn] = await Promise.all([
     hasAnyPermission(user, "vehicles.view_all", "vehicles.view_owned"),
     hasAnyPermission(user, "jobcards.view_all", "jobcards.view_owned"),
     hasAnyPermission(user, ...WARRANTY_READ),
+    isModuleEnabled("warranty"),
   ]);
   return {
     vehicles: vehicles ? await getAccessibleVehicleIds(user) : (false as const),
     jobs: jobs ? await getAccessibleJobCardIds(user) : (false as const),
     claims,
+    /** The Warranty module: off, DAX says nothing about a vehicle's cover. */
+    warrantyOn,
   };
 }
 
@@ -119,6 +123,7 @@ export async function customerVehicles(user: PermissionUser, args: { search?: st
         },
         now,
         full,
+        access.warrantyOn,
       ),
     })),
     rows: page.map((v) => ({ label: `${v.model} — ${contactName(v.contact)}`, detail: v.regNumber ?? "no reg", href: `/vehicles/${v.id}` })),
@@ -173,7 +178,7 @@ export async function workshopOverview(
         }),
   ]);
 
-  const summary = fleet ? workshopSummary(fleet.map((v) => ({ ...v, owner: contactName(v.contact) })), now, opts.take) : null;
+  const summary = fleet ? workshopSummary(fleet.map((v) => ({ ...v, owner: contactName(v.contact) })), now, opts.take, access.warrantyOn) : null;
   const stuckJobCards = stuck
     ? {
         noMovementForDays: opts.stuckDays,

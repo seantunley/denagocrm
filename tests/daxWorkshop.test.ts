@@ -121,8 +121,8 @@ test("the workshop at a glance: overdue first, warranties ending ≤30 days, bat
   assert.equal((s.servicesOverdue.top[0] as { link: string }).link, "/vehicles/b", "most overdue first, as /service-due");
   assert.equal(s.servicesOverdue.top.length, 1, "capped at take");
   assert.equal(s.servicesDueSoon.total, 1);
-  assert.equal(s.warrantiesEnding.total, 1, "15 days left counts, 96 days left does not");
-  assert.equal((s.warrantiesEnding.top[0] as { link: string }).link, "/vehicles/d");
+  assert.equal(s.warrantiesEnding?.total, 1, "15 days left counts, 96 days left does not");
+  assert.equal((s.warrantiesEnding?.top[0] as { link: string }).link, "/vehicles/d");
   assert.equal(s.batteryReplacementCandidates.total, 1);
   assert.equal((s.batteryReplacementCandidates.top[0] as { stateOfHealthPct: number }).stateOfHealthPct, 50);
 });

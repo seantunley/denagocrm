@@ -499,7 +499,7 @@ export default async function SettingsPage({
                 Applies to the whole team&apos;s devices. Untick to silence a type everywhere.
               </p>
               <div className="space-y-2.5">
-                {PUSH_KINDS.map((k) => (
+                {PUSH_KINDS.filter((k) => k.id !== "warranty" || enabled.has("warranty")).map((k) => (
                   <label key={k.id} className="flex items-start gap-2.5 cursor-pointer">
                     <input
                       type="checkbox"

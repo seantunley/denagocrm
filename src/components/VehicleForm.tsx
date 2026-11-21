@@ -50,7 +50,10 @@ export default function VehicleForm({
   showInitialKm = false,
   variant = "compact",
   hiddenFields,
+  showWarranty = true,
 }: {
+  /** The Warranty module on: the warranty term is offered. Off, the field isn't there and the save leaves it alone. */
+  showWarranty?: boolean;
   action: (formData: FormData) => Promise<void>;
   contacts: { id: string; label: string }[];
   products: VehicleFormProduct[];
@@ -99,7 +102,7 @@ export default function VehicleForm({
           icon={CarFront}
           eyebrow="Customer garage"
           title={model.trim() || "Register a customer vehicle"}
-          description="Connect the physical vehicle to its owner, then establish its identity, warranty and service baseline."
+          description={`Connect the physical vehicle to its owner, then establish its identity, ${showWarranty ? "warranty and " : ""}service baseline.`}
           summary={[
             { label: "Customer", value: owner?.label ?? "Choose owner" },
             { label: "Current mileage", value: initialKm.trim() ? `${Number(initialKm).toLocaleString()} km` : "Not recorded" },
@@ -169,7 +172,7 @@ export default function VehicleForm({
       <CaptureSection
         icon={Fingerprint}
         title="Vehicle identity"
-        description="Record the identifiers used for service, warranty, stock and legal documentation."
+        description={`Record the identifiers used for service, ${showWarranty ? "warranty, " : ""}stock and legal documentation.`}
       >
         <CaptureField label="VIN / serial number">
           <input
@@ -197,9 +200,11 @@ export default function VehicleForm({
             <input type="date" name="purchaseDate" className="input pl-10" defaultValue={defaults.purchaseDate ?? ""} />
           </div>
         </CaptureField>
-        <CaptureField label="Warranty term (months)">
-          <input name="warrantyMonths" type="number" min={0} className="input tabular-nums" defaultValue={defaults.warrantyMonths ?? ""} placeholder="e.g. 24" />
-        </CaptureField>
+        {showWarranty && (
+          <CaptureField label="Warranty term (months)">
+            <input name="warrantyMonths" type="number" min={0} className="input tabular-nums" defaultValue={defaults.warrantyMonths ?? ""} placeholder="e.g. 24" />
+          </CaptureField>
+        )}
       </CaptureSection>
 
       <CaptureSection

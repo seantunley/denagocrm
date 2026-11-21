@@ -44,6 +44,8 @@ export const priorityMeta = (value: string): PriorityMeta =>
 
 // Ticket "type" doubles as the top-level category / intent.
 export const TICKET_TYPES = ["support", "warranty", "delivery", "billing", "sales", "other"] as const;
+/** The types offered: "warranty" only with the Warranty module on (cases already of that type keep it). */
+export const ticketTypesOffered = (warrantyOn: boolean) => TICKET_TYPES.filter((type) => warrantyOn || type !== "warranty");
 
 export type Folder = "unassigned" | "mine" | "open" | "pending" | "closed" | "all";
 export const FOLDERS: { key: Folder; label: string }[] = [

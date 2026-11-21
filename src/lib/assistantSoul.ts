@@ -85,11 +85,13 @@ export const LOCKED_RULES = [
 export function selfKnowledge(name: string, modules: ReadonlySet<ModuleId>): string {
   const auto = modules.has("automotive");
   const stock = modules.has("commerce");
+  // Warranty is its own module (it needs Automotive): off, DAX doesn't claim to know cover or claims.
+  const warranty = modules.has("warranty");
   const vehicleLookups = [
     auto && "demo vehicles",
     stock && "stock",
-    auto && "customers' own vehicles with their workshop picture (service due or overdue, recent services, battery health, warranty, open job cards and warranty claims)",
-    auto && "the workshop as a whole (overdue services, job cards that haven't moved, warranties running out, batteries to replace)",
+    auto && `customers' own vehicles with their workshop picture (service due or overdue, recent services, battery health, ${warranty ? "warranty, open job cards and warranty claims" : "open job cards"})`,
+    auto && `the workshop as a whole (overdue services, job cards that haven't moved, ${warranty ? "warranties running out, " : ""}batteries to replace)`,
   ].filter(Boolean).join(", ");
   return [
     `ABOUT YOU (${name}) — answer questions about yourself from this; if something isn't covered, say you're not sure rather than guess:`,

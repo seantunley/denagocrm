@@ -34,6 +34,7 @@ import {
   updateStockUnit,
 } from "@/app/actions/stock";
 import { getStockLabels } from "@/lib/stockLabels";
+import { isModuleEnabled } from "@/lib/modules/enabled";
 import ModalTrigger from "@/components/Modal";
 import { PageHeader } from "@/components/page-header";
 import { buttonVariants } from "@/components/ui/button";
@@ -98,11 +99,12 @@ export default async function StockUnitPage({ params }: { params: Promise<{ id: 
   `);
   if (!unit) notFound();
 
-  const [events, leadScope, quoteScope, stockLabels] = await Promise.all([
+  const [events, leadScope, quoteScope, stockLabels, warrantyOn] = await Promise.all([
     stockEvents(unit.id),
     getAccessibleLeadIds(user),
     getAccessibleQuoteIds(user),
     getStockLabels(),
+    isModuleEnabled("warranty"),
   ]);
   const labelMeta = stockLabels.find((l) => l.slug === unit.label) ?? null;
   const [leads, quotes] = canManage ? await Promise.all([
@@ -138,7 +140,7 @@ export default async function StockUnitPage({ params }: { params: Promise<{ id: 
     reserved: "Record the deposit, allocate an accepted quote, or release the reservation.",
     allocated: "Move the allocated cart into pre-delivery inspection.",
     pdi: "Complete the PDI checklist and resolve any issues.",
-    ready_for_delivery: "Complete the customer handover and activate the warranty.",
+    ready_for_delivery: warrantyOn ? "Complete the customer handover and activate the warranty." : "Complete the customer handover.",
     delivered: "This cart is now a customer vehicle with a permanent stock history.",
     sold: "This cart is now a customer vehicle with a permanent stock history.",
     hold: "Resolve the hold reason before returning the cart to its workflow.",
@@ -273,7 +275,7 @@ export default async function StockUnitPage({ params }: { params: Promise<{ id: 
 
                 {unit.status === "ready_for_delivery" && (
                   <ModalTrigger label="Complete delivery" title="Customer handover" buttonClass="btn bg-emerald-700 text-white hover:bg-emerald-600">
-                    <SaveForm success="Unit delivered" resetOnSuccess={false} action={deliverStockUnit.bind(null, unit.id)} className="space-y-4"><p className="text-sm text-muted-foreground">{unit.quoteDeliveredAt ? `Q-${unit.quoteNumber} was already handed over from the Deliveries board. This marks the cart delivered, files the sale value and starts the warranty — reusing the customer's vehicle record if it has this VIN.` : `This is the same delivery as "Mark delivered" on the Deliveries board: it marks Q-${unit.quoteNumber ?? ""} delivered, hands over every cart allocated to it, creates (or reuses) the customer's vehicle record, files the sale value and starts the warranty.`}</p><div><label className="label">Warranty months</label><input name="warrantyMonths" type="number" min="0" defaultValue="12" className="input" /></div><SaveButton className="btn bg-emerald-700 text-white hover:bg-emerald-600">Confirm delivered</SaveButton></SaveForm>
+                    <SaveForm success="Unit delivered" resetOnSuccess={false} action={deliverStockUnit.bind(null, unit.id)} className="space-y-4"><p className="text-sm text-muted-foreground">{unit.quoteDeliveredAt ? `Q-${unit.quoteNumber} was already handed over from the Deliveries board. This marks the cart delivered, files the sale value${warrantyOn ? " and starts the warranty" : ""} — reusing the customer's vehicle record if it has this VIN.` : `This is the same delivery as "Mark delivered" on the Deliveries board: it marks Q-${unit.quoteNumber ?? ""} delivered, hands over every cart allocated to it, creates (or reuses) the customer's vehicle record${warrantyOn ? ", files the sale value and starts the warranty" : " and files the sale value"}.`}</p>{warrantyOn && <div><label className="label">Warranty months</label><input name="warrantyMonths" type="number" min="0" defaultValue="12" className="input" /></div>}<SaveButton className="btn bg-emerald-700 text-white hover:bg-emerald-600">Confirm delivered</SaveButton></SaveForm>
                   </ModalTrigger>
                 )}
 
@@ -333,7 +335,7 @@ export default async function StockUnitPage({ params }: { params: Promise<{ id: 
             )}
           </Surface>
 
-          {unit.warrantyStartAt && (
+          {warrantyOn && unit.warrantyStartAt && (
             <Surface className="p-5">
               <SectionHeading title="Warranty" description="Activated automatically at delivery." action={<ShieldCheck className="size-4 text-emerald-300" />} />
               <p className="mt-4 text-sm">Started {unit.warrantyStartAt.toLocaleDateString("en-ZA")}</p>
