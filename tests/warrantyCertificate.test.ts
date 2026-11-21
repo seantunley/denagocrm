@@ -8,6 +8,9 @@ import { coverOf } from "../src/lib/warrantyParts";
 import { standardTemplateFor, STANDARD_TEMPLATE_KEYS } from "../src/lib/doceditor/standardTemplates";
 import { DOC_DEFS, docKeyAvailable } from "../src/lib/docTemplates";
 import { SYSTEM_TAG_LABELS } from "../src/lib/documentLabels";
+import { newBlock } from "../src/lib/doceditor/factory";
+import { warrantyCoverHtml, warrantySealDataUri } from "../src/lib/doceditor/warrantyCoverBlock";
+import type { WarrantyCoverBlock } from "../src/lib/doceditor/model";
 
 /**
  * Sean, 2026-11-21: "Certificate can be generated at time of delivery and filed to the customer record. It must be
@@ -23,8 +26,12 @@ const vehicle = {
 };
 
 test("the certificate's fields: number, owner, vehicle, cover from the delivery day, each part on its own line", () => {
-  const ctx = buildWarrantyCertificateContext(vehicle, cover, day("2026-11-21"), day("2026-11-21"));
-  assert.equal(ctx.tokens["certificate.number"], "WCERT-7F3K2A-2611");
+  const ctx = buildWarrantyCertificateContext(vehicle, cover, day("2026-11-21"), day("2026-11-21"), "WCERT-7F3K2A-2611-K4P9");
+  assert.equal(ctx.tokens["certificate.number"], "WCERT-7F3K2A-2611-K4P9");
+  // The cover table reads these, already worded.
+  assert.deepEqual((ctx.vars as { warranty: { parts: { part: string; cover: string; until: string; lifetime: boolean }[] } }).warranty.parts.map((p) => [p.part, p.cover, p.lifetime]), [
+    ["Battery", "5 years", false], ["Cart", "2 years", false], ["Chassis", "Lifetime", true],
+  ]);
   assert.equal(ctx.tokens["customer.name"], "Sipho Dlamini");
   assert.equal(ctx.tokens.vehicle, "Nomad XL");
   assert.match(ctx.tokens["vehicle.lines"], /VIN: VIN123\nRegistration: CA 123-456\nColour: Arctic white/);
@@ -34,17 +41,46 @@ test("the certificate's fields: number, owner, vehicle, cover from the delivery 
   assert.match(parts[1], /^Cart · 2 years · until /);
   assert.equal(parts[2], "Chassis · Lifetime");
   assert.equal(partsLines([]), "");
-  assert.equal(certificateNumber("x", day("2027-03-02")), "WCERT-X-2703");
-  assert.equal(certificateFileName(vehicle, "N"), "Warranty certificate — Nomad XL CA 123-456.pdf");
-  assert.equal(certificateFileName({ model: "Rover/XL", regNumber: null, vin: null }, "WCERT-1"), "Warranty certificate — Rover XL WCERT-1.pdf");
+  assert.equal(certificateNumber("x", day("2027-03-02"), "ab-12cd"), "WCERT-X-2703-AB12");
+  assert.equal(certificateFileName(vehicle, "WCERT-1"), "Warranty certificate WCERT-1 — Nomad XL CA 123-456.pdf");
+  assert.equal(certificateFileName({ model: "Rover/XL", regNumber: null, vin: null }, "WCERT-1"), "Warranty certificate WCERT-1 — Rover XL.pdf");
+});
+
+test("every issue has its own number — a reissue the same day included (review of #1173)", () => {
+  const issued = day("2026-11-21");
+  const a = certificateNumber(vehicle.id, issued, crypto.randomUUID());
+  const b = certificateNumber(vehicle.id, issued, crypto.randomUUID());
+  assert.notEqual(a, b);
+  assert.match(code("src/lib/warrantyCertificateStore.ts"), /const number = certificateNumber\(vehicle\.id, issuedAt, randomUUID\(\)\);/);
+  assert.notEqual(certificateFileName(vehicle, a), certificateFileName(vehicle, b), "the file names differ too");
+});
+
+test("the cover table: one row per part from the record, lifetime shown FOR LIFE; sample rows only when unbound", () => {
+  const block = newBlock("warrantyCover") as WarrantyCoverBlock;
+  const bound = warrantyCoverHtml(block, { bound: true, vars: { warranty: { parts: [{ part: "Battery", cover: "5 years", until: "21 Nov 2031", lifetime: false }, { part: "Chassis", cover: "Lifetime", until: "For life", lifetime: true }] } } });
+  assert.match(bound, />Battery<\/td>[\s\S]*>5 years<\/td>[\s\S]*21 Nov 2031/);
+  assert.match(bound, />Chassis<\/td>[\s\S]*FOR LIFE/);
+  assert.doesNotMatch(bound, /Cart/, "no sample rows on a real certificate");
+  assert.match(warrantyCoverHtml(block, { bound: true, vars: {} }), /No warranty recorded/);
+  assert.match(warrantyCoverHtml(block, null), />Cart<\/td>/, "the editor shows sample rows");
+  assert.match(warrantyCoverHtml(block, { bound: true, vars: { warranty: { parts: [{ part: "<b>x", cover: "", until: "", lifetime: false }] } } }), /&lt;b&gt;x/, "escaped");
+  assert.match(warrantySealDataUri("#ea580c"), /^data:image\/svg\+xml;utf8,/);
 });
 
 test("an editable, branded layout in Document Studio — the Warranty module's; filed with a label set by the CRM", () => {
   assert.ok(STANDARD_TEMPLATE_KEYS.includes("warranty-certificate"));
   const model = JSON.stringify(standardTemplateFor("warranty-certificate"));
-  for (const token of ["certificate.number", "customer.name", "vehicle.lines", "warranty.partsLines", "warranty.start", "company.name"]) {
+  for (const token of ["certificate.number", "certificate.date", "customer.name", "vehicle", "vehicle.vin", "vehicle.color", "warranty.start", "company.name"]) {
     assert.ok(model.includes(`{{${token}}}`), token);
   }
+  assert.ok(!model.includes("{{vehicle.reg}}"), "no registration line (Sean, 2026-11-21: 'Registration does not apply')");
+  // The certificate feel (Sean, 2026-11-21: "Its boring"): a framed sheet, a serif title, the cover table, a seal.
+  const doc = standardTemplateFor("warranty-certificate");
+  assert.equal(doc.style.headingFont, "serif");
+  assert.equal(doc.pages[0].floatingBlocks.length, 2, "the two frame rules");
+  assert.match(model, /"type":"warrantyCover"/);
+  assert.match(model, /"alt":"Warranty seal"/);
+  assert.match(model, /Certificate of Warranty/);
   assert.match(model, /"type":"banner"[^}]*"title":"WARRANTY CERTIFICATE"|"title":"WARRANTY CERTIFICATE"/);
   assert.match(model, /"type":"footer"/);
   assert.equal(DOC_DEFS["warranty-certificate"].module, "warranty");

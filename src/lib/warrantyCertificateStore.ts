@@ -1,4 +1,5 @@
 import "server-only";
+import { randomUUID } from "node:crypto";
 import { prisma } from "./db";
 import { logAudit } from "./audit";
 import { logError } from "./errorLog";
@@ -42,9 +43,10 @@ export async function issueWarrantyCertificate(input: {
   if (cover.length === 0 || !start) return null;
 
   const layout = (await printableRecordLayout(CERTIFICATE_TAG)) ?? standardTemplateFor("warranty-certificate");
-  const ctx = buildWarrantyCertificateContext(vehicle, cover, start, issuedAt, await getRegionalSettings());
+  // Its own number on every issue (review of #1173): printed on it, in its file name, in the audit line.
+  const number = certificateNumber(vehicle.id, issuedAt, randomUUID());
+  const ctx = buildWarrantyCertificateContext(vehicle, cover, start, issuedAt, number, await getRegionalSettings());
   const pdf = await renderModelToPdf(layout, ctx, tenantId);
-  const number = certificateNumber(vehicle.id, issuedAt);
   const fileName = certificateFileName(vehicle, number);
   const storedName = await saveFile(pdf, fileName, "application/pdf", tenantId);
 

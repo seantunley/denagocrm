@@ -14,6 +14,8 @@ import { requirePermission, requireVehicleAccess } from "@/lib/permissions";
 import { withActingStaffScope } from "@/lib/actingScope";
 import { asActionResult, refuse } from "@/lib/actionResult";
 import { requiredReason } from "@/lib/deleteReason";
+import { currentOwnershipWarranty } from "@/lib/vehicleOwnership";
+import { claimRefusal } from "@/lib/vehicleTransferRules";
 
 export async function addWarrantyClaim(vehicleId: string, formData: FormData) {
   return withActingStaffScope(async () => {
@@ -21,6 +23,9 @@ export async function addWarrantyClaim(vehicleId: string, formData: FormData) {
     const description = String(formData.get("description") ?? "").trim();
     if (!description) throw new Error("Describe the fault");
     const vehicle = await prisma.vehicle.findUniqueOrThrow({ where: { id: vehicleId } });
+    // A transferred vehicle's warranty may not cover its new owner (warranty-transfer-brief.md, the workspace's rule).
+    const blocked = vehicle.tenantId ? claimRefusal(await currentOwnershipWarranty(vehicle.tenantId, vehicleId)) : null;
+    if (blocked) throw new Error(blocked);
     await prisma.warrantyClaim.create({
       data: { vehicleId, contactId: vehicle.contactId, description, createdById: user.id },
     });

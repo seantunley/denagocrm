@@ -17,6 +17,7 @@ import { plateToHtmlBody } from "@/lib/docbuilder/plateSerialize";
 import { evaluateCondition } from "@/lib/docbuilder/expr";
 import { brandFooterContent, SOCIAL_ICON_PATHS } from "@/lib/companyBrand";
 import { handoverChecklistHtml } from "./handoverChecklist";
+import { warrantyCoverHtml } from "./warrantyCoverBlock";
 import { showcaseBlockHtml, showcaseLookHtml } from "./showcaseRender";
 import { layoutRowsFor, resolveOverflowGroups } from "./overflow";
 import { storedFileSrc } from "@/lib/storedFileSrc";
@@ -306,6 +307,8 @@ function blockHtml(block: DocumentBlock, ctx: RenderCtx, style: DocStyle, logoDa
 
     case "handoverChecklist":
       return wrap(handoverChecklistHtml(ctx));
+    case "warrantyCover":
+      return wrap(warrantyCoverHtml(block, ctx));
 
     case "conditional": {
       // Only prune when bound to a record; an unbound preview renders all branches.

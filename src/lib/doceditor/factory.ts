@@ -91,6 +91,8 @@ export function newBlock(type: BlockType, preset?: string): DocumentBlock {
       return { id: uid(), type, ...emptyLayout, when: "", blocks: [] };
     case "handoverChecklist":
       return { id: uid(), type, ...emptyLayout };
+    case "warrantyCover":
+      return { id: uid(), type, ...emptyLayout, title: "WARRANTY COVER", accent: "#ea580c" };
     case "showcaseHeader":
       return { id: uid(), type, ...emptyLayout, title: "QUOTATION", docNumber: "{{quote.number}}", tagline: "PREMIUM ELECTRIC MOBILITY", bg: "#020617", accent: "#ea580c", bgImage: "", showLogo: true };
     case "infoStrip":

@@ -118,6 +118,8 @@ test("no standard layout's output changed", () => {
   for (const key of STANDARD_TEMPLATE_KEYS) {
     const html = renderDocumentHtml(standardTemplateFor(key), null);
     assert.match(html, /body \{ font-family: [^;]+; font-size: 11pt; line-height: 1\.5; color: #1e293b; margin: 0; -webkit-font-smoothing: antialiased; \}/, key);
-    assert.match(html, /h2 \{ font-size: 15pt; margin: 12px 0 6px; color: #[0-9a-f]{6}; \}/i, key);
+    // The warranty certificate sets its headings in a serif on purpose (2026-11-21: "a certificate sort of feel").
+    if (key === "warranty-certificate") assert.match(html, /h2 \{ font-size: 15pt; margin: 12px 0 6px; color: #[0-9a-f]{6}; font-family:\s*[^;]*serif/i, key);
+    else assert.match(html, /h2 \{ font-size: 15pt; margin: 12px 0 6px; color: #[0-9a-f]{6}; \}/i, key);
   }
 });

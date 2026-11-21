@@ -228,13 +228,18 @@ test("an edit form is guarded by the permission that saves it, not the one that 
 test("the edit pages' pickers are scoped to what the caller may see", () => {
   // Each also loaded 500 contacts and every user row to populate its dropdowns.
   // The lead editor is now the modal on the lead page itself (one lead editor).
-  for (const page of ["src/app/(app)/leads/[id]/page.tsx", "src/app/(app)/vehicles/[id]/edit/page.tsx"]) {
+  for (const page of ["src/app/(app)/leads/[id]/page.tsx"]) {
     assert.match(
       shipped(page),
       /where: accessibleContactIds \? \{ id: \{ in: accessibleContactIds \} \} : \{\}/,
       `${page}: the customer picker is unscoped`,
     );
   }
+  // The vehicle editor has no customer picker any more: a change of owner is a transfer (warranty-transfer-brief.md),
+  // whose own picker is scoped (components/VehicleOwnershipSection.tsx). It lists no contacts at all.
+  const vehicleEdit = shipped("src/app/(app)/vehicles/[id]/edit/page.tsx");
+  assert.doesNotMatch(vehicleEdit, /prisma\.contact\.findMany/, "the vehicle editor lists no contacts");
+  assert.match(shipped("src/components/VehicleOwnershipSection.tsx"), /id: accessible \? \{ in: accessible, not: vehicle\.contactId \} : \{ not: vehicle\.contactId \}/, "the transfer picker is scoped");
   for (const page of ["src/app/(app)/leads/[id]/page.tsx", "src/app/(app)/contacts/[id]/edit/page.tsx"]) {
     const code = shipped(page);
     assert.match(code, /listActingTenantStaff\(\)/, `${page}: the staff picker must be this tenant's staff`);

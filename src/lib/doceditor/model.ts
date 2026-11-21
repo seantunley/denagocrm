@@ -320,6 +320,12 @@ export const footerBlockSchema = z.object({
 
 /** Delivery handover checklist runs + customer signature, filled from the record (see ./handoverChecklist.ts). */
 export const handoverChecklistBlockSchema = z.object({ ...base, type: z.literal("handoverChecklist") });
+/** A vehicle's warranty cover by part — Part · Cover · Covered until — filled from the record (see ./warrantyCoverBlock.ts). */
+export const warrantyCoverBlockSchema = z.object({
+  ...base, type: z.literal("warrantyCover"),
+  title: z.string().default("WARRANTY COVER"),
+  accent: colorField("#ea580c"),
+});
 
 // ── showcase quotation blocks (rendered by ./showcaseRender.ts) ──────
 /** Line icons the showcase blocks can draw — see SHOWCASE_ICONS in showcaseRender.ts. */
@@ -550,7 +556,7 @@ export const blockSchema: z.ZodType<DocumentBlock> = z.lazy(() => z.discriminate
   textBlockSchema, headingBlockSchema, imageBlockSchema, dividerBlockSchema, spacerBlockSchema,
   pageBreakBlockSchema, pricingBlockSchema, tableBlockSchema,
   bannerBlockSchema, infoCardBlockSchema, lineItemsBlockSchema, statementLinesBlockSchema, totalBandBlockSchema, termsBlockSchema, footerBlockSchema,
-  conditionalBlockSchema, handoverChecklistBlockSchema,
+  conditionalBlockSchema, handoverChecklistBlockSchema, warrantyCoverBlockSchema,
   showcaseHeaderBlockSchema, infoStripBlockSchema, vehicleShowcaseBlockSchema, totalsBoxBlockSchema, acceptanceBlockSchema, footerBandBlockSchema,
   detailsGridBlockSchema, paymentScheduleBlockSchema, comparisonBlockSchema, calloutBlockSchema, galleryBlockSchema, qrBlockSchema,
   emailHeaderBlockSchema, emailBodyBlockSchema, emailSignatureBlockSchema, emailFooterBlockSchema, emailButtonBlockSchema, emailFactsBlockSchema,
@@ -572,6 +578,7 @@ export type TotalBandBlock = z.infer<typeof totalBandBlockSchema>;
 export type TermsBlock = z.infer<typeof termsBlockSchema>;
 export type FooterBlock = z.infer<typeof footerBlockSchema>;
 export type HandoverChecklistBlock = z.infer<typeof handoverChecklistBlockSchema>;
+export type WarrantyCoverBlock = z.infer<typeof warrantyCoverBlockSchema>;
 export type ShowcaseHeaderBlock = z.infer<typeof showcaseHeaderBlockSchema>;
 export type InfoStripBlock = z.infer<typeof infoStripBlockSchema>;
 export type VehicleShowcaseBlock = z.infer<typeof vehicleShowcaseBlockSchema>;
@@ -604,7 +611,7 @@ export type DocumentBlock =
   | TextBlock | HeadingBlock | ImageBlock | DividerBlock | SpacerBlock
   | PageBreakBlock | PricingBlock | TableBlock
   | BannerBlock | InfoCardBlock | LineItemsBlock | StatementLinesBlock | TotalBandBlock | TermsBlock | FooterBlock
-  | ConditionalBlock | HandoverChecklistBlock | ShowcaseBlock | ContentBlock | EmailBlock;
+  | ConditionalBlock | HandoverChecklistBlock | WarrantyCoverBlock | ShowcaseBlock | ContentBlock | EmailBlock;
 export type BlockType = DocumentBlock["type"];
 
 // ── columns / rows / pages ──────────────────────────────────────────
