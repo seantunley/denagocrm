@@ -41,16 +41,19 @@ test("the certificate's fields: number, owner, vehicle, cover from the delivery 
   assert.match(parts[1], /^Cart · 2 years · until /);
   assert.equal(parts[2], "Chassis · Lifetime");
   assert.equal(partsLines([]), "");
-  assert.equal(certificateNumber("x", day("2027-03-02"), "ab-12cd"), "WCERT-X-2703-AB12");
+  assert.equal(certificateNumber("x", day("2027-03-02"), "1a2b3c4d-5e6f-4789-a012-3456789abcde"), "WCERT-X-2703-1A2B-3C4D-5E6F");
   assert.equal(certificateFileName(vehicle, "WCERT-1"), "Warranty certificate WCERT-1 — Nomad XL CA 123-456.pdf");
   assert.equal(certificateFileName({ model: "Rover/XL", regNumber: null, vin: null }, "WCERT-1"), "Warranty certificate WCERT-1 — Rover XL.pdf");
 });
 
 test("every issue has its own number — a reissue the same day included (review of #1173)", () => {
   const issued = day("2026-11-21");
-  const a = certificateNumber(vehicle.id, issued, crypto.randomUUID());
-  const b = certificateNumber(vehicle.id, issued, crypto.randomUUID());
+  // Deterministic: two issues whose random parts differ only in the 12th character still get different numbers.
+  const a = certificateNumber(vehicle.id, issued, "00000000-0000-4000-8000-000000000000");
+  const b = certificateNumber(vehicle.id, issued, "00000000-0001-4000-8000-000000000000");
   assert.notEqual(a, b);
+  assert.match(a, /^WCERT-[A-Z0-9]{1,6}-2611-0000-0000-0000$/);
+  assert.throws(() => certificateNumber(vehicle.id, issued, "short"), /12 random characters/);
   assert.match(code("src/lib/warrantyCertificateStore.ts"), /const number = certificateNumber\(vehicle\.id, issuedAt, randomUUID\(\)\);/);
   assert.notEqual(certificateFileName(vehicle, a), certificateFileName(vehicle, b), "the file names differ too");
 });
