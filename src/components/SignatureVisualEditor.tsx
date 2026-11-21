@@ -21,6 +21,8 @@ export type PersonDetails = {
   photo: boolean;
   /** A profile photo exists to show (it is uploaded in Settings → My account). */
   hasPhoto: boolean;
+  /** Dated lines showing today (lib/signatureNotices.ts), so the preview is today's signature. */
+  notices?: string[];
   /** "Save my contact" links, when the owner switched it on (lib/contactCardServer.ts). */
   contactCardUrl?: string;
   contactQrUrl?: string;
@@ -100,6 +102,7 @@ export default function SignatureVisualEditor({
   const extras = {
     ...Object.fromEntries(TEXT_FIELDS.map((field) => [field, problem(field) ? "" : values[field].trim()])),
     photoUrl: photo && initial.hasPhoto ? `/api/signature-photo/${person.id}` : null,
+    notices: initial.notices ?? [],
     contactCardUrl: initial.contactCardUrl ?? null,
     contactQrUrl: initial.contactQrUrl ?? null,
   };

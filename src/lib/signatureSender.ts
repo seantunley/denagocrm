@@ -7,6 +7,7 @@ import { senderTeamIds } from "./signatureBannerStore";
 import { teamLineFor, type SignatureExtras } from "./signaturePeople";
 import type { SignatureDesign } from "./signature";
 import { withoutPackExtras } from "./signatureDesigns";
+import { liveNoticesFor } from "./signatureNoticeStore";
 import { contactCardLinks } from "./contactCardServer";
 
 /*
@@ -49,6 +50,8 @@ export async function senderSignatureDetails(
   });
   if (!person) return {};
   const teamLine = design.teams?.length ? teamLineFor(design.teams, await senderTeamIds(tenantId, userId)) : "";
+  // Dated lines on today (their leave, the workspace's holiday hours): read at each send, so they come and go by date.
+  const notices = await liveNoticesFor(tenantId, userId);
   return {
     extras: {
       qualifications: person.signatureQualifications,
@@ -58,6 +61,7 @@ export async function senderSignatureDetails(
       hours: person.signatureHours,
       cta: person.signatureCta,
       photoUrl: person.signaturePhoto && person.avatarRef ? `${origin.replace(/\/$/, "")}${signaturePhotoPath(userId)}` : null,
+      notices,
       // "Save my contact", when the owner switched it on: a signed public link (and QR code) to their contact card.
       ...contactCardLinks(tenantId, userId, design.contactCard, origin),
     },

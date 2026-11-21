@@ -4,6 +4,7 @@ import SignatureVisualEditor, { type PersonDetails } from "@/components/Signatur
 import type { ActionResult } from "@/lib/actionResultTypes";
 import type { SignatureCompany } from "@/lib/signature";
 import Link from "next/link";
+import SignatureNotices, { type NoticeItem } from "@/components/SignatureNotices";
 import type { ReactNode } from "react";
 import { LEGAL_LINE_MAX } from "@/lib/emailLegalLine";
 import { SIGNATURE_LINK_KIND_LABELS, type SignatureLinkKind } from "@/lib/signatureLinks";
@@ -42,8 +43,11 @@ export default function EmailSignatureDetails({
   contactCard,
   clicks,
   staff,
+  notices,
   copy,
 }: {
+  /** Dated lines on now and to come (lib/signatureNotices.ts): your own, and (owner) everyone's. */
+  notices: { mine: NoticeItem[]; everyone: NoticeItem[]; today: string };
   /** The owner's "Save my contact" choice (lib/contactCard.ts); undefined = off. */
   contactCard?: ContactCardChoice;
   /** Copy my signature (components/CopySignature), shown under your own signature where it is seen. */
@@ -98,7 +102,26 @@ export default function EmailSignatureDetails({
         )}
         {editor(me, saveMySignatureDetails, "Save my signature", isOwner, sendMySignatureTest)}
         {copy}
+        <div className="space-y-2 border-t border-border pt-4">
+          <h3 className="text-sm font-semibold">Dated lines</h3>
+          <p className="text-xs text-muted-foreground">
+            A line that shows on your signature from the first day to the last, then disappears by itself — for example while
+            you are on leave. It shows on replies too.
+          </p>
+          <SignatureNotices items={notices.mine} forEveryone={false} today={notices.today} placeholder="e.g. On leave until 5 January — please contact Thandi on 082 555 0101" />
+        </div>
       </section>
+
+      {isOwner && (
+        <section className="card space-y-3 p-5">
+          <h2 className="text-base font-semibold">Dated lines for everyone</h2>
+          <p className="text-xs text-muted-foreground">
+            On everyone&apos;s signature from the first day to the last, then gone — holiday trading hours, a closure, a move.
+            Someone&apos;s own dated line shows first.
+          </p>
+          <SignatureNotices items={notices.everyone} forEveryone today={notices.today} placeholder="e.g. Closed 24 Dec – 2 Jan. Workshop open 27–31 Dec, 8:00–13:00" />
+        </section>
+      )}
 
       {isOwner && (
         <section className="card space-y-3 p-5">
