@@ -94,6 +94,12 @@ const PUBLIC_PREFIXES = [
   // The trailing slash matters: this excuses that one route, not a future
   // "verify-something".
   "verify/",
+  // Connect Facebook's return leg (lib/metaConnect.ts, 2026-11-21). PUBLIC BY NECESSITY: Meta allows one redirect URI
+  // per app — the platform's — and a business signing in from its white-label domain has no session there. It connects
+  // NOTHING: it reads only the server-saved one-time state (unknown or expired → a fixed landing) and forwards Meta's
+  // answer to the domain that state names, where /finish requires the owner's session and a same-browser state cookie
+  // (tests/metaConnectFacebook.test.ts). The exact route only — not the rest of integrations/meta.
+  "integrations/meta/callback/",
 ];
 
 // NOTE: this proves an authENTICATION guard is invoked; it does not prove

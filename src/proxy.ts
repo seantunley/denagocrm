@@ -54,6 +54,11 @@ const PUBLIC_PATHS = [
   "/u",
   "/api/u",
   "/api/unsubscribe", // one-click marketing unsubscribe
+  // Connect Facebook's return leg on the platform's own address — the one redirect URI Meta allows per app, reached
+  // from a white-label domain where the person has no session here. It connects NOTHING: it only forwards the code to
+  // the domain the sign-in started on (looked up by the one-time state), where /finish checks that person's own session
+  // and state cookie before anything is stored (lib/metaConnect.ts).
+  "/api/integrations/meta/callback",
   // Tenant brand logos. Consumed by the login pages, which render pre-auth by
   // definition; the route itself only ever streams the object a platform admin
   // stored in Tenant.brandLogoRef — see its header comment for why that is not a

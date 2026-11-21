@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { basePrisma, prisma } from "@/lib/db";
-import { getSetting, resolveTenantCredential } from "@/lib/settings";
+import { getSetting } from "@/lib/settings";
+import { metaLeadToken, metaPageCredential } from "@/lib/metaPage";
 import { currentTenantScope } from "@/lib/tenantScope";
 import { ownedWriteTenantId } from "@/lib/tenantWrite";
 import { createIntakeLead } from "@/lib/leadIntake";
@@ -250,9 +251,10 @@ export async function POST(req: NextRequest) {
         // not to us, so two tenants may legitimately receive the same one.
         const existing = await basePrisma.lead.findFirst({ where: { externalId: leadgenId, tenantId: ownedWriteTenantId() }, select: { id: true } });
         if (existing) return;
-        const accessToken = await resolveTenantCredential(currentTenantScope()?.tenantId ?? null, "META_PAGE_ACCESS_TOKEN");
+        // The connected Page's token, or the System User token as before (lib/metaPage.ts).
+        const accessToken = metaLeadToken(await metaPageCredential(currentTenantScope()?.tenantId ?? null));
         try {
-          if (!accessToken) throw new Error("META_PAGE_ACCESS_TOKEN not configured");
+          if (!accessToken) throw new Error("No Meta Page is connected (Settings → Integrations → Meta)");
           const details = await fetchLeadDetails(leadgenId, accessToken);
           const parsed = parseLeadFields(details.field_data ?? []);
           await createIntakeLead({

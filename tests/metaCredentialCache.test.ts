@@ -186,13 +186,15 @@ test("getPageToken reads the tenant once and passes the credential in", () => {
   assert.ok(start > 0, "getPageToken must exist");
   const fn = code.slice(start, code.indexOf("\n}", start) + 2);
   assert.match(fn, /const tenantId = ambientTenantId\(\);/, "the tenant is resolved once, up front");
+  // Through lib/metaPage.ts (Connect Facebook, 2026-11-21): a connected Page's own token, else the System User token.
   assert.match(
     fn,
-    /resolveTenantCredential\(tenantId, "META_PAGE_ACCESS_TOKEN"\)/,
+    /const credential = await metaPageCredential\(tenantId\);/,
     "and the credential is looked up for THAT value, not re-read from ambient scope",
   );
   const resolveAt = fn.indexOf("pageTokenCache.resolve(");
-  assert.ok(resolveAt > fn.indexOf("resolveTenantCredential("), "the credential is read before the cache");
+  assert.ok(resolveAt > fn.indexOf("metaPageCredential("), "the credential is read before the cache");
+  assert.match(fn, /if \(credential\?\.kind === "connected"\) return credential\.pageToken;/, "a connected Page's token needs no exchange");
   assert.doesNotMatch(
     fn.slice(fn.indexOf("const tenantId") + 20),
     /ambientTenantId\(\)/,

@@ -3,7 +3,8 @@ import { decideEcho } from "./metaEcho";
 import { deleteCommunicationsAndReconcile } from "./conversations";
 import { prisma } from "./db";
 import { customerRecordTenantId } from "./customerRecordTenant";
-import { resolveIntegrationField, resolveTenantCredential } from "./settings";
+import { resolveIntegrationField } from "./settings";
+import { metaPageCredential } from "./metaPage";
 import { logAudit } from "./audit";
 import { sendPushToAll } from "./push";
 import { inboundCommunicationKey, isDedupeKeyConflict } from "./inboundMessageKey";
@@ -35,7 +36,7 @@ function ambientTenantId(): string | null {
 }
 
 export async function isMessengerConfigured(): Promise<boolean> {
-  return Boolean(await resolveTenantCredential(ambientTenantId(), "META_PAGE_ACCESS_TOKEN"));
+  return Boolean(await metaPageCredential(ambientTenantId()));
 }
 
 /**
@@ -79,7 +80,10 @@ export async function metaPageToken(): Promise<string | null> {
 async function getPageToken(): Promise<string | null> {
   // ONCE. Both the key and the lookup below must describe the same tenant.
   const tenantId = ambientTenantId();
-  const sysToken = await resolveTenantCredential(tenantId, "META_PAGE_ACCESS_TOKEN");
+  const credential = await metaPageCredential(tenantId);
+  // A Page connected with Connect Facebook carries its own Page token (lib/metaPage.ts): nothing to exchange.
+  if (credential?.kind === "connected") return credential.pageToken;
+  const sysToken = credential?.kind === "system-user" ? credential.userToken : null;
   return pageTokenCache.resolve(tenantId ?? GLOBAL_TOKEN_KEY, sysToken, exchangeForPageToken);
 }
 

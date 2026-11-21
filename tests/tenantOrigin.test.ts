@@ -364,6 +364,10 @@ test("no outbound URL builder is left on the platform base by accident", () => {
       "the same fail-closed redirect for a signature-link token that resolved to nothing — a real token goes to the address stored for it, never to a URL built here",
     "src/app/actions/bot.ts":
       "the Telegram WEBHOOK we ask Telegram to call. Inbound, not outbound — it must be the platform's own address, and a tenant domain here would break the bot if that domain ever moved",
+    "src/lib/metaConnect.ts":
+      "Connect Facebook's OAuth redirect URI (2026-11-21) — Meta allows one per app, so it is the platform's own address; the sign-in is then forwarded back to the workspace's own (white-label) domain",
+    "src/app/api/integrations/meta/callback/route.ts":
+      "the fail-closed landing for a Connect Facebook return whose one-time state resolved to nothing — there is no workspace to send it to",
     "src/components/settings/ThreadsConnectBox.tsx":
       "a workspace's own Threads app's WEBHOOK callback and OAuth redirect (2026-11-21). Inbound, like Telegram's: the platform's own address, which keeps working whatever domain the workspace uses",
     "src/components/settings/MetaOwnAppBox.tsx":

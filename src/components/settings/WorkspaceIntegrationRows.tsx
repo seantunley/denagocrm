@@ -21,6 +21,8 @@ import { PRONUNCIATIONS_KEY } from "@/lib/spokenText";
 const KEYS = [
   "META_VERIFY_TOKEN",
   "META_APP_SECRET",
+  "META_APP_ID",
+  "META_LOGIN_CONFIG_ID",
   "TELEGRAM_BOT_TOKEN",
   "BOT_TG_ENABLED",
   "GOOGLE_MAPS_BROWSER_API_KEY",
@@ -140,6 +142,31 @@ export default async function platformIntegrationRows({ xAccountId }: { xAccount
             </div>
             <SaveButton className="btn-primary">Save</SaveButton>
             {setting("META_APP_SECRET") ? <ClearSecret settingKey="META_APP_SECRET" label="Meta app secret" /> : null}
+          </SaveForm>
+          {/* Connect Facebook (lib/metaConnect.ts, 2026-11-21): the CRM's own Meta app that every business signs in through. */}
+          <div className="border-t border-border pt-3">
+            <p className="text-xs text-muted-foreground mb-2">
+              <b>Connect Facebook</b> — businesses sign in through this app and pick their own Page. Add the redirect URI
+              below to the app&apos;s Facebook Login → Valid OAuth Redirect URIs.
+            </p>
+            <label className="label">OAuth redirect URI</label>
+            <code className="block text-sm bg-muted rounded-lg px-3 py-2">https://crm.denagocpt.co.za/api/integrations/meta/callback</code>
+          </div>
+          <SaveForm resetOnSuccess={false} action={saveSetting} className="flex gap-2 items-end">
+            <input type="hidden" name="key" value="META_APP_ID" />
+            <div className="flex-1">
+              <label className="label">App ID</label>
+              <input name="value" className="input" defaultValue={setting("META_APP_ID")} placeholder="Meta app → Settings → Basic → App ID" />
+            </div>
+            <SaveButton className="btn-primary">Save</SaveButton>
+          </SaveForm>
+          <SaveForm resetOnSuccess={false} action={saveSetting} className="flex gap-2 items-end">
+            <input type="hidden" name="key" value="META_LOGIN_CONFIG_ID" />
+            <div className="flex-1">
+              <label className="label">Login for Business configuration ID (optional)</label>
+              <input name="value" className="input" defaultValue={setting("META_LOGIN_CONFIG_ID")} placeholder="Facebook Login for Business → Configurations — blank asks for the permissions directly" />
+            </div>
+            <SaveButton className="btn-primary">Save</SaveButton>
           </SaveForm>
         </div>
       </>
