@@ -105,6 +105,16 @@ test("a top-level comment has no parent, a reply does", () => {
 
   const reply = decideComment(comment({ parent_id: "1122334455_0001" }));
   assert.equal(reply.ok && reply.comment.parentId, "1122334455_0001");
+
+  // A PHOTO post (2026-11-21, ChatbotX's trap 1): a top-level comment's parent is "{albumId}_{storyId}" — not the
+  // post id, but the same story. Top-level, not a reply to a comment that doesn't exist.
+  const photoTop = decideComment(comment({ parent_id: "445566_112233" }));
+  assert.equal(photoTop.ok && photoTop.comment.parentId, null);
+  // A reel: parent_id identical to post_id. And a reply on a photo post is still a reply.
+  const reel = decideComment(comment({ parent_id: "998877_112233" }));
+  assert.equal(reel.ok && reel.comment.parentId, null);
+  const photoReply = decideComment(comment({ parent_id: "112233_7788" }));
+  assert.equal(photoReply.ok && photoReply.comment.parentId, "112233_7788");
 });
 
 // ── Our own voice ───────────────────────────────────────────────────────────
