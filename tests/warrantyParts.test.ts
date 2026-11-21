@@ -8,6 +8,7 @@ import {
   coverOf,
   parsePartList,
   parseTerms,
+  partCovered,
   termEnd,
   termLabel,
   termRows,
@@ -16,6 +17,8 @@ import {
   vehicleWarrantyFrom,
 } from "../src/lib/warrantyParts";
 import { computeWarranty } from "../src/lib/warranty";
+import { analyzeBattery } from "../src/lib/battery";
+import { vehicleWorkshop } from "../src/lib/workshopRules";
 
 /**
  * Sean, 2026-11-21: "5 Years on the Battery, 2 years on the cart and lifetime on the chassis. But the warranty details
@@ -44,6 +47,29 @@ test("the cart's terms: battery 5 years, cart 2 years, chassis for life — each
   ]);
   assert.deepEqual(CART.map((t) => termLabel(t.months)), ["5 years", "2 years", "Lifetime"]);
   assert.equal(termLabel(18), "18 months");
+});
+
+test("the battery claim and DAX's workshop read the Battery part's cover, not the old single term", () => {
+  // Review case: the old single term says 12 months; the parts say Battery 5 years, Chassis for life. 18 months on, SoH 65%.
+  const delivered = day("2025-05-21");
+  const now = day("2026-11-21");
+  const v = { purchaseDate: delivered, warrantyMonths: 12, warrantyParts: CART, warrantyStartsAt: delivered };
+  const checks = [{ checkedAt: now, stateOfHealth: 65 }];
+  assert.equal(analyzeBattery(checks, { ...v, now }).warrantyEligible, true, "battery still covered for 5 years");
+  assert.equal(analyzeBattery(checks, { ...v, warrantyParts: [{ part: "Chassis", months: null }], now }).warrantyEligible, false, "a lifetime chassis doesn't cover the battery");
+  assert.equal(analyzeBattery(checks, { purchaseDate: delivered, warrantyMonths: 12, now }).warrantyEligible, false, "no parts: the single term, as before");
+  assert.equal(partCovered(v, "Cart", now), true);
+  assert.equal(partCovered(v, "Cart", day("2027-06-01")), false);
+  const workshop = vehicleWorkshop({
+    id: "v1", model: "Nomad XL", regNumber: null, ...v,
+    serviceIntervalKm: null, serviceIntervalMonths: null, serviceRecords: [], mileageLogs: [], batteryChecks: checks,
+  }, now, true) as Record<string, unknown>;
+  assert.equal(workshop.warranty, "In warranty", "not 'out of warranty' after 12 months");
+  assert.equal(workshop.batteryWarrantyClaimCandidate, true);
+  // Both DAX workshop queries load the parts.
+  const context = code("src/lib/workshopContext.ts");
+  assert.equal(context.match(/warrantyMonths: true,\s*warrantyParts: true, warrantyStartsAt: true,/g)?.length, 2);
+  assert.match(code("src/app/(app)/vehicles/[id]/page.tsx"), /analyzeBattery\(checks, \{ \.\.\.vehicle, now: new Date\(\) \}\)/);
 });
 
 test("month-ends clamp to the last day of the month, as the single-term warranty does", () => {
