@@ -8,6 +8,7 @@
  */
 import { addMonths, differenceInCalendarDays, differenceInCalendarMonths, startOfDay } from "date-fns";
 import { formatDate } from "./format";
+import { coverSummary, parseTerms, vehicleCover } from "./warrantyParts";
 
 /** Why it changed hands. `registered` is the first owner (when the vehicle was added) — never chosen on a transfer. */
 export const TRANSFER_REASONS = ["sold_privately", "traded_in", "inherited", "company_change", "correction", "other"] as const;
@@ -128,7 +129,14 @@ export function undoRefusal(latest: { reason: string; reversedAt: Date | null } 
 }
 
 /** "14 months and 3 days of cover left", "Out of warranty since 2 Mar 2026", or that there's no warranty on record. */
-export function coverRemaining(v: { purchaseDate: Date | null; warrantyMonths: number | null }, now = new Date()): string {
+export function coverRemaining(
+  v: { purchaseDate: Date | null; warrantyMonths: number | null; warrantyParts?: unknown; warrantyStartsAt?: Date | null },
+  now = new Date(),
+): string {
+  // A vehicle with its warranty in parts (lib/warrantyParts.ts): each part's cover, "Chassis Lifetime" included.
+  if (parseTerms(v.warrantyParts).length > 0 && v.warrantyStartsAt) {
+    return coverSummary(vehicleCover({ ...v, warrantyParts: v.warrantyParts, warrantyStartsAt: v.warrantyStartsAt }, now), (d) => formatDate(d));
+  }
   if (!v.purchaseDate || !v.warrantyMonths) return "No warranty on record";
   const expiry = addMonths(v.purchaseDate, v.warrantyMonths);
   if (differenceInCalendarDays(expiry, now) < 0) return `Out of warranty since ${formatDate(expiry)}`;

@@ -143,7 +143,10 @@ export async function sendVehicleWelcome(vehicleId: string) {
       const tenantId = await tenant();
       const vehicle = await prisma.vehicle.findFirst({
         where: { id: vehicleId, tenantId, deletedAt: null },
-        select: { model: true, purchaseDate: true, warrantyMonths: true, contact: { select: { id: true, firstName: true, lastName: true } } },
+        select: {
+          model: true, purchaseDate: true, warrantyMonths: true, warrantyParts: true, warrantyStartsAt: true,
+          contact: { select: { id: true, firstName: true, lastName: true } },
+        },
       });
       if (!vehicle) return refuse("This vehicle is in the trash or no longer exists.");
       const open = await prisma.vehicleOwnership.findFirst({ where: { tenantId, vehicleId, ownedUntil: null }, select: { reason: true, contactId: true, warranty: true } });
@@ -154,7 +157,10 @@ export async function sendVehicleWelcome(vehicleId: string) {
         first_name: c.firstName,
         recipient_name: [c.firstName, c.lastName].filter(Boolean).join(" "),
         model: vehicle.model,
-        warranty_line: warranty === "carried" ? `Warranty: ${coverRemaining(vehicle)}.` : warranty === "pending" ? "We'll confirm its warranty with you shortly." : "",
+        // The Warranty module off: the message says nothing about a warranty.
+        warranty_line: !(await isModuleEnabled("warranty"))
+          ? ""
+          : warranty === "carried" ? `Warranty: ${coverRemaining(vehicle)}.` : warranty === "pending" ? "We'll confirm its warranty with you shortly." : "",
       };
       const verdict = await firstAllowedChannel({ contactId: c.id, tenantId, purpose: "service", channels: ["email", "sms"] });
       if (!verdict.allowed || !verdict.destination) {

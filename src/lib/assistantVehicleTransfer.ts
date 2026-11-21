@@ -32,7 +32,7 @@ export async function buildTransferCard(user: PermissionUser, p: Proposal, index
   const vehicle = (await canAccessVehicle(user, p.vehicleId))
     ? await prisma.vehicle.findFirst({
         where: { id: p.vehicleId, deletedAt: null },
-        select: { id: true, model: true, regNumber: true, tenantId: true, contactId: true, purchaseDate: true, warrantyMonths: true, contact: { select: { firstName: true, lastName: true, company: true, isCompany: true } } },
+        select: { id: true, model: true, regNumber: true, tenantId: true, contactId: true, purchaseDate: true, warrantyMonths: true, warrantyParts: true, warrantyStartsAt: true, contact: { select: { firstName: true, lastName: true, company: true, isCompany: true } } },
       })
     : null;
   if (!vehicle?.tenantId) return { problem: "I can't find that vehicle among the ones you can open — look the customer's vehicles up and ask again." };
@@ -67,7 +67,10 @@ export async function buildTransferCard(user: PermissionUser, p: Proposal, index
       detail: [
         `On ${formatDate(date)} · ${OWNERSHIP_REASON_LABELS[p.because as TransferReason]}`,
         ...(p.odometerKm != null ? [`Odometer: ${p.odometerKm.toLocaleString()} km`] : []),
-        `Warranty: ${coverRemaining(vehicle)} — ${warranty === "carried" ? "transfers to the new owner" : warranty === "pending" ? "waits for approval" : "does not transfer (this workspace's rule)"}`,
+        // The Warranty module off: no warranty line on the card.
+        ...((await isModuleEnabled("warranty"))
+          ? [`Warranty: ${coverRemaining(vehicle)} — ${warranty === "carried" ? "transfers to the new owner" : warranty === "pending" ? "waits for approval" : "does not transfer (this workspace's rule)"}`]
+          : []),
         "The vehicle's history stays with it. Nobody is contacted.",
       ].join("\n"),
       ...(p.reason ? { reason: p.reason } : {}),

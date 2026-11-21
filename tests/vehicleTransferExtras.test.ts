@@ -7,6 +7,7 @@ import { proposedAction } from "../src/lib/assistantActions";
 import { WHATSAPP_CONFIRMABLE } from "../src/lib/assistantWhatsAppRules";
 import { renderSigningEmail, SIGNING_EMAILS } from "../src/lib/signing/emailTemplates";
 import { HELP_ARTICLES } from "../src/lib/help/content";
+import { coverRemaining } from "../src/lib/vehicleTransferRules";
 
 /**
  * Vehicle transfer, PR 3 (warranty-transfer-brief.md): the certificate, reminders following the owner, a welcome sent
@@ -80,4 +81,23 @@ test("the help article is there, in the workshop's help (shown with Automotive)"
   assert.ok(article);
   assert.equal(article!.category, "workshop");
   assert.match(JSON.stringify(article!.body), /Transfer to new owner[\s\S]*Correction[\s\S]*Stays with the vehicle/);
+});
+
+test("with #1171/#1172 landed: cover reads the vehicle's parts, and the Warranty module off removes every warranty line", () => {
+  // Parts: each part's cover, a lifetime chassis included (the single term would say "No warranty on record").
+  const start = new Date("2026-11-21T00:00:00");
+  const parts = { purchaseDate: start, warrantyMonths: null, warrantyStartsAt: start, warrantyParts: [{ part: "Battery", months: 60 }, { part: "Chassis", months: null }] };
+  assert.match(coverRemaining(parts, new Date("2027-01-01T00:00:00")), /^Battery 5 years \(until .*2031\) · Chassis Lifetime$/);
+  assert.match(coverRemaining({ purchaseDate: start, warrantyMonths: 24 }, new Date("2027-01-01T00:00:00")), /of cover left \(until /, "no parts: as before");
+  // Every reader selects the parts.
+  for (const file of ["src/app/(print)/vehicles/[id]/transfer-certificate/page.tsx", "src/app/actions/vehicleTransfer.ts", "src/lib/assistantVehicleTransfer.ts"]) {
+    assert.match(code(file), /warrantyMonths: true, warrantyParts: true, warrantyStartsAt: true/, file);
+  }
+  // Module off: no warranty on the certificate, in the welcome message, on DAX's card or in the Send description.
+  const certificate = code("src/app/(print)/vehicles/[id]/transfer-certificate/page.tsx");
+  assert.match(certificate, /isModuleEnabled\("warranty"\)\]\);/);
+  assert.match(certificate, /\{warrantyOn && \(\s*<div className="rounded-lg bg-slate-50 px-4 py-3 no-break">\s*<p[^>]*>Warranty<\/p>/);
+  assert.match(code("src/app/actions/vehicleTransfer.ts"), /warranty_line: !\(await isModuleEnabled\("warranty"\)\)\s*\? ""/);
+  assert.match(code("src/lib/assistantVehicleTransfer.ts"), /\.\.\.\(\(await isModuleEnabled\("warranty"\)\)\s*\? \[`Warranty: \$\{coverRemaining\(vehicle\)\}/);
+  assert.match(code("src/components/VehicleOwnershipPanel.tsx"), /with the vehicle\$\{showWarranty \? " and its warranty" : ""\}/);
 });

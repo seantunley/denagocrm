@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { requireVehicleReadAccess } from "@/lib/permissions";
-import { requireModuleEnabled } from "@/lib/modules/enabled";
+import { isModuleEnabled, requireModuleEnabled } from "@/lib/modules/enabled";
 import PrintActions from "@/components/PrintActions";
 import PrintDocShell, { InfoBlock } from "@/components/print/PrintDocShell";
 import { getCompanyProfile } from "@/lib/companyProfile";
@@ -29,7 +29,7 @@ export default async function TransferCertificatePage({
   const { o } = await searchParams;
   await requireModuleEnabled("automotive");
   await requireVehicleReadAccess(id);
-  const vehicle = await prisma.vehicle.findUnique({ where: { id }, select: { id: true, tenantId: true, model: true, vin: true, regNumber: true, color: true, purchaseDate: true, warrantyMonths: true } });
+  const vehicle = await prisma.vehicle.findUnique({ where: { id }, select: { id: true, tenantId: true, model: true, vin: true, regNumber: true, color: true, purchaseDate: true, warrantyMonths: true, warrantyParts: true, warrantyStartsAt: true } });
   if (!vehicle?.tenantId) notFound();
   const transfer = await prisma.vehicleOwnership.findFirst({
     where: { tenantId: vehicle.tenantId, vehicleId: id, reversedAt: null, NOT: { reason: "registered" }, ...(o ? { id: o } : {}) },
@@ -38,7 +38,7 @@ export default async function TransferCertificatePage({
   });
   if (!transfer) notFound();
   // The workspace's own branding, as on its warranty documents.
-  const [company, regional, tpl] = await Promise.all([getCompanyProfile(), getRegionalSettings(), getDocTemplate("warranty-claim")]);
+  const [company, regional, tpl, warrantyOn] = await Promise.all([getCompanyProfile(), getRegionalSettings(), getDocTemplate("warranty-claim"), isModuleEnabled("warranty")]);
   const w = computeWarranty(vehicle);
   const reason = (transfer.reason in OWNERSHIP_REASON_LABELS ? transfer.reason : "other") as OwnershipReason;
   const warranty = parseOwnershipWarranty(transfer.warranty);
@@ -70,22 +70,25 @@ export default async function TransferCertificatePage({
             ]}
           />
         </div>
-        <div className="rounded-lg bg-slate-50 px-4 py-3 no-break">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1.5">Warranty</p>
-          <p className="text-xs text-slate-700">
-            {w.expiryDate ? `Expires ${formatDate(w.expiryDate, regional)}. ` : "No warranty on record. "}
-            {w.expiryDate ? `${coverRemaining(vehicle, transfer.ownedFrom)} on the transfer date.` : ""}
-          </p>
-          <p className="text-xs text-slate-700 mt-1">
-            {warranty === "carried"
-              ? "The remaining warranty transferred to the new owner with the vehicle."
-              : warranty === "pending"
-                ? "The warranty transfer to the new owner is awaiting approval."
-                : `${OWNERSHIP_WARRANTY_LABELS.not_carried} to the new owner.`}
-          </p>
-        </div>
+        {/* The Warranty module off: no warranty on the certificate at all. */}
+        {warrantyOn && (
+          <div className="rounded-lg bg-slate-50 px-4 py-3 no-break">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1.5">Warranty</p>
+            <p className="text-xs text-slate-700">
+              {/* Part by part when the vehicle has parts (a lifetime chassis has no expiry date). */}
+              {w.status === "unknown" ? "No warranty on record." : `On the transfer date: ${coverRemaining(vehicle, transfer.ownedFrom)}.`}
+            </p>
+            <p className="text-xs text-slate-700 mt-1">
+              {warranty === "carried"
+                ? "The remaining warranty transferred to the new owner with the vehicle."
+                : warranty === "pending"
+                  ? "The warranty transfer to the new owner is awaiting approval."
+                  : `${OWNERSHIP_WARRANTY_LABELS.not_carried} to the new owner.`}
+            </p>
+          </div>
+        )}
         <p className="mt-4 text-xs text-slate-500">
-          The vehicle&apos;s service and warranty history stays with the vehicle. This certificate records its transfer to the
+          The vehicle&apos;s service {warrantyOn ? "and warranty " : ""}history stays with the vehicle. This certificate records its transfer to the
           owner named above on {formatDate(transfer.ownedFrom, regional)}.
         </p>
       </PrintDocShell>

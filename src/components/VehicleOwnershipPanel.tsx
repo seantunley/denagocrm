@@ -95,7 +95,7 @@ export default function VehicleOwnershipPanel({
                     <ConfirmActionDialog
                       trigger={<button type="button" className="text-orange-400 hover:underline">Send welcome</button>}
                       title={`Send ${e.ownerName} a welcome?`}
-                      description={`Sends this workspace's "Welcome to a vehicle's new owner" message — by email, or by SMS if they can only be texted — with the vehicle and its warranty. Edit its wording in Settings → Email templates. It is logged on their timeline.`}
+                      description={`Sends this workspace's "Welcome to a vehicle's new owner" message — by email, or by SMS if they can only be texted — with the vehicle${showWarranty ? " and its warranty" : ""}. Edit its wording in Settings → Email templates. It is logged on their timeline.`}
                       confirmLabel="Send"
                       onConfirm={sendVehicleWelcome.bind(null, vehicleId)}
                       success="Welcome sent"
