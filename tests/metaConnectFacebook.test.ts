@@ -68,7 +68,7 @@ test("connecting: tokens never reach the browser, another workspace's Page is re
   assert.equal(isSecretSettingKey("META_CONNECT_PENDING"), true, "the Pages awaiting the pick carry tokens");
   const lib = code("src/lib/metaConnect.ts");
   assert.match(lib, /return pending \? pending\.pages\.map\(\(page\) => \(\{ id: page\.id, name: page\.name, igUsername: page\.igUsername \}\)\) : null;/, "the picker gets names and ids only");
-  const connect = lib.slice(lib.indexOf("export async function connectMetaPage"));
+  const connect = lib.slice(lib.indexOf("async function connectMetaPageLocked"));
   const refused = connect.indexOf("already connected to another workspace");
   const subscribe = connect.indexOf("/subscribed_apps`");
   const store = connect.indexOf("await putTenantCredentialBundle(");
@@ -79,8 +79,21 @@ test("connecting: tokens never reach the browser, another workspace's Page is re
   // connection is removed — a losing workspace never keeps a usable token.
   assert.match(connect, /if \(!\(await claimChannelEndpoint\(input\.tenantId, endpoint\.channel, endpoint\.externalId, endpoint\.label\)\)\) \{\s*await release\(\);\s*throw new Error\(endpoint\.refusal\);/);
   assert.ok(connect.indexOf("claimChannelEndpoint(") < connect.indexOf("/subscribed_apps`"));
-  assert.match(connect, /\} catch \(error\) \{\s*await release\(\);\s*throw error;\s*\}/);
-  assert.match(connect, /if \(row\?\.tenantId !== input\.tenantId \|\| row\.disabledAt\) \{\s*await basePrisma\.tenantIntegrationCredential\.deleteMany\(\{ where: \{ tenantId: input\.tenantId, key: \{ in: Object\.values\(CONNECTED\) \} \} \}\);/);
+  // Second review: EVERY step after the claim — subscribe, store, clear blanks, register, verify — sits in one try whose
+  // catch restores the previous connection row for row, releases what was newly claimed and re-registers.
+  const tryAt = connect.indexOf("  try {\n    const subscribed");
+  const catchAt = connect.indexOf("  } catch (error) {");
+  for (const step of ["/subscribed_apps`", "await putTenantCredentialBundle(", "if (blanks.length)", "await reconcileTenantChannels(input.tenantId, { force: true });", "throw new Error(endpoint.refusal);\n    }\n  }"]) {
+    const at = connect.indexOf(step, tryAt);
+    assert.ok(tryAt > 0 && at > tryAt && at < catchAt, `inside the compensated block: ${step}`);
+  }
+  assert.match(connect, /const previous = await basePrisma\.tenantIntegrationCredential\.findMany\(\{ where: \{ tenantId: input\.tenantId, key: \{ in: keys \} \}, select: \{ key: true, value: true \} \}\);/);
+  assert.match(connect, /\} catch \(error\) \{[\s\S]*?\.\$transaction\(async \(tx\) => \{\s*await tx\.tenantIntegrationCredential\.deleteMany\(\{ where: \{ tenantId: input\.tenantId, key: \{ in: keys \} \} \}\);\s*if \(previous\.length\) await tx\.tenantIntegrationCredential\.createMany\(/);
+  assert.match(connect, /await release\(\)\.catch\(\(\) => \{\}\);\s*await reconcileTenantChannels\(input\.tenantId, \{ force: true \}\)\.catch\(\(\) => \{\}\);\s*throw error;/);
+  assert.doesNotMatch(connect.slice(0, connect.indexOf("async function disconnectMetaPageLocked")), /\$transaction\(\[/, "basePrisma refuses the array form");
+  // …and one Connect or Disconnect at a time per workspace (a lease row; real-DB race in scripts/test-channel-claim.ts).
+  assert.match(lib, /export function connectMetaPage\(input: \{ tenantId: string; pageId: string \}\): Promise<string> \{\s*return withMetaConnectLock\(input\.tenantId, \(\) => connectMetaPageLocked\(input\)\);/);
+  assert.match(lib, /export function disconnectMetaPage\(tenantId: string\): Promise<string \| null> \{\s*return withMetaConnectLock\(tenantId, \(\) => disconnectMetaPageLocked\(tenantId\)\);/);
   assert.doesNotMatch(connect, /channelIdentity\.upsert\(/);
   // The state is consumed once: only the request whose delete removed it may go on.
   assert.match(lib, /const \{ count \} = await basePrisma\.appSetting\.deleteMany\(\{ where: \{ tenantId: input\.tenantId, key \} \}\);\s*const record = saved && count === 1 \?/);
@@ -88,7 +101,7 @@ test("connecting: tokens never reach the browser, another workspace's Page is re
   assert.match(code("tests/apiAuth.test.ts"), /"integrations\/meta\/callback\/",/);
   assert.match(connect, /await reconcileTenantChannels\(input\.tenantId, \{ force: true \}\);/);
   // Disconnect: unsubscribed, every connected key forgotten, endpoints released.
-  const disconnect = lib.slice(lib.indexOf("export async function disconnectMetaPage"));
+  const disconnect = lib.slice(lib.indexOf("async function disconnectMetaPageLocked"));
   assert.match(disconnect, /method: "DELETE"/);
   assert.match(disconnect, /key: \{ in: Object\.values\(CONNECTED\) \}/);
   assert.match(disconnect, /await reconcileTenantChannels\(tenantId, \{ force: true \}\);/);
