@@ -9,7 +9,9 @@
  */
 import { basePrisma } from "../src/lib/db";
 import { claimChannelEndpoint } from "../src/lib/channelClaim";
-import { withMetaConnectLock } from "../src/lib/metaConnect";
+import { PENDING_KEY, connectMetaPage, withMetaConnectLock } from "../src/lib/metaConnect";
+import { CONNECTED } from "../src/lib/metaPage";
+import { putTenantCredentialBundle, putWorkspaceSetting } from "../src/lib/settings";
 
 const LOCK = "META_CONNECT_LOCK";
 import { seedTwoTenants, teardown } from "./harness/seed";
@@ -88,7 +90,24 @@ async function main() {
     check("a live lease refuses", await withMetaConnectLock(A, async () => "ran").then(() => false, () => true));
     await basePrisma.appSetting.updateMany({ where: { tenantId: A, key: LOCK }, data: { value: String(Date.now() - 1_000) } });
     check("a crashed holder's expired lease is taken over", (await withMetaConnectLock(A, async () => "ran")) === "ran" && (await lease()) === null);
+
+    // 5. A claim that THROWS part-way (review of #1185): the Page is claimed, then the Instagram lookup errors (a NUL in
+    //    the id — Postgres refuses it). The Page just claimed must be released and the previous connection left alone.
+    //    It fails before Meta is called, so no network.
+    const page = `pg-${SFX}`;
+    const oldPage = `old-${SFX}`;
+    ids.push(page, oldPage);
+    await putTenantCredentialBundle(A, { [CONNECTED.pageId]: oldPage, [CONNECTED.pageToken]: "old-token" });
+    await putWorkspaceSetting(A, PENDING_KEY, JSON.stringify({ expiresAt: Date.now() + 60_000, metaUserId: "1", scopes: [], pages: [{ id: page, name: "Test Page", token: "t", igId: `ig\u0000${SFX}` }] }));
+    const thrown = await connectMetaPage({ tenantId: A, pageId: page }).then(() => null, (error: unknown) => error);
+    check("a claim that throws part-way fails the connect", thrown instanceof Error);
+    check("…releases the Page it had just claimed", (await owner(page))?.disabledAt != null, JSON.stringify(await owner(page)));
+    const kept = await basePrisma.tenantIntegrationCredential.findMany({ where: { tenantId: A, key: { in: Object.values(CONNECTED) } }, select: { key: true } });
+    check("…and leaves the previous connection exactly as it was", kept.length === 2, kept.map((row) => row.key).join(","));
+    check("…and the lease is gone", (await lease()) === null);
   } finally {
+    await basePrisma.tenantIntegrationCredential.deleteMany({ where: { tenantId: { in: [A, B] }, key: { in: Object.values(CONNECTED) } } });
+    await basePrisma.appSetting.deleteMany({ where: { tenantId: { in: [A, B] }, key: PENDING_KEY } });
     await basePrisma.appSetting.deleteMany({ where: { tenantId: { in: [A, B] }, key: LOCK } });
     await basePrisma.channelIdentity.deleteMany({ where: { channel: "messenger", externalId: { in: ids } } });
     await teardown(fixture);

@@ -220,23 +220,20 @@ async function connectMetaPageLocked(input: { tenantId: string; pageId: string }
       await basePrisma.channelIdentity.updateMany({ where: { tenantId: input.tenantId, channel: row.channel, externalId: row.externalId }, data: { disabledAt: new Date() } });
     }
   };
-  for (const endpoint of endpoints) {
-    const before = await basePrisma.channelIdentity.findUnique({ where: { channel_externalId: { channel: endpoint.channel, externalId: endpoint.externalId } }, select: { tenantId: true, disabledAt: true } });
-    const alreadyOurs = before?.tenantId === input.tenantId && !before.disabledAt;
-    if (!(await claimChannelEndpoint(input.tenantId, endpoint.channel, endpoint.externalId, endpoint.label))) {
-      await release();
-      throw new Error(endpoint.refusal);
-    }
-    if (!alreadyOurs) newlyClaimed.push(endpoint);
-  }
-
-  // COMPENSATED ON ANY FAILURE (review of #1182): whatever step fails after the claim — Meta's subscription, storing the
+  // COMPENSATED ON ANY FAILURE (reviews of #1182 and #1185): the previous connection is read BEFORE anything is claimed,
+  // so whatever step fails or throws afterwards — a claim refused or erroring part-way, Meta's subscription, storing the
   // token, clearing old fields, the registration or its check — the workspace is put back exactly as it was: its
   // previous connection (if any) restored row for row, the endpoints this call newly took released, the registration
   // re-run. Never a claimed endpoint without a complete connection behind it.
   const keys = Object.values(CONNECTED);
   const previous = await basePrisma.tenantIntegrationCredential.findMany({ where: { tenantId: input.tenantId, key: { in: keys } }, select: { key: true, value: true } });
   try {
+    for (const endpoint of endpoints) {
+      const before = await basePrisma.channelIdentity.findUnique({ where: { channel_externalId: { channel: endpoint.channel, externalId: endpoint.externalId } }, select: { tenantId: true, disabledAt: true } });
+      const alreadyOurs = before?.tenantId === input.tenantId && !before.disabledAt;
+      if (!(await claimChannelEndpoint(input.tenantId, endpoint.channel, endpoint.externalId, endpoint.label))) throw new Error(endpoint.refusal);
+      if (!alreadyOurs) newlyClaimed.push(endpoint);
+    }
     const subscribed = await fetch(`${GRAPH}/${page.id}/subscribed_apps`, {
       method: "POST",
       body: new URLSearchParams({ subscribed_fields: PAGE_SUBSCRIBED_FIELDS.join(","), access_token: page.token }),

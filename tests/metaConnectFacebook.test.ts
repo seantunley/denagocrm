@@ -77,13 +77,18 @@ test("connecting: tokens never reach the browser, another workspace's Page is re
   // Review of #1182: CLAIMED atomically (lib/channelClaim.ts) before Meta is asked or a token stored; what this call
   // newly took is released on any later failure; after registering, every endpoint must be active and ours, or the
   // connection is removed — a losing workspace never keeps a usable token.
-  assert.match(connect, /if \(!\(await claimChannelEndpoint\(input\.tenantId, endpoint\.channel, endpoint\.externalId, endpoint\.label\)\)\) \{\s*await release\(\);\s*throw new Error\(endpoint\.refusal\);/);
+  assert.match(connect, /if \(!\(await claimChannelEndpoint\(input\.tenantId, endpoint\.channel, endpoint\.externalId, endpoint\.label\)\)\) throw new Error\(endpoint\.refusal\);/);
   assert.ok(connect.indexOf("claimChannelEndpoint(") < connect.indexOf("/subscribed_apps`"));
   // Second review: EVERY step after the claim — subscribe, store, clear blanks, register, verify — sits in one try whose
   // catch restores the previous connection row for row, releases what was newly claimed and re-registers.
-  const tryAt = connect.indexOf("  try {\n    const subscribed");
+  // Review of #1185: the claims THEMSELVES are inside it too (a lookup or claim that throws on the second endpoint
+  // releases the first), and the previous connection is read before anything is claimed.
+  const previousAt = connect.indexOf("const previous = await basePrisma.tenantIntegrationCredential.findMany(");
+  const tryAt = connect.indexOf("  try {\n    for (const endpoint of endpoints) {");
   const catchAt = connect.indexOf("  } catch (error) {");
-  for (const step of ["/subscribed_apps`", "await putTenantCredentialBundle(", "if (blanks.length)", "await reconcileTenantChannels(input.tenantId, { force: true });", "throw new Error(endpoint.refusal);\n    }\n  }"]) {
+  assert.ok(previousAt > 0 && previousAt < tryAt, "snapshot before the first claim");
+  assert.equal(connect.indexOf("claimChannelEndpoint("), connect.indexOf("claimChannelEndpoint(", tryAt), "no claim outside the compensated block");
+  for (const step of ["channelIdentity.findUnique(", "claimChannelEndpoint(", "newlyClaimed.push(endpoint);", "/subscribed_apps`", "await putTenantCredentialBundle(", "if (blanks.length)", "await reconcileTenantChannels(input.tenantId, { force: true });", "throw new Error(endpoint.refusal);\n    }\n  }"]) {
     const at = connect.indexOf(step, tryAt);
     assert.ok(tryAt > 0 && at > tryAt && at < catchAt, `inside the compensated block: ${step}`);
   }
