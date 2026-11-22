@@ -9,6 +9,11 @@
  */
 import { basePrisma } from "../src/lib/db";
 import { claimChannelEndpoint } from "../src/lib/channelClaim";
+import { PENDING_KEY, connectMetaPage, withMetaConnectLock } from "../src/lib/metaConnect";
+import { CONNECTED } from "../src/lib/metaPage";
+import { putTenantCredentialBundle, putWorkspaceSetting } from "../src/lib/settings";
+
+const LOCK = "META_CONNECT_LOCK";
 import { seedTwoTenants, teardown } from "./harness/seed";
 
 const SFX = Math.random().toString(16).slice(2, 10);
@@ -62,7 +67,48 @@ async function main() {
     const [ra, rb] = await Promise.all([claimChannelEndpoint(A, "messenger", retired, "@a"), claimChannelEndpoint(B, "messenger", retired, "@b")]);
     const after = await owner(retired);
     check("a retired account raced by two workspaces: exactly one takes it", ra !== rb && after?.disabledAt === null && after?.tenantId === (ra ? A : B));
+
+    // 4. ONE Connect/Disconnect Facebook at a time per workspace (second review of #1182): a lease row, not a lock held
+    //    across Meta's API calls. Two at once: one runs, the other is told to wait; another workspace is never held up.
+    let inside = 0;
+    let most = 0;
+    const slow = (tenantId: string) => withMetaConnectLock(tenantId, async () => {
+      inside++;
+      most = Math.max(most, inside);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      inside--;
+      return "ran";
+    });
+    const both = await Promise.allSettled([slow(A), slow(A)]);
+    check("two at once in one workspace: exactly one runs", both.filter((r) => r.status === "fulfilled").length === 1 && most === 1);
+    const lease = () => basePrisma.appSetting.findUnique({ where: { tenantId_key: { tenantId: A, key: LOCK } }, select: { value: true } });
+    check("…and the lease is gone afterwards", (await lease()) === null);
+    most = 0;
+    const [own, other] = await Promise.allSettled([slow(A), slow(B)]);
+    check("another workspace is never held up", own.status === "fulfilled" && other.status === "fulfilled");
+    await basePrisma.appSetting.create({ data: { tenantId: A, key: LOCK, value: String(Date.now() + 60_000) } });
+    check("a live lease refuses", await withMetaConnectLock(A, async () => "ran").then(() => false, () => true));
+    await basePrisma.appSetting.updateMany({ where: { tenantId: A, key: LOCK }, data: { value: String(Date.now() - 1_000) } });
+    check("a crashed holder's expired lease is taken over", (await withMetaConnectLock(A, async () => "ran")) === "ran" && (await lease()) === null);
+
+    // 5. A claim that THROWS part-way (review of #1185): the Page is claimed, then the Instagram lookup errors (a NUL in
+    //    the id — Postgres refuses it). The Page just claimed must be released and the previous connection left alone.
+    //    It fails before Meta is called, so no network.
+    const page = `pg-${SFX}`;
+    const oldPage = `old-${SFX}`;
+    ids.push(page, oldPage);
+    await putTenantCredentialBundle(A, { [CONNECTED.pageId]: oldPage, [CONNECTED.pageToken]: "old-token" });
+    await putWorkspaceSetting(A, PENDING_KEY, JSON.stringify({ expiresAt: Date.now() + 60_000, metaUserId: "1", scopes: [], pages: [{ id: page, name: "Test Page", token: "t", igId: `ig\u0000${SFX}` }] }));
+    const thrown = await connectMetaPage({ tenantId: A, pageId: page }).then(() => null, (error: unknown) => error);
+    check("a claim that throws part-way fails the connect", thrown instanceof Error);
+    check("…releases the Page it had just claimed", (await owner(page))?.disabledAt != null, JSON.stringify(await owner(page)));
+    const kept = await basePrisma.tenantIntegrationCredential.findMany({ where: { tenantId: A, key: { in: Object.values(CONNECTED) } }, select: { key: true } });
+    check("…and leaves the previous connection exactly as it was", kept.length === 2, kept.map((row) => row.key).join(","));
+    check("…and the lease is gone", (await lease()) === null);
   } finally {
+    await basePrisma.tenantIntegrationCredential.deleteMany({ where: { tenantId: { in: [A, B] }, key: { in: Object.values(CONNECTED) } } });
+    await basePrisma.appSetting.deleteMany({ where: { tenantId: { in: [A, B] }, key: PENDING_KEY } });
+    await basePrisma.appSetting.deleteMany({ where: { tenantId: { in: [A, B] }, key: LOCK } });
     await basePrisma.channelIdentity.deleteMany({ where: { channel: "messenger", externalId: { in: ids } } });
     await teardown(fixture);
   }

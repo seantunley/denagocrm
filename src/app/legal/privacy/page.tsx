@@ -67,9 +67,18 @@ export default function PrivacyPage() {
 
       <h2>How long information is kept</h2>
       <p>
-        Information is kept while the business uses {name}. Items a business deletes go to a recycle bin for 60 days and are
-        then removed. When a business disconnects a Facebook, Instagram or WhatsApp account, its access token is deleted
-        straight away.
+        Information is kept while the business uses {name}. Items a business deletes normally go to a recycle bin for 60
+        days and are then removed.
+      </p>
+      <p>
+        Some records are kept after that because the business needs them as a record of what happened: signed, filed or
+        generated documents and the customers and deals they belong to, accepted quotations, won sales, and the ownership
+        history of a vehicle. These stay until they are no longer needed for the business&apos;s legal, tax or warranty
+        duties. If you ask for your information to be deleted, anything that does not have to be kept is deleted, and we
+        or the business will tell you what is kept and why.
+      </p>
+      <p>
+        When a business disconnects a Facebook, Instagram or WhatsApp account, its access token is deleted straight away.
       </p>
 
       <h2>Your rights</h2>

@@ -81,3 +81,10 @@ test("the pages are public, in the platform's name, and say so plainly while com
   assert.equal(PLATFORM.privacyEmail, "privacy@honeycombventures.co.za");
   assert.match(code("src/app/legal/LegalShell.tsx"), /\{!complete && \(/);
 });
+
+test("the privacy policy states the recycle bin's exceptions — the records lib/trash.ts and contactKeep.ts keep", () => {
+  const privacy = code("src/app/legal/privacy/page.tsx").replace(/\s+/g, " ");
+  assert.match(privacy, /normally go to a recycle bin for 60 days/);
+  assert.match(privacy, /signed, filed or generated documents/);
+  assert.match(privacy, /accepted quotations, won sales, and the ownership history of a vehicle/);
+});

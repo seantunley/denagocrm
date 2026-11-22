@@ -13,7 +13,6 @@ import type { OutMsg } from "./flow";
 import { sendPrivateReplyToComment } from "./messenger";
 import { commentDedupeKey, isOwnPageComment, privateReplyDedupeKey, type IngestibleComment } from "./socialComments";
 import { withBotConversationWrite } from "./botTenant";
-import { deleteBotSessionTx } from "./botSessionStore";
 import { commentFlowReplyKey } from "./instagramComments";
 import { deleteCommunicationsAndReconcile } from "./conversations";
 
@@ -81,7 +80,14 @@ export async function runInstagramCommentFlow(igAccountId: string, comment: Inge
     await prisma.appSetting.deleteMany({ where: { tenantId, key: personKey } });
   };
   // A refused first reply means the flow never asked them anything: its session goes too (a person-owned one stays).
-  const forgetSession = () => withBotConversationWrite((tx, owner) => deleteBotSessionTx(tx, owner, "instagram", commenter));
+  // FENCED TO THIS TURN (review of #1179): only the session exactly as this comment's turn left it — same row, same
+  // updatedAt (every session write stamps it). A DM turn or a staff handoff that moved it on since is never discarded.
+  let turnSession: { id: string; updatedAt: Date } | null = null;
+  const forgetSession = () =>
+    withBotConversationWrite(async (tx, owner) => {
+      if (!turnSession) return;
+      await tx.botSession.deleteMany({ where: { id: turnSession.id, tenantId: owner, ownership: { not: "human" }, updatedAt: turnSession.updatedAt } });
+    });
 
   // The flow's first turn, for this person, from its start — its messages become the private reply.
   const firstTurn: OutMsg[] = [];
@@ -101,6 +107,7 @@ export async function runInstagramCommentFlow(igAccountId: string, comment: Inge
     await release();
     throw error;
   }
+  turnSession = await prisma.botSession.findFirst({ where: { tenantId, channel: "instagram", key: commenter }, select: { id: true, updatedAt: true } });
   // One private reply, text only: the turn's messages as one message.
   const text = firstTurn.map(outMsgText).filter(Boolean).join("\n\n").slice(0, 1000);
   if (result.suppressed || !text) {
