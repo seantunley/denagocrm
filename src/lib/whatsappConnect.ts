@@ -1,7 +1,7 @@
 import "server-only";
 import crypto from "crypto";
 import { basePrisma } from "./db";
-import { getSetting, getWorkspaceSetting, putTenantCredentialBundle, putWorkspaceSetting, resolveTenantCredential } from "./settings";
+import { getSetting, getWorkspaceSetting, putTenantCredential, putTenantCredentialBundle, putWorkspaceSetting, resolveTenantCredential } from "./settings";
 import { withSystemScope } from "./tenantScopeEntry";
 import { reconcileTenantChannels } from "./channelRegistration";
 import { claimChannelEndpoint } from "./channelClaim";
@@ -19,7 +19,8 @@ import { WA_SIGNUP_GRAPH_VERSION, newRegistrationPin } from "./whatsappSignupMes
  * behind the owner's session and the same-browser cookie — spends the state and connects:
  *   code → business token (server only) → the number checked to be in that WhatsApp account WITH that token →
  *   claimed for this workspace (another workspace's active number is refused) → the account subscribed to our app's
- *   webhook → the number registered with a fresh PIN → stored as this workspace's WhatsApp → registration re-checked.
+ *   webhook → its PIN saved (or reused) → the number registered with it → stored as this workspace's WhatsApp →
+ *   registration re-checked.
  * Any failure after the claim puts the workspace back exactly as it was. Stored in the ordinary WhatsApp fields
  * (WA_PHONE_NUMBER_ID / WA_ACCESS_TOKEN), so sending and receiving work unchanged.
  *
@@ -34,11 +35,42 @@ export const WA_CONNECTED = {
   wabaId: "WA_CONNECTED_WABA_ID",
   number: "WA_CONNECTED_NUMBER",
   name: "WA_CONNECTED_NAME",
-  pin: "WA_CONNECTED_PIN",
   at: "WA_CONNECTED_AT",
 } as const;
 /** Everything a connection writes — what a failure restores and a disconnect removes. */
 const CONNECTION_KEYS = ["WA_PHONE_NUMBER_ID", "WA_ACCESS_TOKEN", ...Object.values(WA_CONNECTED)];
+/**
+ * Each number's two-step PIN, { phoneNumberId: pin }, encrypted (settings.ts). NOT a connection key: saved BEFORE Meta
+ * is asked to register (registering can't be undone, and a timeout may hide that it worked), kept through any failure
+ * and any disconnect, and reused for the same number next time — so a retry registers with the same PIN and the
+ * business can always be told it (review of #1187).
+ */
+const PINS_KEY = "WA_REGISTER_PINS";
+
+async function registrationPin(tenantId: string, phoneNumberId: string): Promise<string> {
+  const raw = await resolveTenantCredential(tenantId, PINS_KEY);
+  let pins: Record<string, string> = {};
+  try {
+    pins = raw ? (JSON.parse(raw) as Record<string, string>) : {};
+  } catch {
+    // A garbled record must not lose the others silently: refuse, and the error log says why.
+    throw new Error("This workspace's saved WhatsApp PINs can't be read. Please contact support before connecting.");
+  }
+  if (/^\d{6}$/.test(pins[phoneNumberId] ?? "")) return pins[phoneNumberId];
+  const pin = newRegistrationPin(crypto.randomInt);
+  await putTenantCredential(tenantId, PINS_KEY, JSON.stringify({ ...pins, [phoneNumberId]: pin }));
+  return pin;
+}
+
+/** The PIN a number was registered with through Connect WhatsApp, for the business to see (Settings). */
+export async function savedRegistrationPin(tenantId: string, phoneNumberId: string): Promise<string | null> {
+  const raw = await resolveTenantCredential(tenantId, PINS_KEY);
+  try {
+    return raw ? ((JSON.parse(raw) as Record<string, string>)[phoneNumberId] ?? null) : null;
+  } catch {
+    return null;
+  }
+}
 
 const sha = (value: string) => crypto.createHash("sha256").update(value).digest("hex");
 
@@ -126,7 +158,7 @@ export async function connectWhatsAppNumber(input: { tenantId: string; state: st
   try {
     const subscribed = await graph("POST", `${input.wabaId}/subscribed_apps`, token);
     if (subscribed.success !== true) throw new Error("Meta didn't subscribe the WhatsApp account to messages.");
-    const pin = newRegistrationPin(crypto.randomInt);
+    const pin = await registrationPin(input.tenantId, input.phoneNumberId);
     const registered = await graph("POST", `${input.phoneNumberId}/register`, token, { messaging_product: "whatsapp", pin });
     if (registered.success !== true) throw new Error("Meta didn't register the number.");
     await putTenantCredentialBundle(input.tenantId, {
@@ -135,7 +167,6 @@ export async function connectWhatsAppNumber(input: { tenantId: string; state: st
       [WA_CONNECTED.wabaId]: input.wabaId,
       [WA_CONNECTED.number]: display,
       [WA_CONNECTED.name]: name,
-      [WA_CONNECTED.pin]: pin,
       [WA_CONNECTED.at]: new Date().toISOString(),
     });
     if (!name) await basePrisma.tenantIntegrationCredential.deleteMany({ where: { tenantId: input.tenantId, key: WA_CONNECTED.name } });
@@ -160,13 +191,14 @@ export async function connectWhatsAppNumber(input: { tenantId: string; state: st
 }
 
 /** The number connected through Connect WhatsApp, if any (a pasted setup, like Denago's, is not "connected"). */
-export async function connectedWhatsApp(tenantId: string): Promise<{ wabaId: string; number: string; name: string | null } | null> {
-  const [wabaId, number, name] = await Promise.all([
+export async function connectedWhatsApp(tenantId: string): Promise<{ wabaId: string; number: string; name: string | null; phoneNumberId: string | null } | null> {
+  const [wabaId, number, name, phoneNumberId] = await Promise.all([
     resolveTenantCredential(tenantId, WA_CONNECTED.wabaId),
     resolveTenantCredential(tenantId, WA_CONNECTED.number),
     resolveTenantCredential(tenantId, WA_CONNECTED.name),
+    resolveTenantCredential(tenantId, "WA_PHONE_NUMBER_ID"),
   ]);
-  return wabaId && number ? { wabaId, number, name } : null;
+  return wabaId && number ? { wabaId, number, name, phoneNumberId } : null;
 }
 
 /**

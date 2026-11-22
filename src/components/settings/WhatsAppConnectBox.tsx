@@ -1,6 +1,6 @@
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import { disconnectWhatsAppNumber } from "@/app/actions/whatsappConnect";
-import { connectedWhatsApp, whatsappSignupApp } from "@/lib/whatsappConnect";
+import { connectedWhatsApp, savedRegistrationPin, whatsappSignupApp } from "@/lib/whatsappConnect";
 import { PLATFORM_URL } from "@/lib/platformLegal";
 import { WhatsAppConnectButton } from "./WhatsAppConnectButton";
 
@@ -12,6 +12,7 @@ import { WhatsAppConnectButton } from "./WhatsAppConnectButton";
 export default async function WhatsAppConnectBox({ tenantId }: { tenantId: string }) {
   const [app, connected] = await Promise.all([whatsappSignupApp(), connectedWhatsApp(tenantId)]);
   if (!app && !connected) return null;
+  const pin = connected?.phoneNumberId ? await savedRegistrationPin(tenantId, connected.phoneNumberId) : null;
   return (
     <div className="mb-5 rounded-lg border border-border bg-background/40 p-4">
       <p className="text-sm font-medium">{connected ? `Connected: ${connected.name ? `${connected.name} · ` : ""}${connected.number}` : "Connect your WhatsApp number"}</p>
@@ -21,6 +22,12 @@ export default async function WhatsAppConnectBox({ tenantId }: { tenantId: strin
         WhatsApp account — add a payment method in WhatsApp Manager. A number already on the WhatsApp Business phone app
         has to move to this connection first; it can&apos;t be used in both.
       </p>
+      {pin && (
+        <p className="mt-2 text-xs text-muted-foreground">
+          Two-step verification PIN for this number: <span className="font-mono text-foreground">{pin}</span>. Keep it — Meta
+          asks for it if the number is ever moved to another provider.
+        </p>
+      )}
       <div className="mt-3 flex flex-wrap items-start gap-2">
         {app && <WhatsAppConnectButton platformOrigin={PLATFORM_URL} label={connected ? "Connect a different number" : "Connect WhatsApp"} />}
         {connected && (

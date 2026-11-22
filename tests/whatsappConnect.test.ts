@@ -47,8 +47,22 @@ test("the popup's handoff is accepted only from the platform's address, in the e
 test("the registration PIN is six digits, random, and stored encrypted", () => {
   assert.equal(newRegistrationPin(() => 42), "000042");
   assert.equal(newRegistrationPin(() => 999_999), "999999");
-  assert.equal(isSecretSettingKey("WA_CONNECTED_PIN"), true);
+  assert.equal(isSecretSettingKey("WA_REGISTER_PINS"), true);
   assert.equal(isSecretSettingKey("WA_ACCESS_TOKEN"), true);
+});
+
+test("the PIN is saved BEFORE Meta registers the number, survives any failure or disconnect, and is reused (review of #1187)", () => {
+  const lib = code("src/lib/whatsappConnect.ts");
+  const connect = lib.slice(lib.indexOf("export async function connectWhatsAppNumber"), lib.indexOf("export async function connectedWhatsApp"));
+  const saved = connect.indexOf("const pin = await registrationPin(input.tenantId, input.phoneNumberId);");
+  assert.ok(saved > 0 && saved < connect.indexOf("/register`, token,"), "saved before the step that can't be undone");
+  const helper = lib.slice(lib.indexOf("async function registrationPin"), lib.indexOf("export async function savedRegistrationPin"));
+  assert.match(helper, /if \(\/\^\\d\{6\}\$\/\.test\(pins\[phoneNumberId\] \?\? ""\)\) return pins\[phoneNumberId\];/, "a retry reuses the same PIN");
+  assert.match(helper, /await putTenantCredential\(tenantId, PINS_KEY, JSON\.stringify\(\{ \.\.\.pins, \[phoneNumberId\]: pin \}\)\);\s*return pin;/);
+  // Not a connection key: the undo and Disconnect delete CONNECTION_KEYS only.
+  assert.match(lib, /const PINS_KEY = "WA_REGISTER_PINS";/);
+  assert.doesNotMatch(lib.slice(lib.indexOf("const CONNECTION_KEYS"), lib.indexOf("\n", lib.indexOf("const CONNECTION_KEYS"))), /PIN/);
+  assert.match(code("src/components/settings/WhatsAppConnectBox.tsx"), /Two-step verification PIN for this number/);
 });
 
 test("connecting: state spent once, the number checked with Meta, claimed first, then subscribe → register → store, undone on any failure", () => {
@@ -112,7 +126,7 @@ test("off until configured; a pasted setup (Denago's) is never disconnected by i
   assert.match(lib, /return appId && appSecret && configId \? \{ appId, appSecret, configId \} : null;/);
   assert.match(code("src/components/settings/WhatsAppConnectBox.tsx"), /if \(!app && !connected\) return null;/);
   // "Connected" = made by Connect WhatsApp (its account id recorded) — a pasted id + token is not.
-  assert.match(lib, /return wabaId && number \? \{ wabaId, number, name \} : null;/);
+  assert.match(lib, /return wabaId && number \? \{ wabaId, number, name, phoneNumberId \} : null;/);
   const disconnect = lib.slice(lib.indexOf("export async function disconnectWhatsApp"));
   assert.match(disconnect, /const connected = await connectedWhatsApp\(tenantId\);\s*if \(!connected\) return null;/);
   assert.doesNotMatch(disconnect, /\/deregister/, "the number stays registered — it's the business's");

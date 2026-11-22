@@ -32,8 +32,8 @@ const SECRET_KEYS = new Set([
   "META_OWN_APP_SECRET",
   "META_OWN_VERIFY_TOKEN",
   "WA_ACCESS_TOKEN",
-  // Connect WhatsApp (lib/whatsappConnect.ts): the two-step verification PIN the number was registered with.
-  "WA_CONNECTED_PIN",
+  // Connect WhatsApp (lib/whatsappConnect.ts): each number's two-step verification PIN, saved before Meta registers it.
+  "WA_REGISTER_PINS",
   "BULKSMS_TOKEN_ID",
   "BULKSMS_TOKEN_SECRET",
   "GOOGLE_PLACES_API_KEY",
