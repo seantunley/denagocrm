@@ -18,6 +18,7 @@ import { resolveChannelTenant } from "@/lib/channelTenant";
 import { logError } from "@/lib/errorLog";
 import { inboundRetryResponse, noteInboundRetry, noteLeasedInbound } from "@/lib/webhookRetry";
 import { secretEquals } from "@/lib/secretCompare";
+import { workspaceMetaApp } from "@/lib/metaWorkspaceApp";
 import {
   claimInboundBotEvent,
   completeInboundBotEvent,
@@ -35,22 +36,34 @@ export async function GET(req: NextRequest) {
   const params = req.nextUrl.searchParams;
   const token = params.get("hub.verify_token");
   const challenge = params.get("hub.challenge");
-  const verifyToken = await validateInSystemScope(() => getSetting("META_VERIFY_TOKEN"));
+  // A workspace's own Meta app (?workspace=<slug>) is verified with ITS token (lib/metaWorkspaceApp.ts), as on /meta.
+  const workspace = params.get("workspace");
+  const own = workspace ? await validateInSystemScope(() => workspaceMetaApp(workspace)) : null;
+  if (workspace && !own) return new NextResponse("Verification failed", { status: 403 });
+  const verifyToken = own ? own.verifyToken : await validateInSystemScope(() => getSetting("META_VERIFY_TOKEN"));
   if (params.get("hub.mode") === "subscribe" && secretEquals(token, verifyToken) && challenge) return new NextResponse(challenge, { status: 200 });
   return new NextResponse("Verification failed", { status: 403 });
 }
 
 export async function POST(req: NextRequest) {
   const rawBody = await req.text();
-  const appSecret = await validateInSystemScope(() => getSetting("META_APP_SECRET"));
+  // A workspace's own Meta app (?workspace=<slug>): checked against ITS app secret, and its messages are processed only
+  // for that workspace's own WhatsApp number (`only` below). Otherwise the platform's app, exactly as before. This is
+  // what lets one workspace (Denago) stay on its own app while the platform's becomes Honeycomb 360 (Sean, 2026-11-21).
+  const workspace = req.nextUrl.searchParams.get("workspace");
+  const own = workspace ? await validateInSystemScope(() => workspaceMetaApp(workspace)) : null;
+  if (workspace && !own) return NextResponse.json({ error: "Unknown workspace" }, { status: 404 });
+  const only = { onlyTenantId: own?.tenantId ?? null };
+  const secretName = own ? "this workspace's own Meta app secret" : "META_APP_SECRET";
+  const appSecret = own ? own.appSecret : await validateInSystemScope(() => getSetting("META_APP_SECRET"));
   if (!appSecret) {
-    await logError("whatsapp-webhook", "POST received but META_APP_SECRET is not set — rejecting").catch(() => {});
+    await logError("whatsapp-webhook", `POST received but ${secretName} is not set — rejecting`).catch(() => {});
     return NextResponse.json({ error: "Webhook not configured" }, { status: 503 });
   }
   const signature = req.headers.get("x-hub-signature-256") ?? "";
   const expected = "sha256=" + crypto.createHmac("sha256", appSecret).update(rawBody, "utf8").digest("hex");
   if (!(signature.length === expected.length && crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected)))) {
-    await logError("whatsapp-webhook", `Invalid signature — Meta delivered a webhook but META_APP_SECRET doesn't match (header ${signature ? "present" : "MISSING"}).`).catch(() => {});
+    await logError("whatsapp-webhook", `Invalid signature — Meta delivered a webhook but ${secretName} doesn't match (header ${signature ? "present" : "MISSING"}).`).catch(() => {});
     return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
   }
 
@@ -244,11 +257,11 @@ export async function POST(req: NextRequest) {
                 for (const answer of answersLater) {
                   await answer().catch((error) => logError("whatsapp-webhook", error, "A DAX answer failed after Meta was acknowledged; ask again").catch(() => {}));
                 }
-              }, () => undefined),
+              }, () => undefined, only),
             );
           }
         }
-      }, () => reportUnmappedEndpoint("whatsapp", phoneNumberId, value?.messages?.length ?? 0));
+      }, () => reportUnmappedEndpoint("whatsapp", phoneNumberId, value?.messages?.length ?? 0), only);
     }
   }
   } catch (error) {
