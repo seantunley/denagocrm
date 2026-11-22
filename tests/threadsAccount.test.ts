@@ -92,7 +92,9 @@ test("Connect Threads: this workspace's own app, the account claimed before any 
   assert.match(claim, /if \(\(error as \{ code\?: string \} \| null\)\?\.code !== "P2002"\) throw error;/);
   assert.match(claim, /where: \{ channel, externalId, OR: \[\{ tenantId \}, \{ disabledAt: \{ not: null \} \}\] \},/);
   assert.match(claim, /return count === 1;/);
-  assert.match(lib, /const REFRESH_WITHIN_MS = 7 \* 24 \* 60 \* 60 \* 1000;/);
+  // The 7-day window lives with the renewal rule (shared with the scheduled renewal, lib/threadsRenewal.ts).
+  assert.match(lib, /import \{ REFRESH_WITHIN_MS \} from "\.\/threadsRenewalRule";/);
+  assert.match(code("src/lib/threadsRenewalRule.ts"), /export const REFRESH_WITHIN_MS = 7 \* 24 \* 60 \* 60 \* 1000;/);
   assert.match(lib, /grant_type: "th_refresh_token"/);
   // Reply: create, wait for FINISHED, then publish.
   assert.ok(lib.indexOf("/threads`") < lib.indexOf('state === "FINISHED"') && lib.indexOf('state === "FINISHED"') < lib.indexOf("/threads_publish`"));

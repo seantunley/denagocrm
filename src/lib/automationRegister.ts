@@ -268,6 +268,17 @@ export const AUTOMATIONS: Automation[] = [
     phases: ["supplier-digest"],
   },
   {
+    key: "threads-token-renewal",
+    label: "Threads connection renewal",
+    does: "Renews a connected Threads account's access before it runs out (every 60 days). If Threads won't renew it, the workspace owner gets one phone notification to press Connect Threads again.",
+    reaches: "staff",
+    channels: ["push"],
+    when: "Every 30 minutes — acts only in the last 7 days before expiry, at most every 6 hours",
+    managedAt: { label: "Integrations", href: "/settings/integrations" },
+    cron: "/api/cron/automations",
+    phases: ["threads-token-renewal"],
+  },
+  {
     key: "activity-reminders",
     label: "Activity reminders",
     does: "Phone notifications to the team for calls and meetings coming up.",

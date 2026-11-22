@@ -8,6 +8,7 @@ import { expireOverdueSigningRequests } from "@/lib/signing/expiry";
 import { syncFacebookLeads } from "@/lib/metaLeadSync";
 import { syncGoogleReviews } from "@/lib/googleReviews";
 import { syncInboundEmail } from "@/lib/imapSync";
+import { renewThreadsToken } from "@/lib/threadsRenewal";
 import { isAuthorizedCron } from "@/lib/cronAuth";
 import { getEnabledModuleIds } from "@/lib/modules/enabled";
 import type { ModuleId } from "@/lib/modules/registry";
@@ -99,6 +100,8 @@ async function runOperationalQueues(tenantId: string | null, budget: CronSliceCo
   const fbLeads = on("marketing") ? await phase("meta-lead-sync", syncFacebookLeads, -1) : null;
   const googleReviews = on("marketing") ? await phase("google-reviews", syncGoogleReviews, -1) : null;
   const inboundEmail = await phase("imap-sync", syncInboundEmail, -1);
+  // A connected Threads account renews itself before its 60 days run out (lib/threadsRenewal.ts).
+  const threadsRenewal = await phase("threads-token-renewal", () => renewThreadsToken(), null);
   const activityReminders = await phase("activity-reminders", runActivityReminders, -1);
   // Automatic lead research moved to /api/cron/research. A research call on the
   // ChatGPT subscription takes 50–80 seconds; this route is killed at 60, and
@@ -132,6 +135,7 @@ async function runOperationalQueues(tenantId: string | null, budget: CronSliceCo
     fbLeads,
     googleReviews,
     inboundEmail,
+    threadsRenewal,
     campaignSent,
     surveyQueue,
     activityReminders,
