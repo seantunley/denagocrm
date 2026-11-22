@@ -113,7 +113,12 @@ test("a comment starts its flow only through a Comment route, with the ONE priva
   assert.match(runner, /\} catch \(error\) \{\s*\/\/ Nothing was sent[^\n]*\n\s*await release\(\);\s*throw error;/);
   // Refused: both released, the session forgotten (it never asked), logged without customer data. No answer: kept.
   assert.match(runner, /if \(!sent\.ok\) \{\s*\/\/[^\n]*\n\s*await release\(\);\s*await forgetSession\(\);/);
-  assert.match(runner, /withBotConversationWrite\(\(tx, owner\) => deleteBotSessionTx\(tx, owner, "instagram", commenter\)\)/);
+  // Fenced to THIS turn (review of #1179): the session as the comment's turn left it — same row, same updatedAt, not
+  // person-owned. A DM turn or a handoff that moved it on since is never discarded.
+  assert.match(runner, /turnSession = await prisma\.botSession\.findFirst\(\{ where: \{ tenantId, channel: "instagram", key: commenter \}, select: \{ id: true, updatedAt: true \} \}\);/);
+  assert.match(runner, /tx\.botSession\.deleteMany\(\{ where: \{ id: turnSession\.id, tenantId: owner, ownership: \{ not: "human" \}, updatedAt: turnSession\.updatedAt \} \}\)/);
+  assert.ok(runner.indexOf("turnSession = await") > runner.indexOf("result = await advanceFlow("), "captured after the turn");
+  assert.ok(runner.indexOf("turnSession = await") < runner.indexOf("sendPrivateReplyToComment(comment.commentId"), "…and before the send");
   assert.match(runner, /\} catch \{\s*\/\/ No answer from Meta[^\n]*\n\s*await prisma\.communication\.updateMany\(\{ where: \{ dedupeKey: replyKey \}, data: \{ body: text \} \}\);\s*return;/);
   // A comment always starts its flow afresh (never an answer to the last question); a person-owned chat is left alone.
   assert.match(code("src/lib/flowSession.ts"), /const restart = decision\.act === "restart" \|\| Boolean\(entryContext\?\.commentText\);/);
