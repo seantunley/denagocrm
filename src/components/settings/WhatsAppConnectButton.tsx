@@ -20,14 +20,17 @@ export function WhatsAppConnectButton({ platformOrigin, label }: { platformOrigi
       if (!handoff) return;
       setBusy(true);
       setMessage("Connecting your number…");
-      const res = await fetch("/api/integrations/whatsapp/finish", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(handoff) }).catch(() => null);
-      const body = ((await res?.json().catch(() => null)) ?? {}) as { connected?: string; error?: string };
-      setBusy(false);
-      if (res?.ok && body.connected) {
-        setMessage(`Connected: ${body.connected}`);
-        router.refresh();
-      } else {
-        setMessage(body.error ?? "Connect WhatsApp could not be completed. Please try again.");
+      try {
+        const res = await fetch("/api/integrations/whatsapp/finish", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(handoff) }).catch(() => null);
+        const body = ((await res?.json().catch(() => null)) ?? {}) as { connected?: string; error?: string };
+        if (res?.ok && body.connected) {
+          setMessage(`Connected: ${body.connected}`);
+          router.refresh();
+        } else {
+          setMessage(body.error ?? "Connect WhatsApp could not be completed. Please try again.");
+        }
+      } finally {
+        setBusy(false);
       }
     };
     window.addEventListener("message", onMessage);
