@@ -230,9 +230,9 @@ export async function sendPublicCommentReply(commentId: string, message: string)
 function humanisePublicReplyError(message: string): string {
   if (/permission|#200|OAuth|scope/i.test(message)) {
     return (
-      "Meta has not granted this app permission to write comments. Add " +
-      "pages_manage_engagement to the Denago CRM app (it needs App Review) and " +
-      "reconnect the Page. Replying privately works without it."
+      "Meta has not granted pages_manage_engagement (writing comments) for this " +
+      "Page. The CRM's Meta app needs it approved in App Review; then press Connect " +
+      "Facebook again in Settings → Integrations. Replying privately works without it."
     );
   }
   if (/deleted|does not exist|Unsupported get request|invalid/i.test(message)) {

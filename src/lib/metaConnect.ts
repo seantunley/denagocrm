@@ -7,6 +7,7 @@ import { withSystemScope } from "./tenantScopeEntry";
 import { CONNECTED, metaPageCredential } from "./metaPage";
 import { reconcileTenantChannels } from "./channelRegistration";
 import { claimChannelEndpoint } from "./channelClaim";
+import { PLATFORM_URL } from "./platformLegal";
 import { logError } from "./errorLog";
 
 /**
@@ -33,11 +34,12 @@ export const PENDING_KEY = "META_CONNECT_PENDING";
 
 /**
  * Asked for when the app has no Login for Business configuration (META_LOGIN_CONFIG_ID): Messenger, Instagram messages
- * and comments, Page webhooks and lead ads. App Review grants each one separately; until then they work for testers.
+ * and comments, Page webhooks, lead ads, and public replies to Page comments (pages_manage_engagement — Sean,
+ * 2026-11-21: "Public replies: Yes"). App Review grants each one separately; until then they work for testers.
  */
 export const META_CONNECT_SCOPES = [
-  "pages_show_list", "pages_messaging", "pages_manage_metadata", "pages_read_engagement", "business_management",
-  "instagram_basic", "instagram_manage_messages", "instagram_manage_comments", "leads_retrieval",
+  "pages_show_list", "pages_messaging", "pages_manage_metadata", "pages_read_engagement", "pages_manage_engagement",
+  "business_management", "instagram_basic", "instagram_manage_messages", "instagram_manage_comments", "leads_retrieval",
 ];
 
 /** The fields a connected Page is subscribed to: DMs and their receipts, Page comments, lead ads. */
@@ -55,16 +57,20 @@ export async function metaPlatformApp(): Promise<{ appId: string; appSecret: str
   });
 }
 
-/** The one redirect URI registered in the Meta app — always the platform's own address. */
+/**
+ * The one redirect URI registered in the Meta app — the platform app's OWN address, Honeycomb 360's
+ * (Sean, 2026-11-21: "platform address yes (do not affect Denago yet)"). Only this sign-in return moves there: the CRM's
+ * base address (appBaseUrl) — Denago's links, Xero, Telegram, its webhooks — stays as it is.
+ */
 export function metaCallbackUrl(): string {
-  return `${appBaseUrl()}/api/integrations/meta/callback`;
+  return `${PLATFORM_URL}/api/integrations/meta/callback`;
 }
 
-/** Is `origin` the platform's own, or one of THIS workspace's verified domains? Anything else is refused. */
+/** Is `origin` the platform's own (either address), or one of THIS workspace's verified domains? Anything else is refused. */
 export async function connectOriginAllowed(tenantId: string, origin: string): Promise<boolean> {
   let url: URL;
   try { url = new URL(origin); } catch { return false; }
-  if (url.origin === new URL(appBaseUrl()).origin) return true;
+  if (url.origin === new URL(appBaseUrl()).origin || url.origin === PLATFORM_URL) return true;
   if (url.protocol !== "https:") return false;
   const domain = await basePrisma.tenantDomain.findFirst({ where: { tenantId, hostname: url.hostname.toLowerCase(), verifiedAt: { not: null } }, select: { id: true } });
   return Boolean(domain);

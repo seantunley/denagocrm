@@ -16,6 +16,7 @@ import VoicePicker from "@/components/settings/VoicePicker";
 import { DEFAULT_TTS_MODEL, TTS_MODELS, VOICE_SPEEDS, elevenLabsVoices, modelTakesSpeed } from "@/lib/elevenlabs";
 import { STT_CUSTOMER_NAMES_KEY, TTS_MODEL_KEY, VOICE_SPEED_KEY } from "@/lib/voiceSettings";
 import { PRONUNCIATIONS_KEY } from "@/lib/spokenText";
+import { PLATFORM_URL } from "@/lib/platformLegal";
 
 /** The workspace settings these rows read. Never per-tenant-credential keys — those are the page's own forms. */
 const KEYS = [
@@ -150,7 +151,7 @@ export default async function platformIntegrationRows({ xAccountId }: { xAccount
               below to the app&apos;s Facebook Login → Valid OAuth Redirect URIs.
             </p>
             <label className="label">OAuth redirect URI</label>
-            <code className="block text-sm bg-muted rounded-lg px-3 py-2">https://crm.denagocpt.co.za/api/integrations/meta/callback</code>
+            <code className="block text-sm bg-muted rounded-lg px-3 py-2">{`${PLATFORM_URL}/api/integrations/meta/callback`}</code>
           </div>
           <SaveForm resetOnSuccess={false} action={saveSetting} className="flex gap-2 items-end">
             <input type="hidden" name="key" value="META_APP_ID" />

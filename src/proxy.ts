@@ -37,6 +37,10 @@ const PUBLIC_PATHS = [
   // file itself already says (who sealed it, when). See api/verify/route.ts.
   "/verify",
   "/api/verify",
+  // The platform's privacy policy, terms and data-deletion page (src/app/legal): Meta App Review requires them public,
+  // and Meta's crawler fetches them with no session. Static wording only; the deletion status takes a code and answers
+  // just "completed on <date>".
+  "/legal",
   "/api/track", // campaign open/click tracking
   // "Save my contact" in email signatures (lib/contactCardServer.ts): a customer's phone opens the card with no
   // account. The token is signed (not guessable), the card holds only what the signature already shows, and it is
