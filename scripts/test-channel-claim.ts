@@ -11,7 +11,10 @@ import { basePrisma } from "../src/lib/db";
 import { claimChannelEndpoint } from "../src/lib/channelClaim";
 import { PENDING_KEY, connectMetaPage, withMetaConnectLock } from "../src/lib/metaConnect";
 import { CONNECTED } from "../src/lib/metaPage";
-import { putTenantCredentialBundle, putWorkspaceSetting } from "../src/lib/settings";
+import { putSetting, putTenantCredentialBundle, putWorkspaceSetting, resolveTenantCredential } from "../src/lib/settings";
+import { connectWhatsAppNumber, disconnectWhatsApp, startWhatsAppSignup } from "../src/lib/whatsappConnect";
+import { DEFAULT_TENANT_ID } from "../src/lib/tenant";
+import { withSystemScope } from "../src/lib/tenantScopeEntry";
 
 const LOCK = "META_CONNECT_LOCK";
 import { seedTwoTenants, teardown } from "./harness/seed";
@@ -36,6 +39,9 @@ async function main() {
   const A = fixture.a.tenantId;
   const B = fixture.b.tenantId;
   const ids: string[] = [];
+  const phones: string[] = [];
+  const realFetch = globalThis.fetch;
+  let platformBefore: Awaited<ReturnType<typeof basePrisma.appSetting.findMany>> | null = null;
   const owner = async (externalId: string) =>
     basePrisma.channelIdentity.findUnique({ where: { channel_externalId: { channel: "messenger", externalId } }, select: { tenantId: true, disabledAt: true } });
   try {
@@ -105,7 +111,73 @@ async function main() {
     const kept = await basePrisma.tenantIntegrationCredential.findMany({ where: { tenantId: A, key: { in: Object.values(CONNECTED) } }, select: { key: true } });
     check("…and leaves the previous connection exactly as it was", kept.length === 2, kept.map((row) => row.key).join(","));
     check("…and the lease is gone", (await lease()) === null);
+
+    // 6. CONNECT WHATSAPP, two at once (review of #1187), against a fake Meta (no network) that answers slowly so the
+    //    attempts overlap. Shares the lease above: two tabs, or a connect and a disconnect, never interleave; a refused
+    //    attempt keeps its state and can be retried; every number's PIN survives, and a failed register keeps its PIN.
+    const platformKeys = ["META_APP_ID", "META_APP_SECRET", "WA_SIGNUP_CONFIG_ID"];
+    platformBefore = await basePrisma.appSetting.findMany({ where: { tenantId: DEFAULT_TENANT_ID, key: { in: platformKeys } } });
+    await withSystemScope(async () => {
+      await putSetting("META_APP_ID", "1000");
+      await putSetting("META_APP_SECRET", "fake-secret");
+      await putSetting("WA_SIGNUP_CONFIG_ID", "2000");
+    });
+    phones.push(`9${SFX}1`, `9${SFX}2`, `9${SFX}3`);
+    const metaGot: { phone: string; pin: string }[] = [];
+    let registerFails = false;
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
+      const path = url.pathname.replace(/^\/v[\d.]+\//, "");
+      const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      if (path === "oauth/access_token") return reply({ access_token: `token-${url.searchParams.get("code")}` });
+      if (path.endsWith("/phone_numbers")) return reply({ data: phones.map((id) => ({ id, display_phone_number: `+27 ${id.slice(-4)}`, verified_name: "Test" })) });
+      if (path.endsWith("/subscribed_apps")) return reply({ success: true });
+      if (path.endsWith("/register")) {
+        metaGot.push({ phone: path.split("/")[0], pin: String((JSON.parse(String(init?.body ?? "{}")) as { pin?: string }).pin) });
+        return registerFails ? reply({ error: { message: "Timed out" } }, 504) : reply({ success: true });
+      }
+      return reply({ display_phone_number: "+27 0000", verified_name: "Test" });
+    }) as typeof fetch;
+    const begin = async () => (await startWhatsAppSignup({ tenantId: A, userId: "test", origin: "https://a.example" }))!.state;
+    const connectWa = (state: string, phone: string) => connectWhatsAppNumber({ tenantId: A, state, code: `c-${phone}`, wabaId: "111", phoneNumberId: phone });
+    const pins = async () => JSON.parse((await resolveTenantCredential(A, "WA_REGISTER_PINS")) ?? "{}") as Record<string, string>;
+    const current = () => resolveTenantCredential(A, "WA_PHONE_NUMBER_ID");
+
+    const [s1, s2] = [await begin(), await begin()];
+    const pair = await Promise.allSettled([connectWa(s1, phones[0]), connectWa(s2, phones[1])]);
+    const won = pair.findIndex((r) => r.status === "fulfilled");
+    const lost = pair.find((r) => r.status === "rejected") as PromiseRejectedResult | undefined;
+    check("WhatsApp: two connects at once in one workspace — exactly one runs", won >= 0 && pair.filter((r) => r.status === "fulfilled").length === 1 && /already being changed/.test(String(lost?.reason?.message)), String(lost?.reason));
+    check("…the winner's number is the one stored", (await current()) === phones[won]);
+    const retry = won === 0 ? connectWa(s2, phones[1]) : connectWa(s1, phones[0]);
+    check("…the refused attempt kept its state and connects on retry", (await retry.then(() => true, () => false)) && (await current()) === phones[1 - won]);
+    const savedPins = await pins();
+    check("…and BOTH numbers' PINs are kept, each the one Meta was given", [0, 1].every((i) => /^\d{6}$/.test(savedPins[phones[i]] ?? "") && metaGot.some((got) => got.phone === phones[i] && got.pin === savedPins[phones[i]])), JSON.stringify(Object.keys(savedPins)));
+
+    const s3 = await begin();
+    const race = await Promise.allSettled([disconnectWhatsApp(A), connectWa(s3, phones[0])]);
+    check("WhatsApp: a disconnect and a connect at once — exactly one runs", race.filter((r) => r.status === "fulfilled").length === 1);
+
+    registerFails = true;
+    const s4 = await begin();
+    check("WhatsApp: Meta failing (or timing out) at register fails the connect", await connectWa(s4, phones[2]).then(() => false, () => true));
+    const kept3 = (await pins())[phones[2]];
+    check("…but the PIN it was sent is kept", /^\d{6}$/.test(kept3 ?? "") && metaGot.at(-1)?.pin === kept3);
+    registerFails = false;
+    const s5 = await begin();
+    await connectWa(s5, phones[2]);
+    check("…and the retry registers with the SAME PIN", metaGot.at(-1)?.phone === phones[2] && metaGot.at(-1)?.pin === kept3);
+    check("…the lease is gone", (await lease()) === null);
   } finally {
+    globalThis.fetch = realFetch;
+    if (platformBefore) {
+      await basePrisma.appSetting.deleteMany({ where: { tenantId: DEFAULT_TENANT_ID, key: { in: ["META_APP_ID", "META_APP_SECRET", "WA_SIGNUP_CONFIG_ID"] } } });
+      if (platformBefore.length) await basePrisma.appSetting.createMany({ data: platformBefore });
+    }
+    await basePrisma.tenantIntegrationCredential.deleteMany({ where: { tenantId: { in: [A, B] }, key: { startsWith: "WA_" } } });
+    await basePrisma.appSetting.deleteMany({ where: { tenantId: { in: [A, B] }, key: { startsWith: "WA_SIGNUP:" } } });
+    await basePrisma.channelIdentity.deleteMany({ where: { channel: "whatsapp", externalId: { in: phones } } });
     await basePrisma.tenantIntegrationCredential.deleteMany({ where: { tenantId: { in: [A, B] }, key: { in: Object.values(CONNECTED) } } });
     await basePrisma.appSetting.deleteMany({ where: { tenantId: { in: [A, B] }, key: PENDING_KEY } });
     await basePrisma.appSetting.deleteMany({ where: { tenantId: { in: [A, B] }, key: LOCK } });

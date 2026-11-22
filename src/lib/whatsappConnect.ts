@@ -5,6 +5,7 @@ import { getSetting, getWorkspaceSetting, putTenantCredential, putTenantCredenti
 import { withSystemScope } from "./tenantScopeEntry";
 import { reconcileTenantChannels } from "./channelRegistration";
 import { claimChannelEndpoint } from "./channelClaim";
+import { withMetaConnectLock } from "./metaConnect";
 import { logError } from "./errorLog";
 import { PLATFORM_URL } from "./platformLegal";
 import { WA_SIGNUP_GRAPH_VERSION, newRegistrationPin } from "./whatsappSignupMessage";
@@ -123,7 +124,14 @@ async function graph(method: "GET" | "POST" | "DELETE", path: string, token: str
  * Finish (on the workspace's own domain, owner session + same-browser cookie checked by the route): connect the number.
  * Returns the number as shown to people.
  */
-export async function connectWhatsAppNumber(input: { tenantId: string; state: string; code: string; wabaId: string; phoneNumberId: string }): Promise<string> {
+export function connectWhatsAppNumber(input: { tenantId: string; state: string; code: string; wabaId: string; phoneNumberId: string }): Promise<string> {
+  // ONE AT A TIME PER WORKSPACE (review of #1187): two tabs connecting, or a connect and a disconnect, can't interleave
+  // — each restores a snapshot on failure, and the PIN record is read-modify-write. Taken before the state is spent,
+  // so a refused attempt can simply be retried.
+  return withMetaConnectLock(input.tenantId, () => connectWhatsAppNumberLocked(input));
+}
+
+async function connectWhatsAppNumberLocked(input: { tenantId: string; state: string; code: string; wabaId: string; phoneNumberId: string }): Promise<string> {
   // CONSUMED ONCE: only the request whose delete removed the state may go on.
   const key = STATE_PREFIX + sha(input.state);
   const saved = await getWorkspaceSetting(input.tenantId, key);
@@ -152,8 +160,6 @@ export async function connectWhatsAppNumber(input: { tenantId: string; state: st
     throw new Error("That WhatsApp number is already connected to another workspace.");
   }
 
-  // ponytail: no per-workspace lock here yet; two signups at once in ONE workspace would each restore the other's
-  // "previous". Wrap in withMetaConnectLock (#1185) once both are on main.
   const previous = await basePrisma.tenantIntegrationCredential.findMany({ where: { tenantId: input.tenantId, key: { in: CONNECTION_KEYS } }, select: { key: true, value: true } });
   try {
     const subscribed = await graph("POST", `${input.wabaId}/subscribed_apps`, token);
@@ -205,7 +211,11 @@ export async function connectedWhatsApp(tenantId: string): Promise<{ wabaId: str
  * Disconnect a number connected through Connect WhatsApp: our app unsubscribed from the account (best effort), the
  * connection forgotten, the number released. The number itself stays registered with Meta — it's the business's.
  */
-export async function disconnectWhatsApp(tenantId: string): Promise<string | null> {
+export function disconnectWhatsApp(tenantId: string): Promise<string | null> {
+  return withMetaConnectLock(tenantId, () => disconnectWhatsAppLocked(tenantId));
+}
+
+async function disconnectWhatsAppLocked(tenantId: string): Promise<string | null> {
   const connected = await connectedWhatsApp(tenantId);
   if (!connected) return null;
   const token = await resolveTenantCredential(tenantId, "WA_ACCESS_TOKEN");

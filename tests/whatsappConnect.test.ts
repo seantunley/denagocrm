@@ -53,7 +53,7 @@ test("the registration PIN is six digits, random, and stored encrypted", () => {
 
 test("the PIN is saved BEFORE Meta registers the number, survives any failure or disconnect, and is reused (review of #1187)", () => {
   const lib = code("src/lib/whatsappConnect.ts");
-  const connect = lib.slice(lib.indexOf("export async function connectWhatsAppNumber"), lib.indexOf("export async function connectedWhatsApp"));
+  const connect = lib.slice(lib.indexOf("async function connectWhatsAppNumberLocked"), lib.indexOf("export async function connectedWhatsApp"));
   const saved = connect.indexOf("const pin = await registrationPin(input.tenantId, input.phoneNumberId);");
   assert.ok(saved > 0 && saved < connect.indexOf("/register`, token,"), "saved before the step that can't be undone");
   const helper = lib.slice(lib.indexOf("async function registrationPin"), lib.indexOf("export async function savedRegistrationPin"));
@@ -65,9 +65,20 @@ test("the PIN is saved BEFORE Meta registers the number, survives any failure or
   assert.match(code("src/components/settings/WhatsAppConnectBox.tsx"), /Two-step verification PIN for this number/);
 });
 
+test("one connect or disconnect at a time per workspace, shared with Connect Facebook (review of #1187; real-DB race in scripts/test-channel-claim.ts)", () => {
+  const lib = code("src/lib/whatsappConnect.ts");
+  assert.match(lib, /import \{ withMetaConnectLock \} from "\.\/metaConnect";/);
+  assert.match(lib, /export function connectWhatsAppNumber\([^)]*\): Promise<string> \{[\s\S]*?return withMetaConnectLock\(input\.tenantId, \(\) => connectWhatsAppNumberLocked\(input\)\);\s*\}/);
+  assert.match(lib, /export function disconnectWhatsApp\(tenantId: string\): Promise<string \| null> \{\s*return withMetaConnectLock\(tenantId, \(\) => disconnectWhatsAppLocked\(tenantId\)\);/);
+  // Nothing else reaches the unlocked bodies.
+  assert.equal(lib.match(/connectWhatsAppNumberLocked\(/g)?.length, 2);
+  assert.equal(lib.match(/disconnectWhatsAppLocked\(/g)?.length, 2);
+  assert.doesNotMatch(lib, /no per-workspace lock/);
+});
+
 test("connecting: state spent once, the number checked with Meta, claimed first, then subscribe → register → store, undone on any failure", () => {
   const lib = code("src/lib/whatsappConnect.ts");
-  const connect = lib.slice(lib.indexOf("export async function connectWhatsAppNumber"), lib.indexOf("export async function connectedWhatsApp"));
+  const connect = lib.slice(lib.indexOf("async function connectWhatsAppNumberLocked"), lib.indexOf("export async function connectedWhatsApp"));
   assert.match(connect, /const \{ count \} = await basePrisma\.appSetting\.deleteMany\(\{ where: \{ tenantId: input\.tenantId, key \} \}\);\s*const record = saved && count === 1 \?/);
   // The code is exchanged on the server with the app secret; the secret is never sent to a browser.
   assert.match(connect, /graph\("GET", "oauth\/access_token", null, undefined, \{ client_id: app\.appId, client_secret: app\.appSecret, code: input\.code \}\)/);
@@ -127,7 +138,7 @@ test("off until configured; a pasted setup (Denago's) is never disconnected by i
   assert.match(code("src/components/settings/WhatsAppConnectBox.tsx"), /if \(!app && !connected\) return null;/);
   // "Connected" = made by Connect WhatsApp (its account id recorded) — a pasted id + token is not.
   assert.match(lib, /return wabaId && number \? \{ wabaId, number, name, phoneNumberId \} : null;/);
-  const disconnect = lib.slice(lib.indexOf("export async function disconnectWhatsApp"));
+  const disconnect = lib.slice(lib.indexOf("async function disconnectWhatsAppLocked"));
   assert.match(disconnect, /const connected = await connectedWhatsApp\(tenantId\);\s*if \(!connected\) return null;/);
   assert.doesNotMatch(disconnect, /\/deregister/, "the number stays registered — it's the business's");
   assert.match(code("src/app/(app)/settings/integrations/page.tsx"), /\{integration\.id === "whatsapp" && <WhatsAppConnectBox tenantId=\{tenantId\} \/>\}/);

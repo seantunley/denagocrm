@@ -171,7 +171,8 @@ async function readPending(tenantId: string): Promise<{ metaUserId: string; scop
 }
 
 /**
- * ONE CONNECT OR DISCONNECT AT A TIME PER WORKSPACE (review of #1182). A short lease row — the (tenantId, key) unique
+ * ONE CONNECT OR DISCONNECT AT A TIME PER WORKSPACE (reviews of #1182 and #1187) — Connect Facebook and Connect
+ * WhatsApp (lib/whatsappConnect.ts) share it, as both restore a snapshot on failure. A short lease row — the (tenantId, key) unique
  * key lets exactly one holder create it — instead of a database transaction held open across Meta's API calls. A lease
  * left by a crashed request expires and is taken over (conditionally, so two late-comers can't both take it).
  */
@@ -192,7 +193,7 @@ export async function withMetaConnectLock<T>(tenantId: string, fn: () => Promise
       held = count === 1;
     }
   }
-  if (!held) throw new Error("Facebook is already being connected or disconnected here. Try again in a moment.");
+  if (!held) throw new Error("A Facebook or WhatsApp connection is already being changed here. Try again in a moment.");
   try {
     return await fn();
   } finally {
