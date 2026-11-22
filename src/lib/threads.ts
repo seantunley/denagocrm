@@ -3,6 +3,7 @@ import { basePrisma } from "./db";
 import { currentTenantScope } from "./tenantScope";
 import { putTenantCredentialBundle, resolveIntegrationBundle } from "./settings";
 import { claimChannelEndpoint } from "./channelClaim";
+import { REFRESH_WITHIN_MS } from "./threadsRenewalRule";
 
 /**
  * THREADS (Sean, 2026-11-21: "Build those into the CRM as new options for social media accounts"). Comments on the
@@ -18,7 +19,6 @@ const BASE = "https://graph.threads.com";
 const GRAPH = `${BASE}/v1.0`;
 const TIMEOUT = 15_000;
 export const THREADS_SCOPES = ["threads_basic", "threads_read_replies", "threads_manage_replies", "threads_content_publish"];
-const REFRESH_WITHIN_MS = 7 * 24 * 60 * 60 * 1000;
 const SIXTY_DAYS_S = 60 * 24 * 60 * 60;
 
 type ThreadsResult = { ok: boolean; error?: string; providerMessageId?: string };
@@ -81,7 +81,7 @@ export async function exchangeThreadsCode(input: { tenantId: string; code: strin
 }
 
 /** This workspace's Threads token, refreshed first when it expires within 7 days. Null: not connected. */
-async function threadsToken(owner: string): Promise<{ token: string; userId: string } | null> {
+export async function threadsToken(owner: string): Promise<{ token: string; userId: string } | null> {
   const app = await resolveIntegrationBundle(owner, "threads");
   const token = app?.THREADS_ACCESS_TOKEN;
   const userId = app?.THREADS_USER_ID;

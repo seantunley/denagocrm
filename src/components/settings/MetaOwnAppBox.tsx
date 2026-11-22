@@ -22,6 +22,12 @@ export default async function MetaOwnAppBox({ tenantId }: { tenantId: string }) 
       </p>
       <label className="label mt-3">Callback URL</label>
       <code className="block break-all rounded-lg bg-muted px-3 py-2 text-sm">{workspaceMetaCallbackUrl(appBaseUrl(), tenant.slug)}</code>
+      <label className="label mt-3">WhatsApp callback URL</label>
+      <p className="mb-1 text-xs text-muted-foreground">
+        If this app also runs your WhatsApp number: in your Meta app → <b>WhatsApp → Configuration</b>, set this callback
+        URL with the same verify token, and subscribe to <b>messages</b>. Only this workspace&apos;s own number is processed.
+      </p>
+      <code className="block break-all rounded-lg bg-muted px-3 py-2 text-sm">{workspaceMetaCallbackUrl(appBaseUrl(), tenant.slug, "whatsapp")}</code>
     </div>
   );
 }
