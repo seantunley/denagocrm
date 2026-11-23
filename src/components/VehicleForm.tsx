@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import VehiclePhotoScan from "@/components/VehiclePhotoScan";
 import ContactPicker, { type ContactOption } from "@/components/ContactPicker";
 import {
   CalendarDays,
@@ -81,6 +82,9 @@ export default function VehicleForm({
   const [productId, setProductId] = useState(defaults.productId ?? "");
   const [model, setModel] = useState(defaults.model ?? "");
   const [color, setColor] = useState(defaults.color ?? "");
+  // Held in state so "Scan from a photo" (VehiclePhotoScan) can fill them.
+  const [vin, setVin] = useState(defaults.vin ?? "");
+  const [regNumber, setRegNumber] = useState(defaults.regNumber ?? "");
   const [initialKm, setInitialKm] = useState("");
   const [serviceKm, setServiceKm] = useState(String(defaults.serviceIntervalKm ?? 1000));
   const [serviceMonths, setServiceMonths] = useState(String(defaults.serviceIntervalMonths ?? 6));
@@ -195,13 +199,24 @@ export default function VehicleForm({
         title="Vehicle identity"
         description={`Record the identifiers used for service, ${showWarranty ? "warranty, " : ""}stock and legal documentation.`}
       >
+        {/* Accepting a scan overwrites the two identifiers it read. Model and colour only when still empty and no
+            catalogue product is chosen — a product sets both, and its colours are a fixed list a read can't join. */}
+        <VehiclePhotoScan
+          onUse={(found) => {
+            if (found.vin) setVin(found.vin);
+            if (found.regNumber) setRegNumber(found.regNumber);
+            if (productId) return;
+            if (found.model && !model.trim()) setModel(found.model);
+            if (found.color && !color.trim()) setColor(found.color);
+          }}
+        />
         <CaptureField label="VIN / serial number">
           <input
             name="vin"
             className="input font-mono uppercase"
             autoCapitalize="characters"
-            defaultValue={defaults.vin ?? ""}
-            onChange={(event) => { event.target.value = event.target.value.toUpperCase(); }}
+            value={vin}
+            onChange={(event) => setVin(event.target.value.toUpperCase())}
             placeholder="Manufacturer identifier"
           />
         </CaptureField>
@@ -210,8 +225,8 @@ export default function VehicleForm({
             name="regNumber"
             className="input uppercase"
             autoCapitalize="characters"
-            defaultValue={defaults.regNumber ?? ""}
-            onChange={(event) => { event.target.value = event.target.value.toUpperCase(); }}
+            value={regNumber}
+            onChange={(event) => setRegNumber(event.target.value.toUpperCase())}
             placeholder="e.g. CA 123-456"
           />
         </CaptureField>
