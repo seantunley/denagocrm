@@ -20,6 +20,7 @@ import {
   anomalyDigestEmail,
   claimSpikes,
   findingCount,
+  firstReplier,
   quoteDiscountPct,
   replySlips,
   unusualDiscounts,
@@ -57,14 +58,23 @@ export async function findAnomalies(tenantId: string, now: Date): Promise<Anomal
           tenantId,
           createdAt: { gte: windowStart(now, REPLY_RECENT_DAYS + REPLY_BASELINE_DAYS) },
           firstResponseAt: { not: null },
-          assignedToId: { not: null },
         },
-        select: { createdAt: true, firstResponseAt: true, assignedToId: true },
+        select: {
+          createdAt: true,
+          firstResponseAt: true,
+          // The opening message (staff-opened tickets) and the first reply are the first two; a third for safety.
+          messages: { where: { type: "staff", userId: { not: null } }, orderBy: { createdAt: "asc" }, take: 3, select: { userId: true, createdAt: true } },
+        },
         orderBy: { createdAt: "desc" },
         take: READ_CAP,
       })
     : [];
-  const personIds = [...new Set(tickets.flatMap((ticket) => (ticket.assignedToId ? [ticket.assignedToId] : [])))];
+  // Credited to whoever wrote the first reply, not the current assignee (a transfer would blame the wrong person).
+  const replied = tickets.flatMap((ticket) => {
+    const personId = ticket.firstResponseAt ? firstReplier(ticket.messages, ticket.firstResponseAt) : null;
+    return personId && ticket.firstResponseAt ? [{ personId, createdAt: ticket.createdAt, firstResponseAt: ticket.firstResponseAt }] : [];
+  });
+  const personIds = [...new Set(replied.map((ticket) => ticket.personId))];
   const people = personIds.length ? await prisma.user.findMany({ where: { id: { in: personIds } }, select: { id: true, name: true } }) : [];
 
   // Sent or accepted, and the current revision only: a draft is scratch work, and a superseded quote would count one offer twice.
@@ -81,7 +91,7 @@ export async function findAnomalies(tenantId: string, now: Date): Promise<Anomal
       number: true,
       createdAt: true,
       createdBy: { select: { name: true } },
-      items: { select: { qty: true, unitPriceCents: true, discountPct: true, kind: true } },
+      items: { select: { qty: true, unitPriceCents: true, discountPct: true, kind: true, optional: true, selected: true } },
     },
     orderBy: { createdAt: "desc" },
     take: READ_CAP,
@@ -93,13 +103,7 @@ export async function findAnomalies(tenantId: string, now: Date): Promise<Anomal
 
   return {
     claims: claimSpikes(claims.map((claim) => ({ model: claim.vehicle.model, claimedAt: claim.claimedAt })), now),
-    replies: replySlips(
-      tickets.flatMap((ticket) =>
-        ticket.assignedToId && ticket.firstResponseAt ? [{ personId: ticket.assignedToId, createdAt: ticket.createdAt, firstResponseAt: ticket.firstResponseAt }] : [],
-      ),
-      new Map(people.map((person) => [person.id, person.name])),
-      now,
-    ),
+    replies: replySlips(replied, new Map(people.map((person) => [person.id, person.name])), now),
     discounts: unusualDiscounts(discounted, now),
   };
 }

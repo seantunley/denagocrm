@@ -92,6 +92,21 @@ export type ReplySlip = { person: string; recentMinutes: number; usualMinutes: n
  * "slow" for being part-time. The median, so one ticket left over a weekend
  * cannot flag anybody.
  */
+/**
+ * Who wrote a ticket's first reply — NOT its current assignee, who may have taken it over afterwards. The reply's
+ * message is written in the same step that sets firstResponseAt (helpdesk.ts), so it is the staff message closest to
+ * that time; a staff-opened ticket's opening message (its description) comes earlier and is not a reply.
+ */
+export function firstReplier(staffMessages: readonly { userId: string | null; createdAt: Date }[], firstResponseAt: Date): string | null {
+  let best: { userId: string; gap: number } | null = null;
+  for (const message of staffMessages) {
+    if (!message.userId) continue;
+    const gap = Math.abs(message.createdAt.getTime() - firstResponseAt.getTime());
+    if (!best || gap < best.gap) best = { userId: message.userId, gap };
+  }
+  return best?.userId ?? null;
+}
+
 export function replySlips(
   tickets: readonly { personId: string; createdAt: Date; firstResponseAt: Date }[],
   names: ReadonlyMap<string, string>,
@@ -126,7 +141,7 @@ export const DISCOUNT_MIN_PCT = 5;
 export const DISCOUNT_MARGIN_PCT = 2;
 export const DISCOUNT_MAX_LISTED = 10;
 
-export type QuoteLine = { qty: number; unitPriceCents: number; discountPct: number; kind: string };
+export type QuoteLine = { qty: number; unitPriceCents: number; discountPct: number; kind: string; optional?: boolean; selected?: boolean };
 
 /**
  * The discount on a quote as one percentage of its list value. A trade-in is
@@ -138,6 +153,8 @@ export function quoteDiscountPct(lines: readonly QuoteLine[]): number | null {
   let given = 0;
   for (const line of lines) {
     if (line.kind === "trade_in") continue;
+    // An add-on the customer didn't choose isn't in the quote's total (pricing.ts isLineIncluded), so not in its discount.
+    if (line.optional && line.selected === false) continue;
     const value = line.qty * line.unitPriceCents;
     if (!(value > 0)) continue;
     list += value;

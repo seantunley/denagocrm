@@ -5,6 +5,7 @@ import {
   anomalyDigestEmail,
   claimSpikes,
   duration,
+  firstReplier,
   median,
   percentile,
   quoteDiscountPct,
@@ -69,6 +70,30 @@ test("one ticket left over a weekend cannot flag anybody", () => {
 test("a reply recorded before the ticket opened is ignored, not counted as instant", () => {
   const rows = [...tickets("u1", spread(1, 5, -50)), ...tickets("u1", spread(15, 12, 40))];
   assert.deepEqual(replySlips(rows, new Map(), NOW), []);
+});
+
+test("a first reply is credited to whoever wrote it, not the current assignee", () => {
+  const at = (minutes: number) => new Date(NOW.getTime() + minutes * 60_000);
+  // Customer-opened, answered by A, later transferred to B: the reply is A's (the assignee isn't an input at all).
+  assert.equal(firstReplier([{ userId: "A", createdAt: at(30) }, { userId: "B", createdAt: at(300) }], at(30)), "A");
+  // Staff-opened by B (its description is a staff message), first answered by A.
+  assert.equal(firstReplier([{ userId: "B", createdAt: at(0) }, { userId: "A", createdAt: at(45) }], at(45)), "A");
+  // A message without an author is never credited; nothing left → not counted.
+  assert.equal(firstReplier([{ userId: null, createdAt: at(10) }], at(10)), null);
+  assert.equal(firstReplier([], at(10)), null);
+  // The digest takes it from here, not from assignedToId.
+  const digest = readFileSync("src/lib/anomalyDigest.ts", "utf8");
+  assert.match(digest, /firstReplier\(ticket\.messages, ticket\.firstResponseAt\)/);
+  assert.doesNotMatch(digest, /assignedToId/);
+});
+
+test("an add-on the customer didn't choose is not part of a quote's discount", () => {
+  const base = { qty: 1, unitPriceCents: 100_000, discountPct: 10, kind: "product" };
+  const unchosen = { qty: 1, unitPriceCents: 100_000, discountPct: 100, kind: "accessory", optional: true, selected: false };
+  assert.equal(quoteDiscountPct([base, unchosen]), 10);
+  // Chosen, it counts like any other line.
+  assert.equal(Math.round(quoteDiscountPct([base, { ...unchosen, selected: true }]) ?? 0), 55);
+  assert.match(readFileSync("src/lib/anomalyDigest.ts", "utf8"), /kind: true, optional: true, selected: true/);
 });
 
 test("a quote's discount is one percentage of its list value", () => {
