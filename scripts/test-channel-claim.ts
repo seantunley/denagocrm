@@ -246,6 +246,17 @@ async function main() {
     unsubscribed.length = 0;
     check("WhatsApp: a stale record for an account another workspace now holds — Meta not called, record dropped, A's hold untouched",
       (await retryWhatsAppUnsubscribes(B, later)) === 0 && unsubscribed.length === 0 && !(await resolveTenantCredential(B, PENDING_UNSUBSCRIBE_KEY)) && (await account())?.tenantId === A && (await account())?.disabledAt === null, JSON.stringify(unsubscribed));
+
+    // 11. AN ORPHANED HOLD: A holds `waba` (end of 10) with no connection and nothing waiting — a connect cut off between
+    //     its claim and its next step. Never subscribed by us, so the retry releases it without calling Meta — but never
+    //     while a stored record can't be read (it would look empty, and saving it back would lose its tokens).
+    await basePrisma.tenantIntegrationCredential.create({ data: { tenantId: A, key: PENDING_UNSUBSCRIBE_KEY, value: "enc:v1:AAAA:AAAA:AAAA" } });
+    unsubscribed.length = 0;
+    check("WhatsApp: an unreadable waiting record — nothing released, the record kept",
+      (await retryWhatsAppUnsubscribes(A, later)) === 0 && unsubscribed.length === 0 && (await account())?.disabledAt === null && Boolean(await basePrisma.tenantIntegrationCredential.findUnique({ where: { tenantId_key: { tenantId: A, key: PENDING_UNSUBSCRIBE_KEY } } })));
+    await basePrisma.tenantIntegrationCredential.deleteMany({ where: { tenantId: A, key: PENDING_UNSUBSCRIBE_KEY } });
+    check("WhatsApp: an orphaned account hold is released by the retry, without calling Meta",
+      (await retryWhatsAppUnsubscribes(A, later)) === 1 && unsubscribed.length === 0 && (await account())?.disabledAt != null, JSON.stringify(await account()));
   } finally {
     globalThis.fetch = realFetch;
     if (platformBefore) {

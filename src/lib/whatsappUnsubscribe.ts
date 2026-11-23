@@ -124,13 +124,36 @@ export async function pendingWhatsAppUnsubscribes(tenantId: string): Promise<{ s
   return Object.entries(pending).filter(([wabaId]) => wabaId !== live).map(([, entry]) => ({ since: entry.since, tries: entry.tries }));
 }
 
-/** Automations cron, per workspace: retry each waiting account at most every 6 hours. Returns how many were released. */
+/** Accounts this workspace actively holds. */
+async function heldAccounts(tenantId: string): Promise<string[]> {
+  const rows = await basePrisma.channelIdentity.findMany({ where: { tenantId, channel: "whatsapp_account", disabledAt: null }, select: { externalId: true } });
+  return rows.map((row) => row.externalId);
+}
+
+/**
+ * Automations cron, per workspace: retry each waiting account at most every 6 hours, and let go of ORPHANED holds.
+ * Returns how many were released.
+ *
+ * ORPHANED: held here, but neither the live connection nor waiting to be unsubscribed — the server stopped between a
+ * connect's claim and its next step, or between an unsubscribe's record removal and its release. Every path that
+ * subscribes our app queues the account FIRST, and the record goes only once Meta confirms or the account is live, so an
+ * orphan was never left subscribed by us: released without calling Meta, so another workspace can connect it. Under the
+ * lock, so a connect in progress is never mistaken for one.
+ */
 export async function retryWhatsAppUnsubscribes(tenantId: string, now = Date.now()): Promise<number> {
-  if (!(await resolveTenantCredential(tenantId, PENDING_UNSUBSCRIBE_KEY))) return 0;
+  if (!(await resolveTenantCredential(tenantId, PENDING_UNSUBSCRIBE_KEY)) && !(await heldAccounts(tenantId)).length) return 0;
   // Busy (a connect or disconnect is running here): the next tick tries again.
   return withMetaConnectLock(tenantId, async () => {
     const pending = await readPending(tenantId);
     const live = await resolveTenantCredential(tenantId, LIVE_WABA_KEY);
+    // FAIL CLOSED, before anything is written: a credential that can't be decrypted reads as null, so an unreadable
+    // waiting record would be saved back empty (its tokens lost), and an unreadable live connection would make its
+    // subscribed account look orphaned. Stored but unreadable → touch nothing. (An empty record is never stored.)
+    const stored = await basePrisma.tenantIntegrationCredential.findMany({ where: { tenantId, key: { in: [LIVE_WABA_KEY, PENDING_UNSUBSCRIBE_KEY] } }, select: { key: true } });
+    if (stored.some((row) => (row.key === LIVE_WABA_KEY ? !live : !Object.keys(pending).length))) {
+      await logError("whatsapp-connect", new Error("WhatsApp connection record unreadable"), "Skipped WhatsApp unsubscribe retries: a stored record can't be read", { tenantId }).catch(() => {});
+      return 0;
+    }
     let released = 0;
     for (const [wabaId, entry] of Object.entries(pending)) {
       if (wabaId === live) {
@@ -167,6 +190,12 @@ export async function retryWhatsAppUnsubscribes(tenantId: string, now = Date.now
       }
     }
     await writePending(tenantId, pending);
+    for (const wabaId of await heldAccounts(tenantId)) {
+      if (wabaId === live || pending[wabaId]) continue;
+      await release(tenantId, wabaId);
+      released++;
+      await logError("whatsapp-connect", new Error("Orphaned account hold released"), "A WhatsApp Business account left held by an interrupted connect was released (it was never subscribed)", { tenantId }).catch(() => {});
+    }
     return released;
   }).catch(async (error: unknown) => {
     if (!/already being changed/.test(String((error as Error | null)?.message))) await logError("whatsapp-connect", error, "Retrying WhatsApp unsubscribes failed", { tenantId }).catch(() => {});
