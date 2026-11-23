@@ -92,10 +92,10 @@ test("menus, popovers, dialogs and drawers share the floating height", () => {
 
 test("a held card lifts and the place it will land waits as a well", () => {
   const board = code("src/components/KanbanBoard.tsx");
-  assert.match(board, /\? "-rotate-2 scale-\[1\.03\] cursor-grabbing depth-lifted"/);
+  assert.match(board, /\? "motion-safe:-rotate-2 motion-safe:scale-\[1\.03\] cursor-grabbing depth-lifted"/);
   assert.match(board, /isOver \? "depth-receiving"/);
   const canvas = code("src/components/dashboard/editor/DashboardCanvas.tsx");
-  assert.match(canvas, /-rotate-\[1\.5deg\] scale-\[1\.02\] cursor-grabbing[^"]*depth-lifted/);
+  assert.match(canvas, /motion-safe:-rotate-\[1\.5deg\] motion-safe:scale-\[1\.02\] cursor-grabbing[^"]*depth-lifted/);
   assert.match(canvas, /border-dashed border-primary bg-primary\/10 depth-well/);
 });
 
