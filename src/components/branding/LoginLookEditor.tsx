@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 
 import { ArrowRight, ImageUp, RotateCcw } from "lucide-react";
 import { SaveButton, SaveForm } from "@/components/SaveForm";
 import BrandLogo from "@/components/BrandLogo";
+import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import { BrandScene, SignInIntro, type SceneBrand } from "@/app/login/LoginScene";
 import { LOGIN_DEFAULTS, LOGIN_TEXT_FIELDS, LOGIN_TILE_MAX, loginImageUrl, type LoginLook } from "@/lib/loginLook";
 import type { ActionResult } from "@/lib/actionResultTypes";
@@ -220,25 +221,23 @@ function PictureField({ name, removeName, hasSaved, hint, onPick }: { name: stri
 }
 
 function ResetButton({ action, onReset }: { action: () => Promise<MaybeActionResult>; onReset: () => void }) {
-  const [busy, setBusy] = useState(false);
   return (
-    <button
-      type="button"
-      disabled={busy}
-      onClick={async () => {
-        if (!window.confirm("Put the standard sign-in screen back? Your wording and pictures here are cleared.")) return;
-        setBusy(true);
-        try {
-          const result = await action();
-          if (!result || !("error" in result) || !result.error) onReset();
-        } finally {
-          setBusy(false);
-        }
+    <ConfirmActionDialog
+      destructive
+      title="Put the standard sign-in screen back?"
+      description="Your wording and pictures here are cleared, and your team sees the standard sign-in screen again."
+      confirmLabel="Back to standard"
+      onConfirm={async () => {
+        const result = await action();
+        if (!result || !result.error) onReset();
+        return result ?? undefined;
       }}
-      className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground disabled:opacity-60"
-    >
-      <RotateCcw className="size-3.5" /> Back to the standard screen
-    </button>
+      trigger={
+        <button type="button" className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
+          <RotateCcw className="size-3.5" /> Back to the standard screen
+        </button>
+      }
+    />
   );
 }
 
