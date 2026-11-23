@@ -56,6 +56,18 @@ async function unsubscribe(wabaId: string, token: string): Promise<boolean> {
   }
 }
 
+/**
+ * FENCE (review of #1187): Meta is only ever asked to unsubscribe an account this workspace ACTIVELY holds. While it
+ * does, no other workspace can claim it (claimChannelEndpoint never moves an active row) and only this workspace
+ * releases it, under the lease the caller holds — so the check can't go stale before the DELETE. A record for an
+ * account no longer held (a crash between cleanup steps) is dropped without calling Meta: it might be another
+ * workspace's live account now.
+ */
+async function heldHere(tenantId: string, wabaId: string): Promise<boolean> {
+  const row = await basePrisma.channelIdentity.findUnique({ where: { channel_externalId: { channel: "whatsapp_account", externalId: wabaId } }, select: { tenantId: true, disabledAt: true } });
+  return row?.tenantId === tenantId && !row.disabledAt;
+}
+
 async function release(tenantId: string, wabaId: string): Promise<void> {
   await basePrisma.channelIdentity.updateMany({ where: { tenantId, channel: "whatsapp_account", externalId: wabaId, disabledAt: null }, data: { disabledAt: new Date() } });
 }
@@ -78,13 +90,23 @@ export async function dropWhatsAppUnsubscribe(tenantId: string, wabaId: string):
 /** Unsubscribe, then release; or, unconfirmed, keep it held with its token for the retry. */
 export async function retireWhatsAppAccount(tenantId: string, wabaId: string, token: string | null): Promise<"released" | "pending"> {
   const pending = await readPending(tenantId);
-  const useToken = token ?? pending[wabaId]?.token ?? null;
-  if (useToken && (await unsubscribe(wabaId, useToken))) {
-    await release(tenantId, wabaId);
+  if (!(await heldHere(tenantId, wabaId))) {
     if (pending[wabaId]) {
       delete pending[wabaId];
       await writePending(tenantId, pending);
     }
+    await logError("whatsapp-connect", new Error("Unsubscribe skipped: account not held by this workspace"), "A WhatsApp Business account was not unsubscribed because this workspace no longer holds it", { tenantId }).catch(() => {});
+    return "released";
+  }
+  const useToken = token ?? pending[wabaId]?.token ?? null;
+  if (useToken && (await unsubscribe(wabaId, useToken))) {
+    // The record goes FIRST, then the hold: a crash in between leaves the account held with no record (fails closed —
+    // no one else can take it), never a record for an account someone else may claim.
+    if (pending[wabaId]) {
+      delete pending[wabaId];
+      await writePending(tenantId, pending);
+    }
+    await release(tenantId, wabaId);
     return "released";
   }
   if (useToken) {
@@ -115,10 +137,18 @@ export async function retryWhatsAppUnsubscribes(tenantId: string, now = Date.now
         delete pending[wabaId];
         continue;
       }
+      if (!(await heldHere(tenantId, wabaId))) {
+        delete pending[wabaId];
+        await writePending(tenantId, pending);
+        await logError("whatsapp-connect", new Error("Stale unsubscribe record dropped"), "A waiting WhatsApp unsubscribe was dropped without calling Meta: this workspace no longer holds the account", { tenantId }).catch(() => {});
+        continue;
+      }
       if (now - entry.triedAt < RETRY_EVERY_MS) continue;
       if (await unsubscribe(wabaId, entry.token)) {
-        await release(tenantId, wabaId);
+        // Record first, then the hold (see retireWhatsAppAccount).
         delete pending[wabaId];
+        await writePending(tenantId, pending);
+        await release(tenantId, wabaId);
         released++;
         continue;
       }

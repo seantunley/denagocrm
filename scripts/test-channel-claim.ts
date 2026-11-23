@@ -13,7 +13,7 @@ import { PENDING_KEY, connectMetaPage, withMetaConnectLock } from "../src/lib/me
 import { CONNECTED } from "../src/lib/metaPage";
 import { putSetting, putTenantCredentialBundle, putWorkspaceSetting, resolveTenantCredential } from "../src/lib/settings";
 import { connectWhatsAppNumber, disconnectWhatsApp, startWhatsAppSignup } from "../src/lib/whatsappConnect";
-import { PENDING_UNSUBSCRIBE_KEY, pendingWhatsAppUnsubscribes, retryWhatsAppUnsubscribes } from "../src/lib/whatsappUnsubscribe";
+import { PENDING_UNSUBSCRIBE_KEY, pendingWhatsAppUnsubscribes, queueWhatsAppUnsubscribe, retryWhatsAppUnsubscribes } from "../src/lib/whatsappUnsubscribe";
 import { DEFAULT_TENANT_ID } from "../src/lib/tenant";
 import { withSystemScope } from "../src/lib/tenantScopeEntry";
 
@@ -238,6 +238,14 @@ async function main() {
       !(await bNumber()) && (await account())?.tenantId === B && (await account())?.disabledAt === null && (await waiting())[waba]?.token === `token-c-${phones[3]}`);
     unsubscribed.length = 0;
     check("…and the retry finishes it", (await retryWhatsAppUnsubscribes(B, later)) === 1 && unsubscribed[0]?.token === `token-c-${phones[3]}` && (await account())?.disabledAt != null && !(await resolveTenantCredential(B, PENDING_UNSUBSCRIBE_KEY)));
+
+    // 10. A STALE RECORD (a crash between cleanup steps) must never unsubscribe another workspace's account (review of
+    //     #1187). B's record survives, the account is free, and A has since claimed it.
+    await claimChannelEndpoint(A, "whatsapp_account", waba, null);
+    await queueWhatsAppUnsubscribe(B, waba, "stale-token");
+    unsubscribed.length = 0;
+    check("WhatsApp: a stale record for an account another workspace now holds — Meta not called, record dropped, A's hold untouched",
+      (await retryWhatsAppUnsubscribes(B, later)) === 0 && unsubscribed.length === 0 && !(await resolveTenantCredential(B, PENDING_UNSUBSCRIBE_KEY)) && (await account())?.tenantId === A && (await account())?.disabledAt === null, JSON.stringify(unsubscribed));
   } finally {
     globalThis.fetch = realFetch;
     if (platformBefore) {

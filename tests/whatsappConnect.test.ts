@@ -132,11 +132,21 @@ test("an unconfirmed unsubscribe keeps the account held and its token, retried o
   const lib = code("src/lib/whatsappUnsubscribe.ts");
   // Only Meta's confirmation releases the account.
   assert.match(lib, /return res\.ok && json\?\.success === true;/);
-  assert.match(lib, /if \(useToken && \(await unsubscribe\(wabaId, useToken\)\)\) \{\s*await release\(tenantId, wabaId\);/);
+  assert.match(lib, /if \(useToken && \(await unsubscribe\(wabaId, useToken\)\)\) \{/);
   // Its own encrypted record — never the live connection's fields.
   assert.match(lib, /export const PENDING_UNSUBSCRIBE_KEY = "WA_PENDING_UNSUBSCRIBE";/);
   assert.match(code("src/lib/settings.ts"), /"WA_PENDING_UNSUBSCRIBE",/);
   assert.doesNotMatch(code("src/lib/whatsappConnect.ts"), /WA_PENDING_UNSUBSCRIBE/, "not a connection key, so neither undo nor disconnect deletes it");
+  // FENCED: Meta is asked only for an account this workspace actively holds; a stale record is dropped without a call.
+  const retire = lib.slice(lib.indexOf("export async function retireWhatsAppAccount"), lib.indexOf("export async function pendingWhatsAppUnsubscribes"));
+  const retry = lib.slice(lib.indexOf("export async function retryWhatsAppUnsubscribes"));
+  for (const [name, body, call] of [["retire", retire, "await unsubscribe(wabaId, useToken)"], ["retry", retry, "await unsubscribe(wabaId, entry.token)"]] as const) {
+    const fence = body.indexOf("await heldHere(tenantId, wabaId)");
+    assert.ok(fence > 0 && fence < body.indexOf(call), `${name}: ownership checked before Meta is called`);
+    // After Meta confirms: the record is removed BEFORE the hold is released (a crash leaves it held, never a stale record).
+    const after = body.slice(body.indexOf(call));
+    assert.ok(after.indexOf("await writePending(tenantId, pending);") < after.indexOf("await release(tenantId, wabaId);"), `${name}: record before release`);
+  }
   // A live account is never unsubscribed by the retry.
   assert.match(lib, /if \(wabaId === live\) \{\s*delete pending\[wabaId\];\s*continue;\s*\}/);
   // Under the same per-workspace lease as connect/disconnect, at most every 6 hours, the owner told after about a day.
