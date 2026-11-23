@@ -79,7 +79,7 @@ export const SETTINGS_NAV_GROUPS: SettingsNavGroup[] = [
       { key: "lead-routing", label: "Lead routing", href: "/settings/lead-routing", keywords: ["assign", "assignment", "round robin", "auto-assign", "distribute", "leads", "reps", "owner", "inbound"] },
       { key: "portal-access", label: "Portal access", href: "/settings/portal-access", permission: "portal_access.manage", keywords: ["customer portal", "delegation", "profile requests"] },
       // Everyone's sessions in the workspace, owner-only — so here, not under My account.
-      { key: "sessions", label: "Sessions & devices", href: "/settings/sessions", keywords: ["devices", "logins", "sign out"] },
+      { key: "sessions", label: "Sessions & devices", href: "/settings/sessions", keywords: ["devices", "logins", "sign out", "auto sign-out", "timeout", "idle", "inactivity", "log out"] },
     ],
   },
   {

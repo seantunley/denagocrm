@@ -1,5 +1,8 @@
 import { Smartphone, Monitor, LogOut, ShieldOff } from "lucide-react";
-import { requireTenantOwner } from "@/lib/auth";
+import { getIdleMinutes, requireTenantOwner } from "@/lib/auth";
+import { ABSOLUTE_SESSION_HOURS, PWA_SESSION_HOURS } from "@/lib/session";
+import { saveSessionPolicy } from "@/app/actions/security";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { basePrisma, prisma } from "@/lib/db";
 import { actingOwnerTenantId } from "@/lib/actingScope";
 import { maskWaId } from "@/lib/assistantWhatsAppRules";
@@ -50,6 +53,16 @@ function ago(d: Date): string {
   return `${Math.round(h / 24)}d ago`;
 }
 
+const hoursAgo = (hours: number) => new Date(Date.now() - hours * 3600_000);
+
+/**
+ * Only sign-ins that can still be used. A session row is never marked ended when its token runs out (72h, or 7 days
+ * for the mobile app — the expiry is inside the token), so "not revoked" alone listed every sign-in ever made.
+ */
+function stillValid(s: { platform: string | null; createdAt: Date }): boolean {
+  return s.createdAt > hoursAgo(s.platform === "pwa" ? PWA_SESSION_HOURS : ABSOLUTE_SESSION_HOURS);
+}
+
 export default async function SessionsPage() {
   await requireTenantOwner();
 
@@ -62,16 +75,18 @@ export default async function SessionsPage() {
   // Membership of the ACTING workspace, disabled members included: a disabled
   // account is exactly the one an owner comes here to confirm is signed out.
   const memberIds = await actingTenantMemberIds();
-  const users = await prisma.user.findMany({
-    where: memberIds === null ? {} : { id: { in: memberIds } },
-    orderBy: { name: "asc" },
-    include: {
-      sessions: {
-        where: { revokedAt: null },
-        orderBy: { lastActiveAt: "desc" },
+  const users = (
+    await prisma.user.findMany({
+      where: memberIds === null ? {} : { id: { in: memberIds } },
+      orderBy: { name: "asc" },
+      include: {
+        sessions: {
+          where: { revokedAt: null, createdAt: { gt: hoursAgo(PWA_SESSION_HOURS) } },
+          orderBy: { lastActiveAt: "desc" },
+        },
       },
-    },
-  });
+    })
+  ).map((u) => ({ ...u, sessions: u.sessions.filter(stillValid) }));
   const totalActive = users.reduce((s, u) => s + u.sessions.length, 0);
   // A phone linked to the assistant is a sign-in too. "Sign out all" ends it;
   // revoking ONE device doesn't (the phone isn't that device), so it's shown
@@ -84,6 +99,7 @@ export default async function SessionsPage() {
       })
     : [];
   const phoneOf = new Map(phones.map((p) => [p.userId, p.waId]));
+  const idleMinutes = await getIdleMinutes();
 
   return (
     <SettingsWorkspace
@@ -93,6 +109,33 @@ export default async function SessionsPage() {
       groups={SETTINGS_NAV_GROUPS}
     >
       <div className="space-y-4">
+        {/* Moved from the old Settings "Team" tab, which the regrouped menu no longer links to. */}
+        <SaveForm
+          action={saveSessionPolicy}
+          success="Sign-out policy saved"
+          resetOnSuccess={false}
+          className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-border bg-card p-4 shadow-sm"
+        >
+          <div>
+            <p className="text-sm font-semibold text-foreground">Auto sign-out after inactivity</p>
+            <p className="text-xs text-muted-foreground">
+              Everyone re-signs in at least every {ABSOLUTE_SESSION_HOURS}h regardless. Saving signs everyone else in this
+              workspace out, so they sign in again under the new rule.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <select name="idleMinutes" className="input w-36" defaultValue={String(idleMinutes)}>
+              <option value="15">15 minutes</option>
+              <option value="30">30 minutes</option>
+              <option value="60">1 hour</option>
+              <option value="120">2 hours</option>
+              <option value="240">4 hours</option>
+              <option value="480">8 hours</option>
+              <option value="1440">24 hours</option>
+            </select>
+            <SaveButton className="btn-primary btn-sm">Save</SaveButton>
+          </div>
+        </SaveForm>
         {users.map((u) => (
           <div key={u.id} className="rounded-xl border border-border bg-card p-4 shadow-sm">
             <div className="mb-2 flex items-center justify-between gap-2">
