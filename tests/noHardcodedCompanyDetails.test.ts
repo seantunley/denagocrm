@@ -38,9 +38,6 @@ const ALLOWED: Record<string, string> = {
   "src/components/AppShell.tsx": "staff — logo alt fallback, pinned by appShellBranding.test.ts",
   "src/components/KanbanBoard.tsx": "staff — 16px lead-SOURCE glyph on the pipeline board (see appShellBranding.test.ts)",
   "src/components/quotes/QuoteEditorDialog.tsx": "staff — in-editor preview header (the printed quote reads the profile)",
-  "src/lib/help/data/admin.json": "staff — help centre",
-  "src/lib/help/data/channels.json": "staff — help centre (platform webhook URLs)",
-  "src/lib/help/data/marketing.json": "staff — help centre",
   "src/lib/provisioning.ts": "seed — the founding tenant's own row",
   // The PLATFORM's origin (crm.denagocpt.co.za), not a company detail: a fallback
   // when NEXT_PUBLIC_APP_URL is unset. Tenant links go through tenantOrigin().
