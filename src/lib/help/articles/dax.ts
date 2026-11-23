@@ -53,7 +53,7 @@ export const daxArticles: HelpArticle[] = [
         "**Delete**: open a conversation and press **Delete**. It leaves your list and the assistant stops remembering it. Restore it under **Recently deleted** for 60 days; after that it is removed for good. Nothing in the CRM changes.",
         "Only you can see, search, rename or delete your conversations — the workspace owner included.",
       ] },
-      { type: "callout", tone: "warning", text: "The assistant runs on your workspace's ChatGPT connection. If you see \"This runs on your workspace's ChatGPT connection, which isn't set up yet\", ask your workspace owner to connect it under **Settings → Integrations**. The assistant is part of the Automation & AI module, so it is hidden if that module is off." },
+      { type: "callout", tone: "warning", text: "The assistant runs on your workspace's ChatGPT connection. If you see \"This runs on your workspace's ChatGPT connection, which isn't set up yet\", ask your workspace owner to contact your CRM provider, who connects it for your workspace. The assistant is part of the Automation & AI module, so it is hidden if that module is off." },
     ],
   },
   {
@@ -257,7 +257,7 @@ export const daxArticles: HelpArticle[] = [
       ] },
       { type: "h", text: "Hearing answers" },
       { type: "p", text: "If the owner has switched on voice replies, each answer in the CRM has a **Listen** button that reads it aloud, and a voice note sent to the assistant on WhatsApp gets a short spoken answer back instead of the text — the full answer is on your Ask page, and you get text whenever a voice note can't be made. Spoken answers work in English and Afrikaans only." },
-      { type: "callout", tone: "info", text: "Speaking a question and hearing an answer both rely on the workspace's voice service, which the owner connects under **Settings → Integrations**. Spoken answers use that service's credit each time, so the audio is made only when you press **Listen** — or, in hands-free, for each answer to a question you spoke." },
+      { type: "callout", tone: "info", text: "Speaking a question and hearing an answer both rely on the voice service your CRM provider connects. Spoken answers use that service's credit each time, so the audio is made only when you press **Listen** — or, in hands-free, for each answer to a question you spoke." },
       { type: "h", text: "Hands-free (driving, the workshop)" },
       { type: "p", text: "Where answers can be read aloud, the chat has a **headphones** button next to the microphone. Turn it on (this device remembers it), then tap the microphone once and just talk: when you pause, your question is sent, the answer is read aloud, and it listens again. A bar shows whether it is listening, thinking or speaking, with a big **Stop** button. It never listens while it is speaking." },
       { type: "list", items: [
@@ -275,7 +275,7 @@ export const daxArticles: HelpArticle[] = [
     audience: "admins",
     keywords: ["assistant settings", "name the assistant", "tone", "workspace instructions", "playbook", "teach", "what it has learned", "approve", "internet search", "about you"],
     body: [
-      { type: "p", text: "The workspace owner sets up the assistant under **Settings → Assistant** (in the Organisation group). The assistant needs the workspace's ChatGPT connection, which is made under **Settings → Integrations** with **Connect ChatGPT**." },
+      { type: "p", text: "The workspace owner sets up the assistant under **Settings → Assistant** (in the Automation & AI group). The assistant needs a ChatGPT connection, which your CRM provider sets up." },
       { type: "h", text: "Name, tone and instructions" },
       { type: "list", items: [
         "**Name** — what your team calls it. The Ask page and the chat window use this name.",
