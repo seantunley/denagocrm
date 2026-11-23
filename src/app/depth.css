@@ -1,0 +1,164 @@
+/* ─────────────────────────────────────────────────────────────────────────
+   Subtle depth across the app (2026-11-23; the canvas boards "Depth — …" in
+   "Denago CRM — sidebar redesign"). The sidebar's own depth, and the shared
+   --depth-* tokens it introduced, are at the top of globals.css; this file adds
+   the rest of the app on the same light-from-above rules.
+
+   Three heights, and only three: the page (flat), a card (raised: a top-edge
+   highlight and a short soft shadow), and floating (menus, popovers, dialogs).
+   A thing that is being MOVED gets one more, lifted, for as long as it is held.
+
+   Everything here is a utility or a token, so a component opts in by class and
+   a screen that needs to stay flat simply doesn't. Motion obeys the device's
+   reduced-motion setting; pointer effects never run on touch.
+   ──────────────────────────────────────────────────────────────────────── */
+
+:root {
+  --depth-card-shadow: inset 0 1px 0 oklch(1 0 0 / 6%), 0 1px 2px oklch(0 0 0 / 40%), 0 8px 20px -12px oklch(0 0 0 / 55%);
+
+  --depth-lifted-sheen: linear-gradient(180deg, oklch(1 0 0 / 7%), oklch(1 0 0 / 0%) 45%);
+  --depth-lifted-shadow: inset 0 1px 0 oklch(1 0 0 / 16%), 0 0 0 1px color-mix(in oklab, var(--primary) 55%, transparent),
+    0 6px 12px oklch(0 0 0 / 45%), 0 36px 60px -14px oklch(0 0 0 / 80%);
+
+  --depth-primary-sheen: linear-gradient(180deg, oklch(1 0 0 / 16%), oklch(1 0 0 / 0%) 65%);
+  --depth-primary-shadow: inset 0 1px 0 oklch(1 0 0 / 26%), 0 1px 2px oklch(0 0 0 / 45%),
+    0 4px 14px color-mix(in oklab, var(--primary) 18%, transparent);
+  --depth-primary-hover-shadow: inset 0 1px 0 oklch(1 0 0 / 30%), 0 2px 3px oklch(0 0 0 / 45%),
+    0 8px 20px color-mix(in oklab, var(--primary) 24%, transparent);
+  --depth-secondary-shadow: inset 0 1px 0 oklch(1 0 0 / 6%), 0 1px 2px oklch(0 0 0 / 35%);
+  --depth-press-shadow: inset 0 2px 3px oklch(0 0 0 / 35%), 0 1px 1px oklch(0 0 0 / 30%);
+
+  --depth-track: oklch(0.13 0.004 264);
+  --depth-track-shadow: inset 0 1px 2px oklch(0 0 0 / 55%), 0 1px 0 oklch(1 0 0 / 6%);
+
+  --depth-header-shadow: 0 1px 0 oklch(1 0 0 / 5%), 0 10px 18px -10px oklch(0 0 0 / 70%);
+}
+
+/*
+ * 1 · A card: raised — a top-edge highlight and a short soft shadow, both in
+ * box-shadow. No background image: a card made transparent on purpose
+ * (`bg-transparent shadow-none`, inside a dialog say) must come out fully flat.
+ */
+@utility depth-card {
+  box-shadow: var(--depth-card-shadow);
+}
+
+/* Floating: menus, popovers, dialogs, drawers. The colour stays the component's own (--popover, --background). */
+@utility depth-float-shadow {
+  background-image: var(--depth-float-sheen);
+  box-shadow: var(--depth-float-shadow);
+}
+
+/* 2 · Buttons. The primary sits slightly proud and rises a pixel under a mouse; every button sinks a pixel when pressed. */
+@utility depth-primary {
+  background-image: var(--depth-primary-sheen);
+  box-shadow: var(--depth-primary-shadow);
+  @media (hover: hover) {
+    &:hover:not(:disabled):not([aria-disabled="true"]) {
+      box-shadow: var(--depth-primary-hover-shadow);
+    }
+  }
+  @media (hover: hover) and (prefers-reduced-motion: no-preference) {
+    &:hover:not(:disabled):not([aria-disabled="true"]) {
+      transform: translateY(-1px);
+    }
+  }
+}
+@utility depth-secondary {
+  box-shadow: var(--depth-secondary-shadow);
+}
+/*
+ * `:active` twice on purpose: a pressed button is also hovered, and the press
+ * must beat the hover lift above whichever comes later in the stylesheet. The
+ * repeat raises the specificity by one step; it matches nothing more.
+ */
+@utility depth-press {
+  &:active:active:not(:disabled):not([aria-disabled="true"]) {
+    box-shadow: var(--depth-press-shadow);
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    &:active:active:not(:disabled):not([aria-disabled="true"]) {
+      transform: translateY(1px);
+    }
+  }
+}
+
+/* 4 · 5 · Picked up: lifted until it is dropped. The tilt is set by the component (a degree or two). */
+@utility depth-lifted {
+  background-image: var(--depth-lifted-sheen);
+  box-shadow: var(--depth-lifted-shadow);
+}
+/* Where a held thing will land: a shallow well. */
+@utility depth-well {
+  box-shadow: var(--depth-inset-shadow);
+}
+/* A column being dropped into dips to receive. */
+@utility depth-receiving {
+  background-color: color-mix(in oklab, var(--depth-inset), var(--primary) 5%);
+  box-shadow: inset 0 3px 8px oklch(0 0 0 / 55%), inset 0 0 0 1px color-mix(in oklab, var(--primary) 45%, transparent);
+}
+
+/* 6 · A gauge or progress track: the fill sits in a groove. */
+@utility depth-track {
+  background-color: var(--depth-track);
+  box-shadow: var(--depth-track-shadow);
+}
+
+/*
+ * 3 · A header that content scrolls under: flat at the top, shadowed once the
+ * page has moved. Pure CSS (a scroll-driven animation), so nothing listens to
+ * scroll; a browser without scroll timelines leaves the header flat, which is
+ * how it was before. `-page` follows the window, `-nearest` the closest
+ * scrolling box (a dialog's body).
+ */
+@keyframes depth-scroll-shadow {
+  from { box-shadow: 0 0 0 0 transparent; }
+  to { box-shadow: var(--depth-header-shadow); }
+}
+@utility depth-scroll-shadow-page {
+  @supports (animation-timeline: scroll()) {
+    animation: depth-scroll-shadow linear both;
+    animation-timeline: scroll(root block);
+    animation-range: 0 48px;
+  }
+}
+@utility depth-scroll-shadow-nearest {
+  @supports (animation-timeline: scroll()) {
+    animation: depth-scroll-shadow linear both;
+    animation-timeline: scroll(nearest block);
+    animation-range: 0 32px;
+  }
+}
+
+/*
+ * 8 · The vehicle photo follows a mouse by a few degrees (components/PointerTilt.tsx
+ * sets --tilt-x / --tilt-y). Only for a fine pointer that can hover, and never
+ * with reduced motion: on a phone, or with motion reduced, the photo is still.
+ */
+@utility depth-tilt {
+  & [data-tilt-target] {
+    transform-origin: center;
+  }
+  @media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+    & [data-tilt-target] {
+      transform: perspective(1100px) rotateX(var(--tilt-x, 0deg)) rotateY(var(--tilt-y, 0deg)) scale(1.04);
+      transition: transform 320ms cubic-bezier(0.2, 0.8, 0.2, 1);
+      will-change: transform;
+    }
+  }
+}
+
+/* 9 · The sign-in screen's background planes (app/login/LoginDepthPlanes.tsx) drift very slowly. */
+@keyframes depth-drift {
+  from { transform: translate3d(0, 0, 0) rotate(var(--plane-rotate, 0deg)); }
+  to { transform: translate3d(var(--plane-dx, 12px), var(--plane-dy, -10px), 0) rotate(var(--plane-rotate, 0deg)); }
+}
+@utility depth-plane {
+  transform: rotate(var(--plane-rotate, 0deg));
+  box-shadow: inset 0 1px 0 oklch(1 0 0 / 6%), 0 30px 60px -20px oklch(0 0 0 / 75%);
+  @media (prefers-reduced-motion: no-preference) {
+    animation: depth-drift var(--plane-duration, 40s) ease-in-out infinite alternate;
+  }
+}
+
+/* With reduced motion, pressing still darkens a button and hovering still brightens it; nothing moves (above). */

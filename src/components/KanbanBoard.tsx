@@ -205,10 +205,11 @@ function LeadCard({ lead, dragging, actions, staleAfterDays = null }: { lead: Ka
   return (
     <div
       className={cn(
-        "group relative overflow-hidden rounded-xl border border-border bg-card p-3.5 shadow-sm transition-all",
+        "group relative overflow-hidden rounded-xl border border-border bg-card p-3.5 transition-all motion-reduce:transition-none",
+        // The lift's shadow for everyone; the tilt and grow only when the person hasn't asked for less motion.
         dragging
-          ? "rotate-1 cursor-grabbing shadow-2xl ring-1 ring-primary/50"
-          : "cursor-grab hover:-translate-y-px hover:border-primary/35 hover:shadow-lg hover:shadow-black/20",
+          ? "motion-safe:-rotate-2 motion-safe:scale-[1.03] cursor-grabbing depth-lifted"
+          : "cursor-grab depth-card hover:-translate-y-px hover:border-primary/35 hover:shadow-lg hover:shadow-black/20",
         lead.isNew && !dragging && "animate-new-lead-glow",
       )}
     >
@@ -689,7 +690,7 @@ function Column({
       <div
         className={cn(
           "min-h-[26rem] flex-1 space-y-2.5 p-2.5 transition-colors",
-          isOver ? "bg-primary/[0.07] ring-1 ring-inset ring-primary/35" : "bg-background/20",
+          isOver ? "depth-receiving" : "bg-background/20",
         )}
       >
         {stage.leads.map((lead) => (

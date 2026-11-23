@@ -130,7 +130,7 @@ export function CardShell({
    * IS definite and stretching is wanted.
    */
   return (
-    <div className="flex h-full min-w-0 flex-col rounded-xl border border-border bg-card p-4 shadow-sm">
+    <div className="flex h-full min-w-0 flex-col rounded-xl border border-border bg-card p-4 depth-card">
       {children}
     </div>
   );

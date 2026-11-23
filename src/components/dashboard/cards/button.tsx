@@ -82,7 +82,7 @@ export function renderButton(card: ButtonCard, _ctx: RenderContext): RenderedCar
     node: (
       <Link
         href={href}
-        className="group flex min-w-0 items-center gap-2.5 rounded-xl border border-border bg-card p-4 shadow-sm transition-colors hover:border-primary/40"
+        className="group flex min-w-0 items-center gap-2.5 rounded-xl border border-border bg-card p-4 depth-card transition-colors hover:border-primary/40"
       >
         <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground transition-colors group-hover:bg-primary/10 group-hover:text-primary">
           <Icon className="size-4" />

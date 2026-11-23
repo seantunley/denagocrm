@@ -156,7 +156,7 @@ export async function renderStat(card: StatCard, ctx: RenderContext): Promise<Re
     </>
   );
 
-  const panel = "group block min-w-0 rounded-xl border border-border bg-card p-4 shadow-sm";
+  const panel = "group block min-w-0 rounded-xl border border-border bg-card p-4 depth-card";
 
   return {
     node: href ? (

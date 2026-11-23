@@ -298,7 +298,7 @@ export default function AppShell({
           right one refuses to go below its content. So the logo is centred
           whenever there is room, slides left when there is not, and CLIPS rather
           than ever meeting the cluster. */}
-      <header className="fixed inset-x-0 top-0 z-40 flex h-12 items-center gap-2 border-b border-sidebar-border bg-sidebar/90 px-2 backdrop-blur-xl lg:hidden">
+      <header className="fixed inset-x-0 top-0 z-40 flex h-12 items-center gap-2 border-b border-sidebar-border bg-sidebar/90 px-2 backdrop-blur-xl depth-scroll-shadow-page lg:hidden">
         {/* Kept empty so the logo stays centred; connection status is the dot on the avatar (AccountMenu). min-w-0: this one may give all its room away. */}
         <div className="min-w-0 flex-1 basis-0" aria-hidden />
 
@@ -329,7 +329,7 @@ export default function AppShell({
       <div aria-hidden className={`pointer-events-none fixed right-0 top-0 -z-30 hidden h-8 bg-sidebar lg:block ${offset}`} />
       <div aria-hidden className={`pointer-events-none fixed bottom-0 right-0 top-2.5 -z-20 hidden rounded-tl-[18px] bg-background depth-sheet lg:block ${offset}`} />
       <div aria-hidden className={`pointer-events-none fixed right-0 top-0 z-30 hidden h-2.5 bg-sidebar lg:block ${offset}`} />
-      <header className={`fixed right-0 top-2.5 z-30 hidden h-14 items-center gap-4 rounded-tl-[18px] border-b border-sidebar-border bg-background/80 px-5 backdrop-blur-xl lg:flex ${offset}`}>
+      <header className={`fixed right-0 top-2.5 z-30 hidden h-14 items-center gap-4 rounded-tl-[18px] border-b border-sidebar-border bg-background/80 px-5 backdrop-blur-xl depth-scroll-shadow-page lg:flex ${offset}`}>
         <div className="min-w-0 flex-1">
           <ClockWeather cities={weatherCities} />
         </div>

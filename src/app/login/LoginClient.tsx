@@ -20,6 +20,7 @@ import { readCodeEntry, shouldAutoSubmit, type CodeEntry, type CodeEntryMode } f
 import { login, requestEmailCode, type LoginState, verifySecondFactor } from "./actions";
 import { requestPasswordReset, resetPasswordWithCode, type ResetState } from "./resetActions";
 import type { LoginBrand } from "@/lib/loginBrand";
+import LoginDepthPlanes from "./LoginDepthPlanes";
 
 /**
  * EVERY brand substitution below is gated on `brand.branded`, and the false
@@ -532,6 +533,7 @@ function Shell({ children, brand }: { children: React.ReactNode; brand: LoginBra
   return (
     <main className="relative min-h-[100dvh] overflow-hidden bg-[#070909] text-white lg:grid lg:grid-cols-[minmax(430px,0.82fr)_1.18fr]">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_0%,color-mix(in_oklab,var(--primary)_11%,transparent),transparent_32%)] lg:hidden" />
+      <LoginDepthPlanes />
       {/*
         * Padding is "the design's value, or the notch/home indicator if that is
         * bigger" on every side. The breakpoints only change the design's value
