@@ -4,8 +4,7 @@ import BrandLogo from "@/components/BrandLogo";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useActionState, useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { motion, useMotionValue, useReducedMotion, useSpring, useTransform } from "framer-motion";
-import { ArrowRight, Check, Eye, EyeOff, Fingerprint, LoaderCircle, LockKeyhole, ShieldCheck, Zap } from "lucide-react";
+import { ArrowRight, Eye, EyeOff, Fingerprint, LoaderCircle, LockKeyhole, ShieldCheck } from "lucide-react";
 import { APP_VERSION } from "@/lib/version";
 import PasskeyLoginButton, { usePasskeySignIn } from "@/components/PasskeyLoginButton";
 import {
@@ -21,6 +20,7 @@ import { login, requestEmailCode, type LoginState, verifySecondFactor } from "./
 import { requestPasswordReset, resetPasswordWithCode, type ResetState } from "./resetActions";
 import type { LoginBrand } from "@/lib/loginBrand";
 import LoginDepthPlanes from "./LoginDepthPlanes";
+import { BrandScene, PulseStrip, SignInIntro } from "./LoginScene";
 
 /**
  * EVERY brand substitution below is gated on `brand.branded`, and the false
@@ -141,11 +141,7 @@ function LoginInner({ brand }: { brand: LoginBrand }) {
 
   return (
     <Shell brand={brand}>
-      <div className="mb-6 sm:mb-8 short:mb-4">
-        <p className="mb-3 text-xs font-semibold uppercase tracking-[0.22em] text-primary short:hidden">Staff portal</p>
-        <h1 className="text-3xl font-semibold tracking-[-0.04em] text-white sm:text-4xl short:text-2xl">Welcome back.</h1>
-        <p className="mt-2 text-sm leading-6 text-slate-400 short:hidden">{`Sign in to ${brand.displayName}.`}</p>
-      </div>
+      <SignInIntro brand={brand} />
 
       {timedOut && (
         <div role="status" className="mb-4 flex gap-3 rounded-2xl border border-amber-300/15 bg-amber-300/8 px-4 py-3 text-sm text-amber-100">
@@ -304,7 +300,7 @@ function LoginInner({ brand }: { brand: LoginBrand }) {
               </div>
             </Field>
             <button type="submit" className="login-submit group">
-              <span>{pending ? "Signing you in…" : "Enter workspace"}</span>
+              <span>{pending ? "Signing you in…" : brand.look.buttonLabel}</span>
               {pending ? (
                 <LoaderCircle className="size-4 animate-spin" />
               ) : (
@@ -561,13 +557,15 @@ function Shell({ children, brand }: { children: React.ReactNode; brand: LoginBra
             wordmarkClassName="text-sm text-white sm:text-base"
           />
           {/* Decoration (the real security line is under the button), so not on phones or in the installed app. */}
-          <span aria-hidden="true" className={`${isPwa ? "hidden" : "hidden sm:inline-block"} rounded-full border border-white/8 bg-white/[0.035] px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500`}>Secure access</span>
+          {brand.look.badge && (
+            <span aria-hidden="true" className={`${isPwa ? "hidden" : "hidden sm:inline-block"} rounded-full border border-white/8 bg-white/[0.035] px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500`}>{brand.look.badge}</span>
+          )}
         </header>
         {/* Phones and short screens: the form sits near the top, so the keyboard
             does not push the button off screen. sm and up: centred. */}
         <div className="w-full max-w-[420px] self-center pb-8 pt-6 sm:my-auto sm:py-14 short:my-0 short:py-3">
           {children}
-          <PulseStrip />
+          <PulseStrip look={brand.look} />
         </div>
         <footer className="mt-auto flex items-center justify-between text-[10px] uppercase tracking-[0.14em] text-slate-700 sm:mt-0 short:mt-auto">
           <span>{brand.displayName}</span>
@@ -586,108 +584,6 @@ function Shell({ children, brand }: { children: React.ReactNode; brand: LoginBra
   );
 }
 
-function BrandScene({ brand }: { brand: LoginBrand }) {
-  const reduced = useReducedMotion();
-  const ref = useRef<HTMLDivElement>(null);
-  const mouseX = useMotionValue(0.5);
-  const mouseY = useMotionValue(0.5);
-  const x = useSpring(mouseX, { stiffness: 45, damping: 20 });
-  const y = useSpring(mouseY, { stiffness: 45, damping: 20 });
-  const cardX = useTransform(x, [0, 1], [-12, 12]);
-  const cardY = useTransform(y, [0, 1], [-9, 9]);
-  const glowX = useTransform(x, [0, 1], [35, -35]);
-  const glowY = useTransform(y, [0, 1], [20, -20]);
-
-  return (
-    <section
-      ref={ref}
-      onMouseMove={(event) => {
-        if (reduced || !ref.current) return;
-        const bounds = ref.current.getBoundingClientRect();
-        mouseX.set((event.clientX - bounds.left) / bounds.width);
-        mouseY.set((event.clientY - bounds.top) / bounds.height);
-      }}
-      // Pure decoration: illustrative figures, never real data (the page is public).
-      aria-hidden="true"
-      className="relative hidden overflow-hidden border-l border-white/[0.06] bg-[#0c0f0e] lg:block"
-    >
-      <div className="absolute inset-0 opacity-35 [background-image:linear-gradient(rgba(255,255,255,.035)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,.035)_1px,transparent_1px)] [background-size:72px_72px] [mask-image:linear-gradient(to_bottom,black,transparent_88%)]" />
-      <div className="absolute -right-28 -top-28 size-[500px] rounded-full border border-primary/10" />
-      <div className="absolute -right-12 -top-12 size-[330px] rounded-full border border-primary/10" />
-      <motion.div style={{ x: glowX, y: glowY }} className="absolute right-[8%] top-[12%] size-80 rounded-full bg-primary/20 blur-[110px]" />
-
-      <div className="relative flex h-full min-h-[680px] flex-col justify-between p-12 xl:p-16">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2 text-xs font-medium text-slate-400">
-            <span className="relative flex size-2"><span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-400 opacity-50" /><span className="relative size-2 rounded-full bg-emerald-400" /></span>
-            Operations online
-          </div>
-          <Zap className="size-5 text-primary" fill="currentColor" />
-        </div>
-
-        <div className="relative mx-auto w-full max-w-3xl py-14">
-          <motion.div style={{ x: cardX, y: cardY }} className="relative rounded-[32px] border border-white/10 bg-white/[0.055] p-7 shadow-[0_40px_120px_rgba(0,0,0,.5)] backdrop-blur-xl xl:p-9">
-            <div className="mb-10 flex items-start justify-between">
-              <div>
-                <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Today’s pulse</p>
-                <p className="mt-2 text-2xl font-medium tracking-tight">{brand.displayName}</p>
-              </div>
-              {brand.logoUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={brand.logoUrl} alt="" className="h-12 w-auto object-contain drop-shadow-[0_12px_25px_color-mix(in_oklab,var(--primary)_28%,transparent)]" />
-              ) : null}
-            </div>
-            <div className="grid grid-cols-3 gap-3">
-              <Metric value="14" label="Active leads" accent />
-              <Metric value="6" label="Open quotes" />
-              <Metric value="3" label="Follow-ups" />
-            </div>
-            <div className="mt-7 rounded-2xl border border-white/[0.06] bg-black/20 p-4">
-              <div className="mb-5 flex items-center justify-between text-xs"><span className="text-slate-400">Team momentum</span><span className="text-emerald-400">+18% this week</span></div>
-              <div className="flex h-20 items-end gap-2">
-                {[38, 52, 44, 68, 58, 82, 72, 96, 84, 100].map((height, index) => <div key={height + index} className={`flex-1 rounded-t-sm ${index === 9 ? "bg-primary" : "bg-white/10"}`} style={{ height: `${height}%` }} />)}
-              </div>
-            </div>
-            <div className="absolute -bottom-5 -right-5 flex items-center gap-3 rounded-2xl border border-white/10 bg-[#171a18]/95 px-4 py-3 shadow-2xl backdrop-blur-xl">
-              <span className="flex size-8 items-center justify-center rounded-full bg-emerald-400/10 text-emerald-400"><Check className="size-4" /></span>
-              <div><p className="text-xs font-medium">Follow-up complete</p><p className="mt-0.5 text-[10px] text-slate-500">Customer journey updated</p></div>
-            </div>
-          </motion.div>
-        </div>
-
-        <div>
-          {/* Any business's words, not one dealer's ("Every vehicle. One electric
-              rhythm." was Denago's, shown to every workspace). */}
-          <p className="max-w-xl text-3xl font-medium leading-tight tracking-[-0.035em] text-white xl:text-4xl">Every lead. Every customer.<br /><span className="text-slate-500">All in one place.</span></p>
-          <p className="mt-4 max-w-md text-sm leading-6 text-slate-500">{brand.tagline ?? `The command centre for ${brand.displayName}: leads, customers and the follow-ups that keep them.`}</p>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-/**
- * Tablet portrait (md up to lg): "Today's pulse" folded down to its three
- * numbers, where the full panel has no room. The SAME fixed illustrative
- * figures as the big panel — this page is public, so it never shows real
- * workspace data. Hidden on phones and from screen readers.
- */
-function PulseStrip() {
-  return (
-    <div aria-hidden="true" className="mt-10 hidden md:block lg:hidden">
-      <p className="mb-3 text-[10px] uppercase tracking-[0.22em] text-slate-600">Today’s pulse</p>
-      <div className="grid grid-cols-3 gap-3">
-        <Metric value="14" label="Active leads" accent />
-        <Metric value="6" label="Open quotes" />
-        <Metric value="3" label="Follow-ups" />
-      </div>
-    </div>
-  );
-}
-
-function Metric({ value, label, accent = false }: { value: string; label: string; accent?: boolean }) {
-  return <div className={`rounded-2xl border p-4 ${accent ? "border-primary/20 bg-primary/10" : "border-white/[0.06] bg-white/[0.025]"}`}><p className={`text-2xl font-semibold ${accent ? "text-primary" : "text-white"}`}>{value}</p><p className="mt-1 text-[11px] text-slate-500">{label}</p></div>;
-}
 
 function subscribeToDisplayMode(onChange: () => void) {
   const query = window.matchMedia("(display-mode: standalone)");

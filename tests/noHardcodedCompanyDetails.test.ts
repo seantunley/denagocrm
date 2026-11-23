@@ -31,7 +31,6 @@ const COMPANY_LITERALS =
  */
 const ALLOWED: Record<string, string> = {
   // Staff-only screens: example placeholders and the platform's own webhook URLs.
-  "src/app/(app)/settings/company/page.tsx": "staff — example placeholders on the Company Profile form",
   "src/app/(app)/settings/helpdesk/page.tsx": "staff — example placeholder",
   "src/app/(app)/settings/page.tsx": "staff — SMTP/IMAP example placeholders and the platform's webhook URLs",
   "src/components/settings/WorkspaceIntegrationRows.tsx": "staff (platform owner only) — the platform's webhook URLs on Settings → Integrations",
