@@ -3,6 +3,7 @@ import { headers } from "next/headers";
 import { Geist, Geist_Mono } from "next/font/google";
 import { DEFAULT_BRAND, brandForHost, brandIcons } from "@/lib/tenantBrand";
 import { PLATFORM_NAME } from "@/lib/platformIdentity";
+import { PLATFORM, isPlatformHost } from "@/lib/platformLegal";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -49,8 +50,9 @@ export const dynamic = "force-dynamic";
  * metadata that throws would take the whole document with it.
  */
 export async function generateMetadata(): Promise<Metadata> {
-  const brand = await brandForHost((await headers()).get("host")).catch(() => DEFAULT_BRAND);
-  const title = brand.tenantId ? brand.displayName : PLATFORM_NAME;
+  const host = (await headers()).get("host");
+  const brand = await brandForHost(host).catch(() => DEFAULT_BRAND);
+  const title = brand.tenantId ? brand.displayName : isPlatformHost(host) ? PLATFORM.name : PLATFORM_NAME;
   return {
     title,
     description: brand.tagline ?? `Customer, sales and service management for ${title}`,

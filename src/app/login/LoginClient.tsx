@@ -1,6 +1,7 @@
 "use client";
 import BrandLogo from "@/components/BrandLogo";
 
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useActionState, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { motion, useMotionValue, useReducedMotion, useSpring, useTransform } from "framer-motion";
@@ -568,6 +569,13 @@ function Shell({ children, brand }: { children: React.ReactNode; brand: LoginBra
         </div>
         <footer className="mt-auto flex items-center justify-between text-[10px] uppercase tracking-[0.14em] text-slate-700 sm:mt-0 short:mt-auto">
           <span>{brand.displayName}</span>
+          {brand.platformLegal && (
+            <nav className="flex gap-3 text-slate-500">
+              <Link className="hover:text-slate-300" href="/legal/privacy">Privacy</Link>
+              <Link className="hover:text-slate-300" href="/legal/terms">Terms</Link>
+              <Link className="hover:text-slate-300" href="/legal/data-deletion">Data deletion</Link>
+            </nav>
+          )}
           <span className="hidden sm:inline">v{APP_VERSION}</span>
         </footer>
       </section>
