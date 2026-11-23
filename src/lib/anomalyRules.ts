@@ -69,7 +69,7 @@ export function claimSpikes(claims: readonly { model: string; claimedAt: Date }[
     .sort((a, b) => b.recent - a.recent || a.model.localeCompare(b.model));
 }
 
-/* ── One person's first replies getting slower ───────────────────────── */
+/* ── First replies to customers getting slower (the workspace's, no one named) ── */
 
 export const REPLY_MIN_RECENT = 5;
 export const REPLY_MIN_BASELINE = 10;
@@ -83,59 +83,34 @@ export function median(values: readonly number[]): number {
   return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
-export type ReplySlip = { person: string; recentMinutes: number; usualMinutes: number; tickets: number };
+export type ReplySlip = { recentMinutes: number; usualMinutes: number; tickets: number };
 
 /**
- * People whose median time to a first reply over the last 14 days is at least
- * double their OWN median for the 8 weeks before, and at least 30 minutes
- * slower. Compared with themselves, never with a colleague: a part-timer is not
- * "slow" for being part-time. The median, so one ticket left over a weekend
- * cannot flag anybody.
+ * The workspace's median time from a customer opening a ticket to its first staff reply, over the last 14 days, when
+ * it is at least double the median for the 8 weeks before and at least 30 minutes slower. The median, so one ticket
+ * left over a weekend can't trip it.
+ *
+ * NO ONE IS NAMED (review of #1196). That time includes any wait before a ticket reached the person who answered it —
+ * unassigned, or with someone else first — and the CRM keeps no record of when a ticket changed hands, so it can't be
+ * honestly put on one person. Staff-opened tickets are left out by the caller: their clock would start at an internal
+ * note, not a customer waiting.
  */
-/**
- * Who wrote a ticket's first reply — NOT its current assignee, who may have taken it over afterwards. The reply's
- * message is written in the same step that sets firstResponseAt (helpdesk.ts), so it is the staff message closest to
- * that time; a staff-opened ticket's opening message (its description) comes earlier and is not a reply.
- */
-const FIRST_REPLY_MATCH_MS = 5 * 60_000;
-
-export function firstReplier(staffMessages: readonly { userId: string | null; createdAt: Date }[], firstResponseAt: Date): string | null {
-  let best: { userId: string; gap: number } | null = null;
-  for (const message of staffMessages) {
-    if (!message.userId) continue;
-    const gap = Math.abs(message.createdAt.getTime() - firstResponseAt.getTime());
-    // Written in the same step, so seconds apart at most. Nothing that close (the reply's message is gone) → no one is credited.
-    if (gap > FIRST_REPLY_MATCH_MS) continue;
-    if (!best || gap < best.gap) best = { userId: message.userId, gap };
-  }
-  return best?.userId ?? null;
-}
-
-export function replySlips(
-  tickets: readonly { personId: string; createdAt: Date; firstResponseAt: Date }[],
-  names: ReadonlyMap<string, string>,
-  now: Date,
-): ReplySlip[] {
+export function replySlip(tickets: readonly { createdAt: Date; firstResponseAt: Date }[], now: Date): ReplySlip | null {
   const recentFrom = now.getTime() - REPLY_RECENT_DAYS * DAY;
   const baselineFrom = recentFrom - REPLY_BASELINE_DAYS * DAY;
-  const byPerson = new Map<string, { recent: number[]; baseline: number[] }>();
+  const recent: number[] = [];
+  const baseline: number[] = [];
   for (const ticket of tickets) {
     const opened = ticket.createdAt.getTime();
     const minutes = (ticket.firstResponseAt.getTime() - opened) / 60_000;
     if (opened < baselineFrom || opened > now.getTime() || !(minutes >= 0)) continue;
-    const row = byPerson.get(ticket.personId) ?? { recent: [], baseline: [] };
-    (opened >= recentFrom ? row.recent : row.baseline).push(minutes);
-    byPerson.set(ticket.personId, row);
+    (opened >= recentFrom ? recent : baseline).push(minutes);
   }
-  const slips: ReplySlip[] = [];
-  for (const [personId, row] of byPerson) {
-    if (row.recent.length < REPLY_MIN_RECENT || row.baseline.length < REPLY_MIN_BASELINE) continue;
-    const recentMinutes = median(row.recent);
-    const usualMinutes = median(row.baseline);
-    if (recentMinutes < REPLY_FACTOR * usualMinutes || recentMinutes - usualMinutes < REPLY_MIN_SLIP_MINUTES) continue;
-    slips.push({ person: names.get(personId)?.trim() || "A team member", recentMinutes, usualMinutes, tickets: row.recent.length });
-  }
-  return slips.sort((a, b) => b.recentMinutes / Math.max(b.usualMinutes, 1) - a.recentMinutes / Math.max(a.usualMinutes, 1));
+  if (recent.length < REPLY_MIN_RECENT || baseline.length < REPLY_MIN_BASELINE) return null;
+  const recentMinutes = median(recent);
+  const usualMinutes = median(baseline);
+  if (recentMinutes < REPLY_FACTOR * usualMinutes || recentMinutes - usualMinutes < REPLY_MIN_SLIP_MINUTES) return null;
+  return { recentMinutes, usualMinutes, tickets: recent.length };
 }
 
 /* ── Discounts well above what this workspace usually gives ──────────── */
@@ -216,9 +191,9 @@ export function duration(minutes: number): string {
 /** A name on one line: no line breaks or control characters from a record's own text. */
 const oneLine = (text: string) => text.replace(/[\u0000-\u001f\u007f]+/g, " ").trim().slice(0, 80);
 
-export type AnomalyFindings = { claims: ClaimSpike[]; replies: ReplySlip[]; discounts: UnusualDiscounts | null };
+export type AnomalyFindings = { claims: ClaimSpike[]; replies: ReplySlip | null; discounts: UnusualDiscounts | null };
 
-export const findingCount = (found: AnomalyFindings): number => found.claims.length + found.replies.length + (found.discounts?.quotes.length ?? 0);
+export const findingCount = (found: AnomalyFindings): number => found.claims.length + (found.replies ? 1 : 0) + (found.discounts?.quotes.length ?? 0);
 
 /** The email — or nothing to send in a week where nothing stood out. */
 export function anomalyDigestEmail(input: { brand: string; origin: string } & AnomalyFindings): { subject: string; text: string } | null {
@@ -234,19 +209,23 @@ export function anomalyDigestEmail(input: { brand: string; origin: string } & An
     lines.push("  These are counts, not rates — a model that is selling faster will have more claims.", `  ${input.origin}/warranty`, "");
   }
 
-  if (input.replies.length) {
-    lines.push("FIRST REPLIES GETTING SLOWER");
-    for (const slip of input.replies) {
-      lines.push(`  - ${oneLine(slip.person)}: typically ${duration(slip.recentMinutes)} to a first reply over the last ${REPLY_RECENT_DAYS} days (usually ${duration(slip.usualMinutes)}), across ${slip.tickets} tickets.`);
-    }
-    lines.push("  Each person is compared with their own earlier weeks. Leave or a heavier load would show up here too.", `  ${input.origin}/cases`, "");
+  if (input.replies) {
+    const slip = input.replies;
+    lines.push(
+      "FIRST REPLIES TO CUSTOMERS GETTING SLOWER",
+      `  - Typically ${duration(slip.recentMinutes)} from a customer opening a ticket to its first reply over the last ${REPLY_RECENT_DAYS} days (usually ${duration(slip.usualMinutes)}), across ${slip.tickets} tickets.`,
+      "  For the whole team, from when the ticket was opened — time waiting before it reached someone counts too. Leave or a heavier load would show up here.",
+      `  ${input.origin}/cases`,
+      "",
+    );
   }
 
   if (input.discounts) {
     lines.push("DISCOUNTS ABOVE THE USUAL");
     const listed = input.discounts.quotes.slice(0, DISCOUNT_MAX_LISTED);
     for (const quote of listed) {
-      lines.push(`  - Q-${quote.number}: ${pct(quote.pct)} off${quote.by ? ` · ${oneLine(quote.by)}` : ""}`, `    ${input.origin}/quotes/${quote.id}`);
+      // "created by": whoever made the quote, not necessarily who set the discount or sent it (review of #1196).
+      lines.push(`  - Q-${quote.number}: ${pct(quote.pct)} off${quote.by ? ` · created by ${oneLine(quote.by)}` : ""}`, `    ${input.origin}/quotes/${quote.id}`);
     }
     const more = input.discounts.quotes.length - listed.length;
     if (more > 0) lines.push(`  …and ${more} more.`);

@@ -20,9 +20,8 @@ import {
   anomalyDigestEmail,
   claimSpikes,
   findingCount,
-  firstReplier,
   quoteDiscountPct,
-  replySlips,
+  replySlip,
   unusualDiscounts,
   windowStart,
   type AnomalyFindings,
@@ -58,24 +57,14 @@ export async function findAnomalies(tenantId: string, now: Date): Promise<Anomal
           tenantId,
           createdAt: { gte: windowStart(now, REPLY_RECENT_DAYS + REPLY_BASELINE_DAYS) },
           firstResponseAt: { not: null },
+          // A customer was waiting: a staff-opened ticket's clock starts at an internal note (helpdesk.ts createTicket).
+          source: { not: "staff" },
         },
-        select: {
-          createdAt: true,
-          firstResponseAt: true,
-          // The opening message (staff-opened tickets) and the first reply are the first two; a third for safety.
-          messages: { where: { type: "staff", userId: { not: null } }, orderBy: { createdAt: "asc" }, take: 3, select: { userId: true, createdAt: true } },
-        },
+        select: { createdAt: true, firstResponseAt: true },
         orderBy: { createdAt: "desc" },
         take: READ_CAP,
       })
     : [];
-  // Credited to whoever wrote the first reply, not the current assignee (a transfer would blame the wrong person).
-  const replied = tickets.flatMap((ticket) => {
-    const personId = ticket.firstResponseAt ? firstReplier(ticket.messages, ticket.firstResponseAt) : null;
-    return personId && ticket.firstResponseAt ? [{ personId, createdAt: ticket.createdAt, firstResponseAt: ticket.firstResponseAt }] : [];
-  });
-  const personIds = [...new Set(replied.map((ticket) => ticket.personId))];
-  const people = personIds.length ? await prisma.user.findMany({ where: { id: { in: personIds } }, select: { id: true, name: true } }) : [];
 
   // Dated by when each quote was FIRST SENT (Quote.sentAt, set by a trigger), not when it was drafted. Whatever its
   // status now: a quote sent and later declined or cancelled was still offered. A draft never sent has no sentAt. The
@@ -104,7 +93,10 @@ export async function findAnomalies(tenantId: string, now: Date): Promise<Anomal
 
   return {
     claims: claimSpikes(claims.map((claim) => ({ model: claim.vehicle.model, claimedAt: claim.claimedAt })), now),
-    replies: replySlips(replied, new Map(people.map((person) => [person.id, person.name])), now),
+    replies: replySlip(
+      tickets.flatMap((ticket) => (ticket.firstResponseAt ? [{ createdAt: ticket.createdAt, firstResponseAt: ticket.firstResponseAt }] : [])),
+      now,
+    ),
     discounts: unusualDiscounts(discounted, now),
   };
 }

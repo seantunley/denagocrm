@@ -5,11 +5,10 @@ import {
   anomalyDigestEmail,
   claimSpikes,
   duration,
-  firstReplier,
   median,
   percentile,
   quoteDiscountPct,
-  replySlips,
+  replySlip,
   unusualDiscounts,
   type DiscountQuote,
 } from "../src/lib/anomalyRules";
@@ -41,52 +40,39 @@ test("a model with claims but no history says so, and model names match whatever
   assert.equal(found[0].usual, 0);
 });
 
-const tickets = (personId: string, rows: [age: number, minutes: number][]) =>
-  rows.map(([age, minutes]) => ({ personId, createdAt: daysAgo(age), firstResponseAt: new Date(daysAgo(age).getTime() + minutes * 60_000) }));
+const tickets = (rows: [age: number, minutes: number][]) =>
+  rows.map(([age, minutes]) => ({ createdAt: daysAgo(age), firstResponseAt: new Date(daysAgo(age).getTime() + minutes * 60_000) }));
 const spread = (from: number, n: number, minutes: number): [number, number][] => Array.from({ length: n }, (_, i) => [from + i * 3, minutes]);
 
-test("someone whose first replies doubled against their own earlier weeks is flagged", () => {
-  const rows = [...tickets("u1", spread(1, 5, 180)), ...tickets("u1", spread(15, 12, 40))];
-  assert.deepEqual(replySlips(rows, new Map([["u1", "Thandi M"]]), NOW), [{ person: "Thandi M", recentMinutes: 180, usualMinutes: 40, tickets: 5 }]);
+test("first replies to customers that doubled against the team's earlier weeks are flagged, with no one named", () => {
+  assert.deepEqual(replySlip([...tickets(spread(1, 5, 180)), ...tickets(spread(15, 12, 40))], NOW), { recentMinutes: 180, usualMinutes: 40, tickets: 5 });
 });
 
-test("too few tickets, a small slip, or a steadily slow person is not flagged", () => {
-  const names = new Map<string, string>();
+test("too few tickets, a small slip, or a steadily slow team is not flagged", () => {
   // 4 recent tickets: not enough to judge.
-  assert.deepEqual(replySlips([...tickets("a", spread(1, 4, 600)), ...tickets("a", spread(15, 12, 30))], names, NOW), []);
+  assert.equal(replySlip([...tickets(spread(1, 4, 600)), ...tickets(spread(15, 12, 30))], NOW), null);
   // Doubled, but only from 10 to 25 minutes.
-  assert.deepEqual(replySlips([...tickets("b", spread(1, 5, 25)), ...tickets("b", spread(15, 12, 10))], names, NOW), []);
+  assert.equal(replySlip([...tickets(spread(1, 5, 25)), ...tickets(spread(15, 12, 10))], NOW), null);
   // Always takes four hours: slow, but nothing changed.
-  assert.deepEqual(replySlips([...tickets("c", spread(1, 5, 240)), ...tickets("c", spread(15, 12, 240))], names, NOW), []);
-  // No baseline of their own (a new starter).
-  assert.deepEqual(replySlips(tickets("d", spread(1, 6, 900)), names, NOW), []);
+  assert.equal(replySlip([...tickets(spread(1, 5, 240)), ...tickets(spread(15, 12, 240))], NOW), null);
+  // No earlier weeks to compare with.
+  assert.equal(replySlip(tickets(spread(1, 6, 900)), NOW), null);
 });
 
-test("one ticket left over a weekend cannot flag anybody", () => {
-  const rows = [...tickets("u1", [[1, 30], [2, 35], [3, 40], [4, 30], [5, 4000]]), ...tickets("u1", spread(15, 12, 30))];
-  assert.deepEqual(replySlips(rows, new Map(), NOW), []);
+test("one ticket left over a weekend cannot trip it", () => {
+  assert.equal(replySlip([...tickets([[1, 30], [2, 35], [3, 40], [4, 30], [5, 4000]]), ...tickets(spread(15, 12, 30))], NOW), null);
 });
 
 test("a reply recorded before the ticket opened is ignored, not counted as instant", () => {
-  const rows = [...tickets("u1", spread(1, 5, -50)), ...tickets("u1", spread(15, 12, 40))];
-  assert.deepEqual(replySlips(rows, new Map(), NOW), []);
+  assert.equal(replySlip([...tickets(spread(1, 5, -50)), ...tickets(spread(15, 12, 40))], NOW), null);
 });
 
-test("a first reply is credited to whoever wrote it, not the current assignee", () => {
-  const at = (minutes: number) => new Date(NOW.getTime() + minutes * 60_000);
-  // Customer-opened, answered by A, later transferred to B: the reply is A's (the assignee isn't an input at all).
-  assert.equal(firstReplier([{ userId: "A", createdAt: at(30) }, { userId: "B", createdAt: at(300) }], at(30)), "A");
-  // Staff-opened by B (its description is a staff message), first answered by A.
-  assert.equal(firstReplier([{ userId: "B", createdAt: at(0) }, { userId: "A", createdAt: at(45) }], at(45)), "A");
-  // A message without an author is never credited; nothing left → not counted.
-  assert.equal(firstReplier([{ userId: null, createdAt: at(10) }], at(10)), null);
-  assert.equal(firstReplier([], at(10)), null);
-  // The reply's own message missing: a later message from someone else is not credited instead.
-  assert.equal(firstReplier([{ userId: "B", createdAt: at(300) }], at(30)), null);
-  // The digest takes it from here, not from assignedToId.
+test("reply times name no one, and leave out tickets staff opened themselves", () => {
+  // No record of when a ticket changed hands, so the wait before it reached someone can't be put on them.
   const digest = readFileSync("src/lib/anomalyDigest.ts", "utf8");
-  assert.match(digest, /firstReplier\(ticket\.messages, ticket\.firstResponseAt\)/);
-  assert.doesNotMatch(digest, /assignedToId/);
+  assert.match(digest, /source: \{ not: "staff" \}/);
+  assert.match(digest, /select: \{ createdAt: true, firstResponseAt: true \}/);
+  assert.doesNotMatch(digest, /assignedToId|personId|firstReplier/);
 });
 
 test("discounts are dated by when the quote was first sent, whatever happened to it after", () => {
@@ -145,7 +131,7 @@ test("a workspace without enough history, or with nothing above its norm, hears 
 });
 
 test("a quiet week sends no email at all", () => {
-  assert.equal(anomalyDigestEmail({ brand: "Denago", origin: "https://crm.example", claims: [], replies: [], discounts: null }), null);
+  assert.equal(anomalyDigestEmail({ brand: "Denago", origin: "https://crm.example", claims: [], replies: null, discounts: null }), null);
 });
 
 test("the email shows each recent figure beside the usual one, links to the record, and says how to stop it", () => {
@@ -153,14 +139,16 @@ test("the email shows each recent figure beside the usual one, links to the reco
     brand: "Denago Cape Town",
     origin: "https://crm.example",
     claims: [{ model: "Rover XL", recent: 4, usual: 1 }, { model: "Nomad", recent: 3, usual: 0 }],
-    replies: [{ person: "Thandi M", recentMinutes: 200, usualMinutes: 40, tickets: 6 }],
+    replies: { recentMinutes: 200, usualMinutes: 40, tickets: 6 },
     discounts: { usualTopPct: 5, quotes: [quote(2, 2, 20), quote(1, 1, 12.5, null)] },
   })!;
   assert.equal(email.subject, "Denago Cape Town: 5 things out of the ordinary this week");
   assert.match(email.text, /Rover XL: 4 claims in the last 30 days \(usually about 1\)/);
   assert.match(email.text, /Nomad: 3 claims in the last 30 days \(usually none\)/);
-  assert.match(email.text, /Thandi M: typically 3 h 20 min to a first reply over the last 14 days \(usually 40 min\), across 6 tickets/);
-  assert.match(email.text, /Q-2: 20% off · Sipho\n {4}https:\/\/crm\.example\/quotes\/q2/);
+  assert.match(email.text, /Typically 3 h 20 min from a customer opening a ticket to its first reply over the last 14 days \(usually 40 min\), across 6 tickets/);
+  assert.match(email.text, /For the whole team, from when the ticket was opened/);
+  // Whoever made the quote — not necessarily who set the discount.
+  assert.match(email.text, /Q-2: 20% off · created by Sipho\n {4}https:\/\/crm\.example\/quotes\/q2/);
   assert.match(email.text, /Q-1: 12\.5% off\n/);
   assert.match(email.text, /stayed at or under 5%/);
   assert.match(email.text, /Settings → Automatic jobs & messages/);
@@ -169,14 +157,14 @@ test("the email shows each recent figure beside the usual one, links to the reco
 
 test("a long list of discounted quotes is cut to ten with the rest counted", () => {
   const many = Array.from({ length: 13 }, (_, i) => quote(i + 1, 1, 30 - i));
-  const email = anomalyDigestEmail({ brand: "D", origin: "", claims: [], replies: [], discounts: { usualTopPct: 5, quotes: many } })!;
+  const email = anomalyDigestEmail({ brand: "D", origin: "", claims: [], replies: null, discounts: { usualTopPct: 5, quotes: many } })!;
   assert.equal(email.text.match(/^ {2}- Q-/gm)?.length, 10);
   assert.match(email.text, /…and 3 more\./);
   assert.match(email.subject, /13 things/);
 });
 
 test("a name from a record cannot add lines to the email", () => {
-  const email = anomalyDigestEmail({ brand: "D", origin: "", claims: [{ model: "Rover\nURGENT: pay invoice\n", recent: 3, usual: 0 }], replies: [], discounts: null })!;
+  const email = anomalyDigestEmail({ brand: "D", origin: "", claims: [{ model: "Rover\nURGENT: pay invoice\n", recent: 3, usual: 0 }], replies: null, discounts: null })!;
   assert.doesNotMatch(email.text, /^URGENT/m);
 });
 

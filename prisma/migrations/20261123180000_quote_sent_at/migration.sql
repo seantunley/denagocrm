@@ -28,6 +28,9 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- The weekly digest reads one workspace's quotes by sent date.
+CREATE INDEX IF NOT EXISTS "Quote_tenantId_sentAt_idx" ON "Quote" ("tenantId", "sentAt");
+
 DROP TRIGGER IF EXISTS "Quote_stamp_sent_at" ON "Quote";
 CREATE TRIGGER "Quote_stamp_sent_at"
   BEFORE INSERT OR UPDATE ON "Quote"

@@ -1706,6 +1706,8 @@ model Quote {
   @@index([leadId])
   @@index([contactId])
   @@index([createdById])
+  // The weekly digest reads one workspace's quotes by sent date (migration 20261123180000_quote_sent_at).
+  @@index([tenantId, sentAt])
 }
 
 model QuoteItem {
