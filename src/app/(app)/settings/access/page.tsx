@@ -19,6 +19,8 @@ import {
 import { resetTeamMemberPassword, revokeUserSessions, setUserDisabled } from "@/app/actions/security";
 import { formatDateTime } from "@/lib/format";
 import ModalTrigger from "@/components/Modal";
+import { AddUserForm } from "@/components/TeamForms";
+import OwnerUserControls from "@/components/OwnerUserControls";
 import { buttonVariants } from "@/components/ui/button";
 import { SettingsWorkspace } from "@/components/settings-workspace";
 import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
@@ -33,6 +35,8 @@ type UserRow = {
   disabledAt: Date | null;
   lastLoginAt: Date | null;
   failedLoginCount: number;
+  totpEnabledAt: Date | null;
+  emailOtpEnabled: boolean;
 };
 type TeamRow = { id: string; name: string; description: string | null; active: boolean; managerId: string | null };
 type TeamMemberRow = { teamId: string; userId: string; userName: string; isManager: boolean };
@@ -76,7 +80,7 @@ export default async function AccessSettingsPage() {
   const users = memberIds !== null && memberIds.length === 0
     ? []
     : await basePrisma.$queryRaw<UserRow[]>`
-        SELECT u."id", u."name", u."email", u."role", u."disabledAt", u."lastLoginAt", u."failedLoginCount"
+        SELECT u."id", u."name", u."email", u."role", u."disabledAt", u."lastLoginAt", u."failedLoginCount", u."totpEnabledAt", u."emailOtpEnabled"
         FROM "User" u
         WHERE (${memberIds === null}::boolean OR u."id" = ANY(${memberIds ?? []}::text[]))
         ORDER BY u."disabledAt" NULLS FIRST, u."name"
@@ -154,9 +158,15 @@ export default async function AccessSettingsPage() {
 
       {canManageSecurity && (
         <section className="card p-0 overflow-x-auto">
-          <div className="px-4 py-3 border-b border-border">
-            <h2 className="font-semibold">User security</h2>
-            <p className="text-xs text-muted-foreground mt-1">Disabling a user or revoking sessions takes effect on their next request.</p>
+          <div className="flex flex-wrap items-start justify-between gap-3 px-4 py-3 border-b border-border">
+            <div>
+              <h2 className="font-semibold">User security</h2>
+              <p className="text-xs text-muted-foreground mt-1">Disabling a user or revoking sessions takes effect on their next request.</p>
+            </div>
+            {/* Adding people lived only on the old Settings "Team" tab, which the menu no longer links to. */}
+            <ModalTrigger label={<><Plus className="size-4" />Add a team member</>} title="Add a team member" buttonClass="btn-primary btn-sm inline-flex items-center gap-1.5">
+              <AddUserForm />
+            </ModalTrigger>
           </div>
           <table className="table-base">
             <thead><tr><th>User</th><th>Status</th><th>Last login</th><th>Failed logins</th><th></th></tr></thead>
@@ -199,6 +209,14 @@ export default async function AccessSettingsPage() {
                             {user.disabledAt ? "Reactivate" : "Disable"}
                           </SaveButton>
                         </SaveForm>
+                        {/* Reset 2FA (and, for the platform owner, Make admin) — once only on the old Team tab. */}
+                        <OwnerUserControls
+                          userId={user.id}
+                          name={user.name}
+                          role={user.role as "owner" | "member"}
+                          has2fa={Boolean(user.totpEnabledAt || user.emailOtpEnabled)}
+                          canChangeRole={currentUser.role === "owner"}
+                        />
                       </div>
                     )}
                   </td>

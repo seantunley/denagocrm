@@ -69,16 +69,14 @@ const REPLACED_GENERATED_SLUGS = new Set([
   "studio-operational-templates",
   "studio-free-form-documents",
   "documents-generate-and-sign",
-  "admin-documents-templates",
   // articles/signing-and-inbox.ts — the signature train and inbound spam screening
   "signatures-sign-a-quote",
   "signatures-hub",
   "signing-workflows-builder",
-  "admin-signing-workflows",
   "inbox-overview",
   "inbox-replying",
-  // articles/administration.ts — the settings menu was regrouped
-  "admin-settings-overview",
+  // admin-documents-templates, admin-signing-workflows and admin-settings-overview were replaced the same way and
+  // their old copies are now gone from admin.json (help review, 2026-11-24).
 ]);
 const generated = (articles: unknown) => (articles as HelpArticle[]).filter((article) => !REPLACED_GENERATED_SLUGS.has(article.slug));
 
