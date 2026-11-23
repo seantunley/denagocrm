@@ -112,3 +112,16 @@ test("the run modes, the trace and the test run are all documented", () => {
     assert.ok(getArticle(slug), `missing journey article: ${slug}`);
   }
 });
+
+test("Connect WhatsApp is documented and the Settings card links to it", async () => {
+  const article = getArticle("connect-whatsapp-button");
+  assert.ok(article, "missing Connect WhatsApp article");
+  const text = JSON.stringify(article!.body);
+  for (const required of ["PIN", "payment method", "one** workspace", "Disconnect removes WhatsApp"]) {
+    assert.ok(text.includes(required), `Connect WhatsApp article is missing ${required}`);
+  }
+  assert.ok(searchArticles("connect whatsapp").some((a) => a.slug === "connect-whatsapp-button"));
+  const { readFile } = await import("node:fs/promises");
+  const box = await readFile(new URL("../src/components/settings/WhatsAppConnectBox.tsx", import.meta.url), "utf8");
+  assert.ok(box.includes('href="/help/connect-whatsapp-button"'), "the Settings card must link to the article");
+});
