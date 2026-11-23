@@ -90,7 +90,7 @@ test("connecting: state spent once, the number checked with Meta, claimed first,
   assert.ok(order.every((at, i) => at > 0 && (i === 0 || at > order[i - 1])), `claim → subscribe → register → store → register endpoint: ${order}`);
   // Undo: previous WhatsApp restored in one (interactive) transaction, the number released when newly taken.
   assert.match(connect, /\} catch \(error\) \{[\s\S]*?\.\$transaction\(async \(tx\) => \{\s*await tx\.tenantIntegrationCredential\.deleteMany\(\{ where: \{ tenantId: input\.tenantId, key: \{ in: CONNECTION_KEYS \} \} \}\);/);
-  assert.match(connect, /for \(const claim of newlyClaimed\) \{\s*await basePrisma\.channelIdentity\.updateMany\(/);
+  assert.match(connect, /for \(const claim of newlyClaimed\) \{\s*if \(keepAccount && claim\.channel === "whatsapp_account"\) continue;\s*await basePrisma\.channelIdentity\.updateMany\(/);
   // Snapshot BEFORE any claim, and every claim inside the undone block (review of #1187, as #1185 for Facebook).
   const tryAt = connect.indexOf("  try {\n    // CLAIMED atomically");
   assert.ok(tryAt > 0, "the claims open the try block");
@@ -108,11 +108,18 @@ test("one workspace per WhatsApp Business account: claimed before the number, re
   const connect = lib.slice(lib.indexOf("async function connectWhatsAppNumberLocked"), lib.indexOf("export async function connectedWhatsApp"));
   assert.ok(connect.indexOf('channel: "whatsapp_account", externalId: input.wabaId') > 0);
   assert.ok(connect.indexOf('channel: "whatsapp_account"') < connect.indexOf('channel: "whatsapp", externalId: input.phoneNumberId'), "account before number");
-  assert.match(connect, /if \(previousWaba && previousWaba !== input\.wabaId\) await releaseWhatsAppAccount\(input\.tenantId, previousWaba\);/);
-  const disconnect = lib.slice(lib.indexOf("async function disconnectWhatsAppLocked"));
-  const unsubscribe = disconnect.indexOf("/subscribed_apps`, token)");
-  const release = disconnect.indexOf("await releaseWhatsAppAccount(tenantId, connected.wabaId);");
-  assert.ok(unsubscribe > 0 && release > unsubscribe, "released after the unsubscribe");
+  // Switching accounts: the OLD one is unsubscribed with its own token, after the new connection stands (outside the undo).
+  const switchAt = connect.indexOf("if (previousWaba && previousWaba !== input.wabaId) await retireWhatsAppAccount(input.tenantId, previousWaba, previousToken);");
+  assert.ok(switchAt > connect.indexOf("    throw error;\n  }"), "after the undo block, so a refused unsubscribe can't undo the new connection");
+  assert.ok(connect.indexOf("const previousToken =") < connect.indexOf("  try {\n"), "old token read before anything is claimed");
+  // A failure after a NEW account was subscribed unsubscribes it before letting go; an account already held is left alone.
+  assert.match(connect, /const keepAccount = newAccount && subscribeTried && !\(await unsubscribeWhatsAppAccount\(input\.tenantId, input\.wabaId, token\)\);/);
+  assert.ok(connect.indexOf("subscribeTried = true;") < connect.indexOf('graph("POST", `${input.wabaId}/subscribed_apps`'), "marked before the call — a timeout may hide success");
+  // Disconnect retires through the same path; release only after Meta confirms.
+  assert.match(lib.slice(lib.indexOf("async function disconnectWhatsAppLocked")), /await retireWhatsAppAccount\(tenantId, connected\.wabaId, token\);/);
+  const retire = lib.slice(lib.indexOf("async function retireWhatsAppAccount"));
+  assert.match(retire, /if \(!\(await unsubscribeWhatsAppAccount\(tenantId, wabaId, token\)\)\) return;\s*await basePrisma\.channelIdentity\.updateMany/);
+  assert.match(lib, /\.then\(\(res\) => res\.success === true, \(\) => false\)/, "only Meta's confirmation counts");
 });
 
 test("the routes: owner session, same-browser cookie, nothing trusted beyond its shape", () => {

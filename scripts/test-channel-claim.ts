@@ -41,6 +41,8 @@ async function main() {
   const ids: string[] = [];
   const phones: string[] = [];
   const waba = `w${SFX}`;
+  const waba2 = `x${SFX}`;
+  const waba3 = `y${SFX}`;
   const realFetch = globalThis.fetch;
   let platformBefore: Awaited<ReturnType<typeof basePrisma.appSetting.findMany>> | null = null;
   const owner = async (externalId: string) =>
@@ -123,10 +125,11 @@ async function main() {
       await putSetting("META_APP_SECRET", "fake-secret");
       await putSetting("WA_SIGNUP_CONFIG_ID", "2000");
     });
-    phones.push(`9${SFX}1`, `9${SFX}2`, `9${SFX}3`, `9${SFX}4`, `9${SFX}\u00005`);
+    phones.push(`9${SFX}1`, `9${SFX}2`, `9${SFX}3`, `9${SFX}4`, `9${SFX}\u00005`, `9${SFX}6`, `9${SFX}7`, `9${SFX}8`);
     const metaGot: { phone: string; pin: string }[] = [];
-    const unsubscribed: string[] = [];
+    const unsubscribed: { waba: string; token: string }[] = [];
     let registerFails = false;
+    let unsubscribeFails = false;
     globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
       const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
       const path = url.pathname.replace(/^\/v[\d.]+\//, "");
@@ -135,8 +138,9 @@ async function main() {
       if (path === "oauth/access_token") return reply({ access_token: `token-${url.searchParams.get("code")}` });
       if (path.endsWith("/phone_numbers")) return reply({ data: phones.map((id) => ({ id, display_phone_number: `+27 ${id.slice(-4)}`, verified_name: "Test" })) });
       if (path.endsWith("/subscribed_apps")) {
-        if (init?.method === "DELETE") unsubscribed.push(path.split("/")[0]);
-        return reply({ success: true });
+        if (init?.method !== "DELETE") return reply({ success: true });
+        unsubscribed.push({ waba: path.split("/")[0], token: String((init.headers as Record<string, string>).Authorization).replace("Bearer ", "") });
+        return unsubscribeFails ? reply({ error: { message: "Try later" } }, 500) : reply({ success: true });
       }
       if (path.endsWith("/register")) {
         metaGot.push({ phone: path.split("/")[0], pin: String((JSON.parse(String(init?.body ?? "{}")) as { pin?: string }).pin) });
@@ -145,8 +149,9 @@ async function main() {
       return reply({ display_phone_number: "+27 0000", verified_name: "Test" });
     }) as typeof fetch;
     const begin = async (tenantId = A) => (await startWhatsAppSignup({ tenantId, userId: "test", origin: "https://a.example" }))!.state;
-    const connectWa = (state: string, phone: string, tenantId = A) => connectWhatsAppNumber({ tenantId, state, code: `c-${phone}`, wabaId: waba, phoneNumberId: phone });
-    const account = () => basePrisma.channelIdentity.findUnique({ where: { channel_externalId: { channel: "whatsapp_account", externalId: waba } }, select: { tenantId: true, disabledAt: true } });
+    const connectWa = (state: string, phone: string, tenantId = A, wabaId = waba) => connectWhatsAppNumber({ tenantId, state, code: `c-${phone}`, wabaId, phoneNumberId: phone });
+    const accountOf = (wabaId: string) => basePrisma.channelIdentity.findUnique({ where: { channel_externalId: { channel: "whatsapp_account", externalId: wabaId } }, select: { tenantId: true, disabledAt: true } });
+    const account = () => accountOf(waba);
     const pins = async () => JSON.parse((await resolveTenantCredential(A, "WA_REGISTER_PINS")) ?? "{}") as Record<string, string>;
     const current = () => resolveTenantCredential(A, "WA_PHONE_NUMBER_ID");
 
@@ -183,7 +188,7 @@ async function main() {
     check("WhatsApp: another workspace can't connect a number on an account a workspace holds", /Business account is already connected/.test(String(refusedB?.message)), String(refusedB));
     check("…the account stays A's, and B stores nothing and claims nothing", (await account())?.tenantId === A && !(await resolveTenantCredential(B, "WA_PHONE_NUMBER_ID")) && !(await basePrisma.channelIdentity.findFirst({ where: { channel: "whatsapp", externalId: phones[3], disabledAt: null } })));
     await disconnectWhatsApp(A);
-    check("A disconnecting unsubscribes the account, then releases it", unsubscribed.at(-1) === waba && (await account())?.disabledAt != null);
+    check("A disconnecting unsubscribes the account, then releases it", unsubscribed.at(-1)?.waba === waba && (await account())?.disabledAt != null);
     // A failure right after the account is claimed (the number's lookup throws: a NUL in its id) must release it.
     const sNul = await begin();
     check("a claim that throws after the account is claimed fails the connect", await connectWa(sNul, phones[4]).then(() => false, () => true));
@@ -191,6 +196,28 @@ async function main() {
     const sB2 = await begin(B);
     await connectWa(sB2, phones[3], B);
     check("…so B can now connect it", (await account())?.tenantId === B && (await resolveTenantCredential(B, "WA_PHONE_NUMBER_ID")) === phones[3]);
+
+    // 8. SWITCHING ACCOUNTS (review of #1187): B holds `waba` (end of 7). Another number on the SAME account leaves it
+    //    subscribed; moving to a DIFFERENT account unsubscribes the old one with its own token; a new account that fails
+    //    after subscribing is unsubscribed; Meta refusing an unsubscribe keeps the old account held.
+    const bNumber = () => resolveTenantCredential(B, "WA_PHONE_NUMBER_ID");
+    unsubscribed.length = 0;
+    await connectWa(await begin(B), phones[5], B);
+    check("WhatsApp: another number on the SAME account doesn't unsubscribe it", unsubscribed.length === 0 && (await account())?.tenantId === B && !(await account())?.disabledAt);
+    await connectWa(await begin(B), phones[6], B, waba2);
+    check("switching to a DIFFERENT account unsubscribes the old one with its own token, then releases it",
+      unsubscribed.length === 1 && unsubscribed[0].waba === waba && unsubscribed[0].token === `token-c-${phones[5]}` && (await account())?.disabledAt != null && (await accountOf(waba2))?.tenantId === B, JSON.stringify(unsubscribed));
+    unsubscribed.length = 0;
+    registerFails = true;
+    check("a new account refused at register after subscribing fails the connect", await connectWa(await begin(B), phones[7], B, waba3).then(() => false, () => true));
+    registerFails = false;
+    check("…unsubscribes that new account with the new token and releases it",
+      unsubscribed.length === 1 && unsubscribed[0].waba === waba3 && unsubscribed[0].token === `token-c-${phones[7]}` && (await accountOf(waba3))?.disabledAt != null, JSON.stringify(unsubscribed));
+    check("…and leaves the existing connection and its account alone", (await bNumber()) === phones[6] && (await accountOf(waba2))?.disabledAt === null);
+    unsubscribeFails = true;
+    await connectWa(await begin(B), phones[3], B, waba);
+    unsubscribeFails = false;
+    check("Meta refusing the old account's unsubscribe: the switch stands, and the old account stays held", (await bNumber()) === phones[3] && (await accountOf(waba2))?.tenantId === B && (await accountOf(waba2))?.disabledAt === null);
   } finally {
     globalThis.fetch = realFetch;
     if (platformBefore) {
@@ -200,7 +227,8 @@ async function main() {
     await basePrisma.tenantIntegrationCredential.deleteMany({ where: { tenantId: { in: [A, B] }, key: { startsWith: "WA_" } } });
     await basePrisma.appSetting.deleteMany({ where: { tenantId: { in: [A, B] }, key: { startsWith: "WA_SIGNUP:" } } });
     await basePrisma.channelIdentity.deleteMany({ where: { channel: "whatsapp", externalId: { in: phones.filter((id) => !id.includes("\u0000")) } } });
-    await basePrisma.channelIdentity.deleteMany({ where: { channel: "whatsapp_account", externalId: waba } });
+    await basePrisma.channelIdentity.deleteMany({ where: { channel: "whatsapp_account", externalId: { in: [waba, waba2, waba3] } } });
+    await basePrisma.errorLog.deleteMany({ where: { tenantId: { in: [A, B] } } });
     await basePrisma.tenantIntegrationCredential.deleteMany({ where: { tenantId: { in: [A, B] }, key: { in: Object.values(CONNECTED) } } });
     await basePrisma.appSetting.deleteMany({ where: { tenantId: { in: [A, B] }, key: PENDING_KEY } });
     await basePrisma.appSetting.deleteMany({ where: { tenantId: { in: [A, B] }, key: LOCK } });
