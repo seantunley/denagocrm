@@ -26,6 +26,11 @@ export const PLATFORM = {
 
 export const PLATFORM_URL = `https://${PLATFORM.domain}`;
 
+/** True when a request's Host header is the platform's own address (any port, any case). */
+export function isPlatformHost(host: string | null | undefined): boolean {
+  return (host ?? "").trim().toLowerCase().split(":")[0] === PLATFORM.domain;
+}
+
 export function companyComplete(): boolean {
   return Boolean(PLATFORM.companyName && PLATFORM.registrationNumber && PLATFORM.address && PLATFORM.privacyEmail);
 }
