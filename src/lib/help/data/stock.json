@@ -1,1 +1,798 @@
-[{"slug":"stock-operations-overview","title":"Stock operations overview","summary":"Understand the stock dashboard, lifecycle statuses, filters and the demand-versus-supply view for every physical Denago unit.","category":"stock","audience":"everyone","keywords":["stock","inventory","dashboard","units","status","overview"],"body":[{"type":"p","text":"Stock operations tracks every physical Denago unit from supplier order through reservation, PDI, delivery and warranty activation. Anyone with stock access can view the inventory; creating orders and moving units requires the **stock.manage** permission."},{"type":"h","text":"Reading the dashboard"},{"type":"p","text":"The metric cards at the top summarise your inventory: **Available** (with total landed value), **Incoming & inspection**, **Committed** (reserved plus allocated) and **Average stock age**. A warning banner appears when items need attention."},{"type":"list","items":["Reservations expiring within 24 hours","Overdue purchase orders (past their expected date)","Received units still missing a serial","Available units held for more than 60 days"]},{"type":"h","text":"The stock lifecycle"},{"type":"p","text":"Each unit sits in exactly one lifecycle status. Units move through the chain below; the list view sorts exceptions (hold, damaged, ready) to the top so they are never missed."},{"type":"table","headers":["Status","Meaning"],"rows":[["Incoming","On order from a supplier, not yet arrived"],["Awaiting inspection","Received, pending physical check and serial capture"],["Available","In stock and ready to reserve or allocate"],["Reserved","Held against an open lead"],["Allocated","Committed to an accepted quote"],["PDI","In pre-delivery inspection"],["Ready","PDI passed, ready for customer handover"],["Delivered","Handed over; now a customer vehicle"],["On hold / Damaged","Removed from normal flow pending a decision"]]},{"type":"h","text":"Finding a unit"},{"type":"steps","items":["Use the search box to match on serial, stock number, model, colour, PO reference or customer name.","Narrow with the model, location and age (30/60/90+ days) selectors, then choose Filter.","Use the status pills to jump to a single stage, for example Available or Ready.","Open any row to see the unit's full identity, history and next actions."]},{"type":"h","text":"Demand versus supply"},{"type":"p","text":"The demand-versus-supply panel compares open CRM leads against available and incoming stock for each model, flagging shortages so purchasing stays ahead of sales demand."},{"type":"callout","tone":"info","text":"Landed cost figures and the manager quick-links (ageing stock, receiving queue, ready for revenue) are only shown to users with stock.manage."}]},{"slug":"stock-purchase-orders-and-receiving","title":"Purchase orders and receiving stock","summary":"Raise supplier purchase orders, receive arrivals partially or in full, and cancel outstanding orders.","category":"stock","audience":"managers","keywords":["purchase order","po","receiving","supplier","goods receipt","incoming"],"body":[{"type":"p","text":"Purchase orders bring new units into the system as **incoming** stock. Receiving moves arrived units into inspection. These actions require the **stock.manage** permission."},{"type":"h","text":"Raising a purchase order"},{"type":"steps","items":["From Stock operations, choose Purchase order.","Set the supplier (defaults to Denago), an optional reference, expected date and notes.","Add one or more lines, each with a product, optional colour, quantity, unit cost and freight.","Submit. One incoming stock unit is created for every quantity ordered, each carrying the line's cost."]},{"type":"callout","tone":"info","text":"Quantity per line is capped between 1 and 200. The order opens in the Ordered state and appears under Open purchase orders until fully received or cancelled."},{"type":"h","text":"Receiving arrivals"},{"type":"p","text":"Receiving supports genuine partial receipts. You can receive everything at once, or take in only some units per line and receive the rest later."},{"type":"steps","items":["Under Open purchase orders, choose Receive on the relevant order.","Enter how many units to receive against each line (or receive all outstanding).","Add an optional receipt reference and notes, then confirm."]},{"type":"p","text":"Received units move to **Awaiting inspection** and are stamped with an arrival date. The order becomes **Partially received** while units remain outstanding, or **Received** once nothing is left. A goods receipt is recorded for the audit trail."},{"type":"callout","tone":"warning","text":"Received units are not yet sellable. They must pass inspection before becoming Available."},{"type":"h","text":"Cancelling an order"},{"type":"steps","items":["Choose Cancel on an open (ordered or partially received) purchase order.","Enter a reason and confirm."]},{"type":"callout","tone":"warning","text":"Cancelling removes only the still-incoming units. Units already received remain in stock. Cancellation cannot be undone."}]},{"slug":"stock-receiving-inspection-serials","title":"Inspecting arrivals and capturing serials","summary":"Complete the inspection step that turns a received unit into available stock, capturing its serial, condition and stock number.","category":"stock","audience":"managers","keywords":["inspection","serial","vin","stock number","received","damaged","condition"],"body":[{"type":"p","text":"Every received unit passes through inspection before it can be sold. Inspection captures the serial/VIN, confirms condition and assigns the stock number. Requires **stock.manage**."},{"type":"h","text":"Inspecting a received unit"},{"type":"steps","items":["Open a unit that is Awaiting inspection (filter the list by Inspection, or use the Receiving queue quick-link).","Choose Inspect arrival under Workflow actions.","Enter the serial/VIN (required) and the storage location.","Set the inspection result: Accepted into available stock, or Damaged / quarantine.","Add condition notes and complete the inspection."]},{"type":"p","text":"Accepted units become **Available** with condition set to new. Rejected units become **Damaged** for a later repair or disposal decision. A stock number in the form STK-YEAR-0001 is assigned automatically if the unit does not already have one."},{"type":"callout","tone":"warning","text":"Serials are unique across active stock, case-insensitively. If a serial is already assigned to another live unit, the save is blocked. The dashboard also flags received units still missing a serial."},{"type":"h","text":"Adding a floor unit directly"},{"type":"p","text":"For stock that did not come through a purchase order (for example an existing showroom unit), use **Add floor unit** on the Stock operations page. It creates the unit as Available immediately, with its cost recorded as the landed cost."}]},{"slug":"stock-reservations-and-allocation","title":"Reserving and allocating units","summary":"Hold available stock for a lead, record deposits, release holds, and commit a unit to an accepted quote.","category":"stock","audience":"managers","keywords":["reservation","reserve","allocate","deposit","lead","quote","release"],"body":[{"type":"p","text":"Available units can be reserved against an open lead or allocated directly to an accepted quote. Both actions require **stock.manage** and access to the linked lead or quote."},{"type":"h","text":"Reserving for a lead"},{"type":"steps","items":["Open an Available unit and choose Reserve for lead.","Pick an open lead, set the reservation length (1 to 30 days, default 3) and any required deposit.","Reserve the unit."]},{"type":"p","text":"The unit moves to **Reserved** and the reservation record becomes the source of truth for its expiry and deposit. The lead's product must match the unit."},{"type":"callout","tone":"info","text":"Reservations expire automatically once past their expiry time, returning the unit to Available. Reservations expiring within 24 hours are flagged on the dashboard."},{"type":"h","text":"Recording a deposit"},{"type":"p","text":"While a unit is reserved, choose **Record deposit**, enter the payment reference and confirm. The deposit-received time is stored against the reservation."},{"type":"h","text":"Releasing a hold"},{"type":"steps","items":["Open a Reserved or Allocated unit and choose Release.","Enter a reason and confirm."]},{"type":"p","text":"The unit returns to **Available**, the active reservation is marked released and any quote link is cleared."},{"type":"h","text":"Allocating to an accepted quote"},{"type":"steps","items":["Open an Available or Reserved unit and choose Allocate accepted quote.","Select an accepted quote that contains this product as a selected line.","Allocate to the quote."]},{"type":"p","text":"The unit moves to **Allocated** and any active reservation is converted to that quote. Only accepted quotes containing the matching, selected product can be chosen."},{"type":"callout","tone":"warning","text":"If another user reserves or allocates the same unit first, your action is rejected. Refresh and pick another unit."}]},{"slug":"stock-pdi-delivery-and-warranty","title":"PDI, delivery and warranty activation","summary":"Move an allocated unit through pre-delivery inspection, complete the customer handover, and activate warranty.","category":"stock","audience":"managers","keywords":["pdi","pre-delivery inspection","delivery","handover","warranty","vehicle"],"body":[{"type":"p","text":"Once a unit is allocated to an accepted quote it enters the delivery pipeline: PDI, then handover. Delivery creates the customer's vehicle record and starts the warranty. Requires **stock.manage**."},{"type":"h","text":"Running pre-delivery inspection"},{"type":"steps","items":["Open an Allocated unit and choose Start PDI. The unit moves to PDI with its checklist in progress.","When work is done, choose Complete PDI.","Set the outcome: Passed (ready for delivery) or Failed (place on hold).","Record any issues or work completed, then confirm."]},{"type":"p","text":"A passed PDI moves the unit to **Ready for delivery**. A failed PDI places it on **Hold** with the issues appended to the unit's notes."},{"type":"h","text":"Completing the handover"},{"type":"steps","items":["Open a Ready-for-delivery unit and choose Complete delivery.","Set the warranty length in months (default 12) and confirm."]},{"type":"p","text":"On delivery the unit becomes **Delivered** and the system records the per-unit sale value from the quote line (unit price less its discount), the delivery date and the warranty window. A customer vehicle record is created automatically from the unit's model, serial (VIN), colour and owner, unless a vehicle with that VIN already exists."},{"type":"callout","tone":"warning","text":"A unit can only be delivered if it is PDI-passed and allocated to an accepted quote that is linked to a contact. Deliveries are final; Delivered units have no further transitions."},{"type":"callout","tone":"info","text":"Holds and damaged units can be sent back into the workflow: resolve a hold to return it to available (or allocated if a quote is attached), or send a damaged unit for assessment."}]},{"slug":"stock-labels-statuses-and-unit-records","title":"Labels, custom statuses and unit records","summary":"Tag units with organisational labels, manage custom statuses, edit unit details including landed cost, and archive units.","category":"stock","audience":"managers","keywords":["label","status","landed cost","edit","archive","demo","showroom","history"],"body":[{"type":"p","text":"Beyond the fixed lifecycle status, each unit can carry an organisational label, and the unit record holds its full identity, cost basis and history. These actions require **stock.manage**."},{"type":"h","text":"Labels versus lifecycle status"},{"type":"p","text":"A unit is always in exactly one lifecycle status (incoming through delivered). Separately, it may carry one optional **label** such as demo unit, showroom floor, consignment or management hold. Labels are for organising and flagging stock; they never change the workflow."},{"type":"steps","items":["Open a unit and choose Label.","Pick a label from the list, or No label to clear it, and save."]},{"type":"callout","tone":"info","text":"The label list is fully editable in Settings, Stock. Adding or removing a label needs no data migration. Removing a label clears it from any units that carried it."},{"type":"p","text":"The four built-in statuses (On order, Available, Reserved, Sold) are load-bearing and cannot be removed. Additional custom statuses can be defined in settings as organisational labels for the status field."},{"type":"h","text":"Editing unit details"},{"type":"p","text":"Choose **Edit details** on a unit to update its serial/VIN, colour, location, condition, battery and charger serials, odometer, internal notes, and both the acquisition cost and the landed cost. Landed cost is the inventory value used across the dashboard and reporting."},{"type":"h","text":"Unit history and archiving"},{"type":"p","text":"Every unit page shows an append-only lifecycle history of who did what and when, plus its commercial allocation (lead or quote) and warranty once delivered."},{"type":"steps","items":["To retire a unit, open it and choose Remove from active stock.","Enter a reason and confirm. The record is archived but its audit history is retained."]},{"type":"callout","tone":"warning","text":"Units that are reserved, allocated, in PDI, ready, delivered or sold cannot be archived. Release or complete the active workflow first."}]},{"slug":"stock-products-catalogue","title":"Managing the product catalogue","summary":"Maintain the Denago models, colours, SKUs and base prices that stock, leads, quotes and vehicles all share.","category":"stock","audience":"admins","keywords":["products","catalogue","model","colour","sku","base price"],"body":[{"type":"p","text":"The product catalogue holds the Denago models your team sells. Stock, leads, quotes and customer vehicles all reference the same product data, so keeping it accurate keeps every module consistent. Creating and editing products requires owner-level access."},{"type":"h","text":"Adding a product"},{"type":"steps","items":["On the Product catalogue page choose New product.","Enter the model name (required), and optionally an SKU, category and base price.","Add a description and any launch colours (comma-separated), then save."]},{"type":"h","text":"Editing a product"},{"type":"steps","items":["Open a product from the catalogue list.","Update the name, SKU, category, base price or description in the Details panel and save.","Toggle Active to control whether the model is offered on new leads. Inactive models stay linked to existing records."]},{"type":"h","text":"Managing colours"},{"type":"p","text":"In the Colours panel, add a colour with the field provided, or remove one with the delete control. These colours feed the colour pickers on stock units, purchase orders and vehicle registration."},{"type":"p","text":"Each product shows how many leads and vehicles reference it, so you can see usage before making changes."},{"type":"callout","tone":"info","text":"Deleting a product moves it to the Trash for 60 days rather than removing it outright. Existing leads and vehicles keep their link to it."}]},{"slug":"stock-parts-inventory","title":"Managing workshop parts","summary":"Create parts with pricing and storage location, track stock levels, set reorder alerts, and adjust quantities.","category":"stock","audience":"managers","keywords":["parts","workshop","inventory","reorder","stock adjustment","job card"],"body":[{"type":"p","text":"Parts is the workshop's consumables inventory. Each part record supports job-card billing, stock control and purchasing decisions. Managing parts requires the **parts.manage** permission."},{"type":"h","text":"Adding a part"},{"type":"steps","items":["On the Parts page choose New part.","Enter the name (required), and optionally an SKU/code and a storage location (shelf or bin).","Set the sell price and cost, the opening stock quantity, and a reorder level for low-stock alerts.","Add any notes and save."]},{"type":"h","text":"Adjusting stock levels"},{"type":"p","text":"Choose **Manage** on a part to adjust its quantity. Enter a positive number for stock received or a negative number for a correction, then apply. Each adjustment is written to the audit log with the resulting balance."},{"type":"h","text":"Low-stock monitoring"},{"type":"p","text":"When a part's quantity falls to or below its reorder level, it is highlighted in the list and counted in the page header so replenishment happens before parts run out."},{"type":"callout","tone":"info","text":"From Manage you can also edit a part's details or remove it. Pricing and stock levels remain editable at any time. Parts are available for selection on job cards along with their selling price."}]},{"slug":"stock-vehicles-registration","title":"Registering customer vehicles","summary":"Register a vehicle to its owner with identity, warranty and service data, or let delivery create it automatically.","category":"stock","audience":"managers","keywords":["vehicles","fleet","register","vin","warranty","owner","service interval"],"body":[{"type":"p","text":"The vehicle fleet is every unit owned by your customers. A vehicle can be created automatically when a stock unit is delivered, or registered manually. Viewing vehicles needs a vehicles view permission; registering requires **vehicles.manage**."},{"type":"h","text":"Registering a vehicle"},{"type":"steps","items":["On the Vehicle fleet page choose Register vehicle.","Select the owner (contact) and product; the model auto-fills from the product if left blank.","Add the VIN/serial, registration number, colour and purchase date.","Set the warranty months and the service intervals in kilometres and months.","Optionally record an initial odometer reading, then register."]},{"type":"p","text":"Registration links the vehicle to the owner's permanent sales and service timeline, records the audit entry, and logs the initial reading as the mileage baseline."},{"type":"callout","tone":"info","text":"For a new delivery, the review request and delivery survey can be triggered automatically after registration. When a stock unit is delivered, its vehicle is created for you from the model, VIN, colour and warranty."},{"type":"h","text":"The fleet list"},{"type":"p","text":"The list shows each vehicle's model, owner, VIN, current kilometres, next service and a status badge. Use the **Service due** toggle to show only vehicles that are overdue or due soon."},{"type":"callout","tone":"info","text":"Users with owned-only access see just their own customers' vehicles; those with view-all see the whole fleet."}]},{"slug":"stock-vehicles-service-and-mileage","title":"Service history and mileage tracking","summary":"Log services and odometer readings, and understand how the CRM calculates when a vehicle is next due.","category":"stock","audience":"managers","keywords":["service","mileage","odometer","due","interval","job card"],"body":[{"type":"p","text":"Each vehicle page tracks its service history and mileage, driving the due-status shown across the fleet. These actions require **vehicles.manage** access to the vehicle."},{"type":"h","text":"Recording a service"},{"type":"steps","items":["Open a vehicle and use the Service history form.","Enter a summary (required), the date and the mileage.","Optionally set the next-due kilometres and date; leave blank to fall back to the vehicle's intervals.","Add any details and add the service record."]},{"type":"p","text":"Recording a service with a mileage value also adds a mileage log entry, keeping the current-kilometre figure accurate. Services created from a job card show the job-card number."},{"type":"h","text":"Logging mileage"},{"type":"p","text":"Use the Mileage log to add an odometer reading at any time with an optional note. The most recent reading is treated as the vehicle's current kilometres."},{"type":"h","text":"How next service is calculated"},{"type":"p","text":"Explicit next-due values on the latest service win. Otherwise the CRM applies the vehicle's service intervals from the last service (or the purchase date for time, and zero for distance)."},{"type":"table","headers":["Status","When it shows"],"rows":[["Overdue","Past the due date or over the due kilometres"],["Due soon","Within 30 days or 200 km of due"],["OK","Comfortably ahead of the next service"],["Unknown","No intervals or due data set"]]},{"type":"callout","tone":"info","text":"Deleting a service or mileage entry is recorded in the customer history for accountability."}]},{"slug":"stock-vehicles-battery-and-warranty","title":"Battery health and warranty claims","summary":"Log battery state-of-health checks to track degradation, and manage a vehicle's warranty status and claims.","category":"stock","audience":"managers","keywords":["battery","state of health","soh","warranty","claim","degradation"],"body":[{"type":"p","text":"For EVs, the vehicle page tracks battery health over time and manages warranty and claims. These actions require **vehicles.manage** access to the vehicle."},{"type":"h","text":"Logging a battery check"},{"type":"steps","items":["Open a vehicle and use the Battery health form.","Enter the state of health (0 to 100%), voltage, cycle count and pack serial as available.","Add any notes and log the check."]},{"type":"p","text":"Checks build a state-of-health trend chart. The CRM highlights the latest reading, estimated monthly degradation, projected months to the 60% threshold, and flags when a check indicates a warranty claim or a battery-replacement opportunity."},{"type":"callout","tone":"tip","text":"Log state of health at every service to build a reliable degradation trend. Readings are colour-coded: 80%+ healthy, 60 to 79% caution, below 60% critical."},{"type":"h","text":"Warranty and claims"},{"type":"p","text":"The Warranty panel shows the current warranty status and expiry, derived from the purchase date and warranty months. To raise a claim, describe the fault and log it."},{"type":"steps","items":["Log a claim with a description of the fault.","Use the status selector on a claim to update its progress and add a resolution note.","Update to save, or remove a claim with the delete control."]},{"type":"callout","tone":"info","text":"Vehicle documents can be attached in the Documents panel, and a job card can be opened directly from the vehicle for workshop work."}]}]
+[
+  {
+    "slug": "stock-operations-overview",
+    "title": "Stock operations overview",
+    "summary": "Find your way around the Stock page: the headline figures, the stock statuses, searching and filtering, open purchase orders and demand versus supply.",
+    "category": "stock",
+    "audience": "everyone",
+    "keywords": ["stock", "inventory", "dashboard", "units", "status", "overview", "stock age", "demand", "print report"],
+    "body": [
+      { "type": "p", "text": "The **Stock** page (in the menu under **Sales → Stock**) tracks every physical unit you hold, from the day you order it from a supplier until it is handed over to a customer. Each unit is one physical item with its own stock number, serial number, cost and history." },
+      { "type": "h", "text": "Who can use it" },
+      { "type": "p", "text": "You need permission to view stock to open the page, and permission to manage stock to order, receive, reserve, move or edit units. An owner turns these on for your role under **Settings → Team & roles**, in the **Stock** group. If you can only view stock, you don't see costs (the **Landed cost** column) or the manager shortcuts at the bottom of the page." },
+      { "type": "h", "text": "The headline figures" },
+      {
+        "type": "table",
+        "headers": ["Figure", "What it shows"],
+        "rows": [
+          ["**Available**", "Units in stock and free to sell, with their total value underneath."],
+          ["**Incoming & inspection**", "Units on order or received but not yet inspected, with their value."],
+          ["**Committed**", "Reserved plus allocated units. The line underneath splits the two."],
+          ["**Average stock age**", "The average number of days since units arrived, and how many have been in stock for more than 60 days."]
+        ]
+      },
+      { "type": "p", "text": "A yellow banner, **… stock items need attention**, appears when a reservation expires within 24 hours, a purchase order is past its expected delivery date, a received unit still has no serial number, or an available unit has been in stock for more than 60 days." },
+      { "type": "h", "text": "The stock statuses" },
+      { "type": "p", "text": "Every unit is in exactly one status at a time. The list puts the units that need a decision first (on hold, damaged, ready, in PDI), then the rest, oldest first. PDI means pre-delivery inspection: the check you do before a unit goes to its new owner." },
+      {
+        "type": "table",
+        "headers": ["Status", "What it means", "What usually happens next"],
+        "rows": [
+          ["**Incoming**", "On a supplier purchase order, not yet arrived.", "Receive it when it arrives."],
+          ["**Awaiting inspection**", "Received, but not yet checked and given its serial number.", "Inspect it."],
+          ["**Available**", "In stock and free to sell.", "Reserve it for a lead or allocate it to an accepted quote."],
+          ["**Reserved**", "Held for an open lead for a set number of days.", "Record the deposit, allocate it to the accepted quote, or release it."],
+          ["**Allocated**", "Committed to an accepted quote.", "Start PDI."],
+          ["**PDI** (shown as **PDI in progress** on the unit)", "Being prepared and checked before handover.", "Complete PDI."],
+          ["**Ready** (shown as **Ready for delivery** on the unit)", "Passed PDI and ready to hand over.", "Complete the delivery."],
+          ["**Delivered**", "Handed over. It is now a customer vehicle.", "Nothing. This is final."],
+          ["**On hold**", "Taken out of the normal flow, with a reason recorded.", "Resolve the hold."],
+          ["**Damaged**", "Rejected at inspection.", "Send it for assessment."]
+        ]
+      },
+      { "type": "h", "text": "Finding a unit" },
+      {
+        "type": "steps",
+        "items": [
+          "Type in the search box. It matches the serial number, stock number, model, colour, purchase order reference or customer name.",
+          "Narrow the list with **All models**, **All locations** and **Any age** (30+, 60+ or 90+ days), then click **Filter**.",
+          "Click a status pill (**All**, **Available**, **Incoming**, **Inspection**, **Reserved**, **Allocated**, **PDI**, **Ready**, **Hold** or **Delivered**) to show one stage. Your search and filters stay in place.",
+          "Click a unit's stock number, or **Open**, to see its full record. Right-click a row for a shortcut to the reserved lead or the linked quote."
+        ]
+      },
+      { "type": "p", "text": "Each row shows the unit (stock number, model, colour and serial, or **serial pending**), its status and label, the lead or quote it belongs to with any reservation expiry date, its location, and its age in days. Units 60 days or older show their age highlighted." },
+      { "type": "callout", "tone": "tip", "text": "The list shows up to 150 units at a time. When you are looking for one unit, search for it rather than scrolling." },
+      { "type": "h", "text": "The rest of the page" },
+      {
+        "type": "list",
+        "items": [
+          "**Operational queue**: how many units are **Allocated**, **In PDI**, **Ready** and **On hold**. Click a number to list those units.",
+          "**Open purchase orders**: supplier orders not yet fully received, the earliest due first. An **Overdue** tag means the expected delivery date has passed.",
+          "**Demand versus supply**: for each model, how many open leads want it against how many units are available, incoming and committed. **… short** means more open leads than available and incoming units; **Covered** means you have enough.",
+          "**Print report** (top of the page): a printable stock report of exactly the units your current search and filters show.",
+          "Shortcuts for stock managers at the bottom: **Ageing stock** (available units 60 or more days old), **Receiving queue** (units awaiting inspection) and **Ready for revenue** (units ready for handover)."
+        ]
+      },
+      { "type": "h", "text": "If something goes wrong" },
+      {
+        "type": "list",
+        "items": [
+          "**Stock isn't in your menu**: you don't have permission to view stock, or stock isn't switched on for your workspace. Ask your owner.",
+          "**No matching stock**: nothing fits your search, filters and status pill together. Click **All** and clear the search box.",
+          "**You can see units but no buttons on them**: you can view stock but not manage it."
+        ]
+      },
+      { "type": "h", "text": "Related guides" },
+      {
+        "type": "list",
+        "items": [
+          "Purchase orders and receiving stock",
+          "Inspecting arrivals and capturing serials",
+          "Reserving and allocating units",
+          "PDI, delivery and warranty activation",
+          "Labels, unit details and archiving",
+          "Managing the product catalogue"
+        ]
+      }
+    ]
+  },
+  {
+    "slug": "stock-purchase-orders-and-receiving",
+    "title": "Purchase orders and receiving stock",
+    "summary": "Order units from a supplier, receive them in full or in part when they arrive, and cancel what is still outstanding.",
+    "category": "stock",
+    "audience": "managers",
+    "keywords": ["purchase order", "po", "receiving", "supplier", "goods receipt", "incoming", "backorder", "waybill", "freight"],
+    "body": [
+      { "type": "p", "text": "A purchase order records what you have ordered from a supplier. Every unit on it appears in your stock straight away as **Incoming**, so sales can see what is on the way. When the stock arrives, you receive it, and it waits for inspection before it can be sold." },
+      { "type": "p", "text": "You need permission to manage stock. An owner turns it on for your role under **Settings → Team & roles**, in the **Stock** group." },
+      { "type": "h", "text": "Raising a purchase order" },
+      {
+        "type": "steps",
+        "items": [
+          "On the **Stock** page, click **Purchase order**. The **New purchase order** form opens.",
+          "Choose the **Supplier**. If your workspace keeps a supplier list, pick from it (an owner adds suppliers under **Settings → Suppliers**); otherwise type the supplier's name.",
+          "If you have them, fill in the **Supplier order reference**, the **Expected delivery** date and **Internal notes**.",
+          "On the first line, choose the **Model** and fill in the **Colour**, **Quantity** (1 to 200), **Unit cost**, **Freight / line** and any **Line notes**.",
+          "Click **Add another line** for each extra model or colour. **Remove** takes a line off.",
+          "Check the totals at the top (**Lines**, **Units** and **Estimated**) and click **Create purchase order**."
+        ]
+      },
+      { "type": "p", "text": "One **Incoming** unit is created for every unit you ordered, each carrying its line's unit cost. The order is listed under **Open purchase orders** on the Stock page until everything on it has been received or it is cancelled." },
+      { "type": "callout", "tone": "info", "text": "Freight is counted in the order's estimated total but is not added to each unit's cost. If you want a unit's value to include its share of freight, change its **Landed cost** under **Edit details** after it arrives." },
+      { "type": "h", "text": "Receiving stock when it arrives" },
+      { "type": "p", "text": "You can receive everything at once or only what actually arrived. Anything you don't receive stays on order." },
+      {
+        "type": "steps",
+        "items": [
+          "On the **Stock** page, under **Open purchase orders**, click **Receive** on the order.",
+          "Each line shows how many were ordered, how many have been received and how many are outstanding. Enter how many you are receiving now. It starts at everything outstanding.",
+          "Add the **Receipt / waybill ref** and any **Notes**.",
+          "Click **Receive … units**."
+        ]
+      },
+      { "type": "p", "text": "The units you received move to **Awaiting inspection**, and their stock age starts counting from today. The order stays open as partly received while anything is outstanding, and closes once everything has arrived. Each receipt is recorded with who received it." },
+      { "type": "callout", "tone": "warning", "text": "Received units can't be sold yet. Inspect each one first. See Inspecting arrivals and capturing serials." },
+      { "type": "h", "text": "Booking transport for an order" },
+      { "type": "p", "text": "If your workspace keeps a supplier list, each open order also has **Book delivery**. Choose the transport company, the date and where to collect from and deliver to. Transport companies come from **Settings → Suppliers**." },
+      { "type": "h", "text": "Cancelling an order" },
+      {
+        "type": "steps",
+        "items": [
+          "Under **Open purchase orders**, click **Cancel** on the order.",
+          "Type the **Reason** (you must give one) and click **Cancel order**."
+        ]
+      },
+      { "type": "callout", "tone": "warning", "text": "Cancelling can't be undone. It removes only the units that are still incoming; units you have already received stay in stock. If you cancelled by mistake, raise a new purchase order." },
+      { "type": "h", "text": "If something goes wrong" },
+      {
+        "type": "table",
+        "headers": ["Message", "What to do"],
+        "rows": [
+          ["Choose the supplier — an owner adds suppliers in Settings → Suppliers.", "Pick a supplier. If the list is empty, ask an owner to add one."],
+          ["Choose a product for the purchase order.", "Choose a **Model** on at least one line."],
+          ["A message starting **Line 2 unit cost:** (or freight)", "That amount couldn't be read. Type a plain amount, such as 12500.00."],
+          ["There are no outstanding units on this order", "Everything on it has already been received or removed."],
+          ["Those units were just received by someone else — refresh and try again.", "A colleague received them at the same time. Refresh the page and check what is still outstanding."],
+          ["Only open purchase orders can be cancelled", "The order has already been fully received or cancelled."]
+        ]
+      },
+      { "type": "h", "text": "Related guides" },
+      {
+        "type": "list",
+        "items": [
+          "Stock operations overview",
+          "Inspecting arrivals and capturing serials",
+          "Labels, unit details and archiving"
+        ]
+      }
+    ]
+  },
+  {
+    "slug": "stock-receiving-inspection-serials",
+    "title": "Inspecting arrivals and capturing serials",
+    "summary": "Check each received unit, capture its serial number and location so it becomes available, and add stock that didn't come in on a purchase order.",
+    "category": "stock",
+    "audience": "managers",
+    "keywords": ["inspection", "serial", "vin", "stock number", "received", "damaged", "quarantine", "condition", "floor unit", "add stock"],
+    "body": [
+      { "type": "p", "text": "Every received unit is inspected before it can be sold. Inspection records its serial number (or VIN), where it is stored and what condition it arrived in, and gives it a stock number." },
+      { "type": "p", "text": "You need permission to manage stock. An owner turns it on for your role under **Settings → Team & roles**, in the **Stock** group." },
+      { "type": "h", "text": "Inspecting a received unit" },
+      {
+        "type": "steps",
+        "items": [
+          "Open a unit that is **Awaiting inspection**. The quickest way is the **Inspection** pill or the **Receiving queue** shortcut on the Stock page.",
+          "Under **Workflow actions**, click **Inspect arrival**.",
+          "Type the **Serial / VIN**. You must fill this in.",
+          "Type the **Storage location**, for example a yard, showroom or warehouse.",
+          "Choose the **Inspection result**: **Accepted into available stock**, or **Damaged / quarantine**.",
+          "Add any **Condition notes** and click **Complete inspection**."
+        ]
+      },
+      {
+        "type": "table",
+        "headers": ["Result", "What happens to the unit"],
+        "rows": [
+          ["**Accepted into available stock**", "It becomes **Available**, with its condition set to New."],
+          ["**Damaged / quarantine**", "It becomes **Damaged** and stays out of sale until someone decides what to do with it."]
+        ]
+      },
+      { "type": "p", "text": "If the unit has no stock number yet, one is given automatically: STK, the year and a running number, for example STK-2026-0001. Serial numbers are saved in capital letters." },
+      { "type": "callout", "tone": "warning", "text": "The condition notes you type here replace whatever is in the unit's **Internal notes**. If the unit already had notes you want to keep, copy them into the condition notes." },
+      { "type": "h", "text": "What happens to a damaged unit" },
+      { "type": "p", "text": "Open the damaged unit and click **Send for assessment**. It moves to **On hold**. When the damage has been dealt with, click **Resolve hold** to put it back into available stock." },
+      { "type": "h", "text": "Adding a unit that is already on your floor" },
+      { "type": "p", "text": "For stock that didn't come in on a purchase order, such as a unit you already had in the showroom, add it directly." },
+      {
+        "type": "steps",
+        "items": [
+          "On the **Stock** page, click **Add floor unit**.",
+          "Choose the **Product / model**. You must choose one.",
+          "Fill in what you know: **Colour**, **Serial / VIN**, **Acquisition cost**, **Condition** (New, Demo, Used, Consignment or Damaged), **Odometer / km**, **Battery serial**, **Charger serial**, **Location** and **Internal notes**.",
+          "Click **Add to stock**. The new unit opens."
+        ]
+      },
+      { "type": "p", "text": "A floor unit skips ordering and inspection. It is **Available** straight away, its arrival date is today, it gets a stock number, and its acquisition cost becomes its landed cost." },
+      { "type": "h", "text": "If something goes wrong" },
+      {
+        "type": "table",
+        "headers": ["Message", "What to do"],
+        "rows": [
+          ["That serial/VIN is already assigned to another active stock unit.", "Each serial number can be on only one unit in stock (capital and small letters count as the same). Search for the serial to find the other unit and check which one is wrong."],
+          ["Only newly received units can be inspected", "The unit has already been inspected, or hasn't been received yet."],
+          ["The unit changed while it was being inspected", "Someone else changed it at the same moment. Refresh the page and look at its status before trying again."],
+          ["Choose a product for this stock unit.", "Choose the **Product / model** on the floor unit form."]
+        ]
+      },
+      { "type": "h", "text": "Related guides" },
+      {
+        "type": "list",
+        "items": [
+          "Purchase orders and receiving stock",
+          "Reserving and allocating units",
+          "Labels, unit details and archiving"
+        ]
+      }
+    ]
+  },
+  {
+    "slug": "stock-reservations-and-allocation",
+    "title": "Reserving and allocating units",
+    "summary": "Hold a unit for a lead, record the deposit, release a hold you no longer need, and commit a unit to an accepted quote.",
+    "category": "stock",
+    "audience": "managers",
+    "keywords": ["reservation", "reserve", "allocate", "deposit", "lead", "quote", "release", "hold for customer", "expiry"],
+    "body": [
+      { "type": "p", "text": "Reserving holds a specific unit for a customer who is still deciding. Allocating commits a unit to a quote the customer has accepted, so it is theirs and goes on to PDI and delivery." },
+      { "type": "p", "text": "You need permission to manage stock, and you must be able to see the lead or quote you are linking to. An owner sets permissions under **Settings → Team & roles**." },
+      { "type": "h", "text": "Reserving a unit for a lead" },
+      {
+        "type": "steps",
+        "items": [
+          "Open an **Available** unit. Under **Workflow actions**, click **Reserve for lead**.",
+          "Choose the **Open lead**. Only open leads you can see, wanting this model or no particular model, are listed.",
+          "Set the **Reservation days**: 1 to 30, 3 unless you change it.",
+          "If you want a deposit, type the **Deposit required**.",
+          "Click **Reserve unit**."
+        ]
+      },
+      { "type": "p", "text": "The unit becomes **Reserved**. The list and the unit page show the lead and when the reservation expires. When the time runs out, the reservation lapses by itself and the unit goes back to **Available**. Its history shows **Reservation expired automatically**. Expiry is checked regularly in the background, so a unit can stay reserved for a short while after its expiry time." },
+      { "type": "callout", "tone": "info", "text": "**Reserve for lead** only appears when there is at least one suitable open lead. If it is missing, check that the lead is open and that its product is this unit's model (or blank)." },
+      { "type": "h", "text": "Recording the deposit" },
+      {
+        "type": "steps",
+        "items": [
+          "On the reserved unit, click **Record deposit**.",
+          "Type the **Amount received**. It starts at the deposit you asked for.",
+          "Add the **Payment reference** if you have one and click **Confirm deposit received**."
+        ]
+      },
+      { "type": "p", "text": "A green tag on the unit shows the amount and when it was recorded. A reservation takes one deposit." },
+      { "type": "h", "text": "Releasing a reserved or allocated unit" },
+      {
+        "type": "steps",
+        "items": [
+          "Open the unit and click **Release**.",
+          "Type the **Reason** and click **Return to available stock**."
+        ]
+      },
+      { "type": "p", "text": "The unit goes back to **Available**, the reservation is closed, and any link to a lead or quote is removed." },
+      { "type": "h", "text": "Allocating a unit to an accepted quote" },
+      {
+        "type": "steps",
+        "items": [
+          "Open an **Available** or **Reserved** unit and click **Allocate accepted quote**.",
+          "Choose the **Accepted quote**. Only accepted quotes you can see that include this model as a selected line are listed.",
+          "Click **Allocate to quote**."
+        ]
+      },
+      { "type": "p", "text": "The unit becomes **Allocated** and its next step is PDI. If it was reserved, the reservation is converted to the quote." },
+      { "type": "callout", "tone": "tip", "text": "Allocate as soon as a quote is accepted. Delivery only works for units allocated to the quote, and the Deliveries board checks every unit on the quote before handover." },
+      { "type": "h", "text": "If something goes wrong" },
+      {
+        "type": "table",
+        "headers": ["Message", "What to do"],
+        "rows": [
+          ["Only an open lead can reserve stock", "The lead has been won, lost or closed. Reserve for an open lead, or allocate to the accepted quote instead."],
+          ["This unit does not match the lead's selected product", "The lead wants a different model. Change the lead's product or pick a unit of the right model."],
+          ["This unit was reserved by someone else. Refresh and choose another unit.", "A colleague reserved it first. Refresh and pick another unit."],
+          ["Enter the deposit amount received.", "Type the amount before confirming."],
+          ["No active reservation was found", "The reservation expired or was released before you recorded the deposit. Reserve the unit again first."],
+          ["Stock can only be allocated to an accepted quote", "Mark the quote as accepted first."],
+          ["The accepted quote does not contain this product", "The quote has no selected line for this model. Check the quote."],
+          ["The stock unit changed while you were allocating it", "Someone else changed the unit at the same moment. Refresh and check its status."]
+        ]
+      },
+      { "type": "h", "text": "Related guides" },
+      {
+        "type": "list",
+        "items": [
+          "Stock operations overview",
+          "PDI, delivery and warranty activation",
+          "Sending, accepting and revising quotes"
+        ]
+      }
+    ]
+  },
+  {
+    "slug": "stock-pdi-delivery-and-warranty",
+    "title": "PDI, delivery and warranty activation",
+    "summary": "Take an allocated unit through pre-delivery inspection, hand it over to the customer, and start its warranty. Also: putting units on hold and bringing them back.",
+    "category": "stock",
+    "audience": "managers",
+    "keywords": ["pdi", "pre-delivery inspection", "delivery", "handover", "warranty", "vehicle", "on hold", "resolve hold", "complete delivery"],
+    "body": [
+      { "type": "p", "text": "Once a unit is allocated to an accepted quote it goes through PDI (pre-delivery inspection), then handover. Delivery turns the unit into the customer's vehicle and, if your workspace uses warranties, starts its warranty." },
+      { "type": "p", "text": "You need permission to manage stock, and you must be able to see the quote. An owner sets permissions under **Settings → Team & roles**." },
+      { "type": "h", "text": "Running PDI" },
+      {
+        "type": "steps",
+        "items": [
+          "Open an **Allocated** unit and click **Start PDI**. It moves to **PDI in progress**.",
+          "When the work is done, click **Complete PDI**.",
+          "Choose the **Outcome**: **Passed — ready for delivery** or **Failed — place on hold**.",
+          "Write the **Issues / work completed** and click **Complete PDI**."
+        ]
+      },
+      { "type": "p", "text": "A passed unit becomes **Ready for delivery**. A failed unit goes **On hold**. What you wrote is added to the unit's internal notes either way." },
+      { "type": "h", "text": "Delivering the unit" },
+      { "type": "p", "text": "**Complete delivery** on a unit is the same handover as **Mark delivered** on the Deliveries board. Whichever you use, the CRM marks the quote delivered, moves every unit allocated to that quote to **Delivered**, records each unit's sale price (the quote line's price less its discount), and creates the customer's vehicle record. If the customer already has a vehicle with that serial number, that record is used instead of a new one." },
+      {
+        "type": "steps",
+        "items": [
+          "Open a **Ready for delivery** unit and click **Complete delivery**.",
+          "Read the summary of what will happen.",
+          "If your workspace uses warranties, set the **Warranty months**. It starts at 12.",
+          "Click **Confirm delivered**."
+        ]
+      },
+      { "type": "p", "text": "The warranty starts on the day of delivery and the unit page shows it under **Warranty**. If your products have cover set per part (for example battery and frame), that cover is copied onto the vehicle." },
+      { "type": "h", "text": "Before a delivery will go through" },
+      {
+        "type": "list",
+        "items": [
+          "Every unit allocated to the quote must have passed PDI. If one hasn't, nothing is delivered.",
+          "The quote must be accepted and linked to a contact, because its stock becomes that customer's vehicle.",
+          "The delivery must be scheduled on the Deliveries board.",
+          "If the deal is financed, the finance must be approved.",
+          "If your workspace uses a guided handover checklist, the handover is done on the Deliveries board and the customer signs the delivery note there."
+        ]
+      },
+      { "type": "callout", "tone": "warning", "text": "Delivery is final. A delivered unit has no further steps and can't be archived. Check the customer, the quote and the serial number before you confirm." },
+      { "type": "h", "text": "Putting a unit on hold" },
+      {
+        "type": "steps",
+        "items": [
+          "On an **Available**, **Allocated** or **PDI** unit, click **Place on hold**.",
+          "Type the **Reason** and click **Place on hold**."
+        ]
+      },
+      { "type": "p", "text": "To bring it back, click **Resolve hold**. A unit still allocated to a quote goes back to **Allocated**; any other unit goes back to **Available**. A **Damaged** unit has **Send for assessment**, which puts it on hold so it can then be resolved." },
+      { "type": "h", "text": "If something goes wrong" },
+      {
+        "type": "table",
+        "headers": ["Message", "What to do"],
+        "rows": [
+          ["A message starting **Q-… can't be delivered yet** that lists units and reasons", "One or more units on the quote haven't passed PDI or are on hold. Each is listed by stock number with the reason. Finish PDI or resolve the hold on each, then try again. Nothing was changed."],
+          ["Schedule the delivery on the Deliveries board before marking it delivered.", "Book the delivery date on the Deliveries board first."],
+          ["Link this quote to a contact before delivery — its stock becomes the customer's vehicle.", "Link the quote to the customer's contact record."],
+          ["This delivery uses a guided handover. Complete it on the Deliveries board and ask the customer to sign the delivery note.", "Do the handover from the Deliveries board instead."],
+          ["A message saying a unit is **already registered to another customer**", "A vehicle with this serial number belongs to someone else. Check the serial on the unit, or transfer the vehicle first. Nothing was changed."],
+          ["A vehicle with this unit's serial/VIN already exists but is not active in this workspace (check Trash). Restore it, then deliver again.", "Ask an owner to restore the vehicle from Trash, then deliver again."],
+          ["The unit must be in PDI before it can be completed", "Someone has already completed or moved it. Refresh the page."]
+        ]
+      },
+      { "type": "h", "text": "Related guides" },
+      {
+        "type": "list",
+        "items": [
+          "Reserving and allocating units",
+          "Managing deliveries and handovers",
+          "Registering customer vehicles",
+          "Battery health and warranty claims"
+        ]
+      }
+    ]
+  },
+  {
+    "slug": "stock-labels-statuses-and-unit-records",
+    "title": "Labels, unit details and archiving",
+    "summary": "Flag units with labels such as demo or consignment, read a unit's page, correct its details and cost, and remove a unit from active stock.",
+    "category": "stock",
+    "audience": "managers",
+    "keywords": ["label", "status", "landed cost", "edit", "archive", "remove", "demo", "showroom", "consignment", "history", "unit page"],
+    "body": [
+      { "type": "p", "text": "Every unit has its own page with its identity, cost, where it is in the process and a full history of what has happened to it. This guide covers reading that page, labelling units, editing their details and removing them from active stock." },
+      { "type": "p", "text": "Anyone who can view stock can open a unit. Labelling, editing and archiving need permission to manage stock, set by an owner under **Settings → Team & roles**." },
+      { "type": "h", "text": "Reading a unit's page" },
+      {
+        "type": "list",
+        "items": [
+          "The top shows the stock number, model, colour, serial number, status and any label.",
+          "**Recommended next step** says what usually happens next for a unit in this status.",
+          "Four figures: **Stock age** (with the arrival date), **Landed cost** (or the sale price once sold), **Location** (with condition) and **PDI** (with when it was completed).",
+          "**Workflow actions** shows only the steps that make sense for the unit's current status.",
+          "**Unit identity**: stock number, serial number, battery and charger serials, colour, condition, odometer, supplier, purchase order and location.",
+          "**Commercial allocation**: the reserved lead, the accepted quote, when the reservation expires and the deposit.",
+          "**Lifecycle history**: every event on the unit, who did it and when. Entries can't be edited or removed.",
+          "**Warranty**: when it started and when it expires, once the unit has been delivered (if your workspace uses warranties)."
+        ]
+      },
+      { "type": "h", "text": "Labels" },
+      { "type": "p", "text": "A label is a tag you add to a unit, such as **Demo unit**, **Showroom floor**, **Consignment** or **Management hold**. It is separate from the status: a label never moves a unit along or stops it being sold. A unit can have one label at a time." },
+      {
+        "type": "steps",
+        "items": [
+          "Open the unit and click **Label**.",
+          "Choose a label, or **No label** to clear it.",
+          "Click **Save label**."
+        ]
+      },
+      { "type": "p", "text": "The labels on offer are managed under **Settings → Stock labels**. Type a **Name**, pick a **Colour** and click **Add label**. **Remove** takes a label off the list and off every unit that had it." },
+      { "type": "h", "text": "Editing a unit's details" },
+      {
+        "type": "steps",
+        "items": [
+          "Open the unit and click **Edit details**.",
+          "Change what you need: **Serial / VIN**, **Colour**, **Location**, **Condition** (New, Demo, Used, Damaged or Consignment), **Acquisition cost**, **Landed cost**, **Battery serial**, **Charger serial**, **Odometer / km** and **Internal notes**.",
+          "Click **Save changes**."
+        ]
+      },
+      { "type": "p", "text": "**Acquisition cost** is what you paid for the unit. **Landed cost** is what it cost you once it was in stock (for example including freight and clearing) and is the value used in the stock figures. If you leave landed cost empty, the acquisition cost is used. The history records the cost before and after each change." },
+      { "type": "p", "text": "If your workspace has custom fields for stock, they appear on the unit page too." },
+      { "type": "h", "text": "Removing a unit from active stock" },
+      {
+        "type": "steps",
+        "items": [
+          "Open the unit. At the bottom, under **Archive unit**, click **Remove from active stock**.",
+          "Type the **Reason** and click **Archive unit**."
+        ]
+      },
+      { "type": "p", "text": "The unit leaves the stock list and figures. Its history is kept, and an owner can restore it from **Trash**, where it is kept rather than cleared after 60 days." },
+      { "type": "callout", "tone": "warning", "text": "You can't archive a unit that is reserved, allocated, in PDI, ready for delivery or delivered. Release it or finish its delivery first." },
+      { "type": "h", "text": "If something goes wrong" },
+      {
+        "type": "table",
+        "headers": ["Message", "What to do"],
+        "rows": [
+          ["That serial/VIN is already assigned to another active stock unit.", "The serial number is already on another unit in stock. Search for it to find the other unit."],
+          ["A message starting **Landed cost:** or **Acquisition cost:**", "The amount couldn't be read. Type a plain amount, such as 85000.00."],
+          ["A label with that name already exists.", "Use the existing label, or choose a different name."],
+          ["Release or complete this unit's active workflow before removing it", "The unit is committed to a lead, quote or delivery. Release it first."],
+          ["That stock unit no longer exists. Refresh and try again.", "Someone archived it. Refresh the page."]
+        ]
+      },
+      { "type": "h", "text": "Related guides" },
+      {
+        "type": "list",
+        "items": [
+          "Stock operations overview",
+          "Catalog settings: products and stock labels",
+          "Trash and restoring deleted items"
+        ]
+      }
+    ]
+  },
+  {
+    "slug": "stock-products-catalogue",
+    "title": "Managing the product catalogue",
+    "summary": "Add and maintain the models you sell — name, SKU, category, base price, colours, warranty cover and quote showcase — which stock, leads, quotes and vehicles all share.",
+    "category": "stock",
+    "audience": "admins",
+    "keywords": ["products", "catalogue", "model", "colour", "sku", "base price", "showcase", "category", "archive product"],
+    "body": [
+      { "type": "p", "text": "The product catalogue is the list of models your business sells. Leads, quotes, stock units and customer vehicles all point at the same product, so a model is named and priced the same way everywhere." },
+      { "type": "p", "text": "Only the workspace owner can add, change or delete products. Everyone else sees products wherever they choose one, for example on a lead or quote. The catalogue is under **Settings → Products**." },
+      { "type": "h", "text": "Adding a product" },
+      {
+        "type": "steps",
+        "items": [
+          "In the catalogue, click **New product**.",
+          "Type the **Model name**. You must fill this in.",
+          "Fill in what you use: **SKU** (your own or your supplier's code), **Category** (groups related models), **Base price**, **Available colours** (separate them with commas) and **Description**.",
+          "Click **Create product**."
+        ]
+      },
+      { "type": "p", "text": "The new model can be chosen on leads and quotes straight away, and stock can be ordered against it. The base price is a starting point; you can still change the price on each quote." },
+      { "type": "h", "text": "Editing a product" },
+      { "type": "p", "text": "Click a product's name in the catalogue to open it. Its page has these sections:" },
+      {
+        "type": "table",
+        "headers": ["Section", "What you do there"],
+        "rows": [
+          ["**Details**", "Change the **Model name**, **SKU**, **Category**, **Base price** and **Description**. Untick **Active (available for new leads)** to stop offering the model on new leads; records that already use it keep it. Click **Save changes**."],
+          ["**Colours**", "Type a colour in **Add colour…** and click **Add**. The ✕ next to a colour removes it, which can't be undone. These colours are offered when you order, add or register a unit of this model."],
+          ["**Warranty**", "If your workspace uses warranties: the cover for each part of the model, counted from the delivery day. It is copied onto each unit when it is delivered, so changing it here doesn't change vehicles already delivered."],
+          ["**Quote showcase**", "What a showcase quotation shows when this model is quoted: a **Tagline**, a **Default photo** (PNG, JPG or WebP, up to 1.5 MB), up to four **Spec icons**, and a **Photo per colour**. Anything left empty is simply not shown. Click **Save showcase**."],
+          ["**Xero**", "If your workspace sends invoices to Xero: the Xero item this model's invoice lines use."]
+        ]
+      },
+      { "type": "p", "text": "The catalogue list shows each model's category, colours, base price, how many leads and vehicles use it, and whether it is **Active** or **Archived** (not active)." },
+      { "type": "h", "text": "Deleting a product" },
+      { "type": "p", "text": "Open the product and click **Delete**, then confirm. The product moves to **Trash** for 60 days, where the owner can restore it. Leads and vehicles that use it keep their link." },
+      { "type": "callout", "tone": "tip", "text": "To stop selling a model, untick **Active** rather than deleting it. It stays on old records and reports and simply isn't offered on new leads." },
+      { "type": "h", "text": "If something goes wrong" },
+      {
+        "type": "table",
+        "headers": ["Message", "What to do"],
+        "rows": [
+          ["Product name is required", "Type the **Model name**."],
+          ["A message starting **Price:**", "The base price couldn't be read. Type a plain amount, such as 95000.00."],
+          ["Enter a colour name.", "Type the colour before clicking **Add**."],
+          ["You can't find Products in Settings", "Only the workspace owner sees it, and only when stock is switched on for your workspace."]
+        ]
+      },
+      { "type": "h", "text": "Related guides" },
+      {
+        "type": "list",
+        "items": [
+          "Catalog settings: products and stock labels",
+          "Building and pricing a quote",
+          "Stock operations overview"
+        ]
+      }
+    ]
+  },
+  {
+    "slug": "stock-parts-inventory",
+    "title": "Managing workshop parts",
+    "summary": "Keep the parts your workshop uses: prices, storage location, quantities on hand and low-stock alerts, and how job cards use them.",
+    "category": "stock",
+    "audience": "managers",
+    "keywords": ["parts", "workshop", "inventory", "reorder", "stock adjustment", "job card", "low stock", "spares"],
+    "body": [
+      { "type": "p", "text": "**Parts** (in the menu under **Service → Parts**) is the stock of parts and consumables your workshop fits. Job cards pick parts from this list at their selling price, and fitting a part takes it off the shelf here." },
+      { "type": "p", "text": "You need permission to view parts to open the page, and permission to manage parts to add, change or adjust them. An owner turns these on for your role under **Settings → Team & roles**, in the **Workshop** group." },
+      { "type": "h", "text": "The figures at the top" },
+      {
+        "type": "table",
+        "headers": ["Figure", "What it shows"],
+        "rows": [
+          ["**Part lines**", "How many different parts you keep."],
+          ["**Units on hand**", "The total quantity across all parts."],
+          ["**Reorder alerts**", "How many parts are at or below their reorder level."],
+          ["**Retail value**", "Quantity on hand times selling price, for all parts."]
+        ]
+      },
+      { "type": "h", "text": "Adding a part" },
+      {
+        "type": "steps",
+        "items": [
+          "Click **New part**.",
+          "Type the **Part name**. You must fill this in.",
+          "Fill in the **SKU / part code**, **Storage location** (shelf or bin), **Cost price** and **Selling price**. The form shows your margin as you type.",
+          "Enter the **Opening stock** (how many you have now) and, if you want a low-stock warning, **Reorder alert at**.",
+          "Add any **Internal notes**, such as compatible models or supplier lead time, and click **Add part**."
+        ]
+      },
+      { "type": "h", "text": "Adjusting the quantity" },
+      {
+        "type": "steps",
+        "items": [
+          "Click **Manage** on the part.",
+          "Under **Adjust stock**, type the change in **Change (+ received, − correction)**: a positive number for stock you received, a negative number to correct a count.",
+          "Click **Apply**."
+        ]
+      },
+      { "type": "p", "text": "Every adjustment is written to the audit log with the new balance. In the same window you can change the part's **Details** (click **Save**) or click **Remove part**." },
+      { "type": "callout", "tone": "warning", "text": "**Remove part** acts straight away, without asking you to confirm. A removed part disappears from the list and from job cards; an owner can restore it from **Trash**." },
+      { "type": "h", "text": "Low stock" },
+      { "type": "p", "text": "When a part's quantity is at or below its reorder level, its quantity shows highlighted with a ⚠ and it is counted under **Reorder alerts**. Parts with no reorder level never raise an alert." },
+      { "type": "h", "text": "How job cards use parts" },
+      {
+        "type": "list",
+        "items": [
+          "Adding a part line to a job card takes that quantity off the shelf. Removing the line puts it back.",
+          "A job card can reserve parts before they are fitted. Reserved parts stay on the shelf but can't be promised to another job.",
+          "A job card can't use more than you have: it refuses with a message like **Only 2 × Brake pads in stock.**"
+        ]
+      },
+      { "type": "h", "text": "If something goes wrong" },
+      {
+        "type": "list",
+        "items": [
+          "**Nothing happens when you click Apply**: the change was empty or zero. Type a number such as 5 or -1.",
+          "**A price is refused with a message about the amount**: type a plain amount, such as 450.00.",
+          "**You can see parts but changes don't save**: you can view parts but not manage them."
+        ]
+      },
+      { "type": "h", "text": "Related guides" },
+      {
+        "type": "list",
+        "items": [
+          "Logging parts, labour and technician time",
+          "Workshop settings: rate, bays and packages"
+        ]
+      }
+    ]
+  },
+  {
+    "slug": "stock-vehicles-registration",
+    "title": "Registering customer vehicles",
+    "summary": "Add a customer's vehicle with its identity, warranty and service intervals, read the vehicle list, and know when a vehicle is created for you at delivery.",
+    "category": "stock",
+    "audience": "managers",
+    "keywords": ["vehicles", "fleet", "register", "vin", "warranty", "owner", "service interval", "scan", "number plate", "licence disc"],
+    "body": [
+      { "type": "p", "text": "**Vehicles** (in the menu under **Service → Vehicles**) lists every vehicle your customers own. Each vehicle keeps its service history, mileage, job cards, battery checks, warranty and documents, whoever owns it." },
+      { "type": "p", "text": "A vehicle is created for you when stock is delivered. You register one by hand for anything else, such as a customer who bought elsewhere and now comes to you for service." },
+      { "type": "h", "text": "Who can use it" },
+      { "type": "p", "text": "You need permission to view vehicles: either every vehicle, or only vehicles linked to customers you can see. Registering, editing and deleting need permission to manage vehicles. An owner sets these under **Settings → Team & roles**, in the **Workshop** group." },
+      { "type": "h", "text": "Registering a vehicle" },
+      {
+        "type": "steps",
+        "items": [
+          "Click **Register vehicle**.",
+          "Choose the **Customer**. You must choose one.",
+          "Choose the **Catalogue product**, or **Custom / other model**. The **Vehicle model** fills in from the product; you can change it. A model is required.",
+          "Pick or type the **Colour**.",
+          "To save typing, click **Scan from a photo** and photograph the VIN plate, licence disc or number plate. The details read from the photo are filled in for you. Check every character against the photo before saving.",
+          "Fill in the **VIN / serial number**, **Registration number** and **Purchase / delivery date**.",
+          "If your workspace uses warranties, set the **Warranty term (months)**.",
+          "Set **Service every (km)** and **Service every (months)**. These decide when the vehicle is due.",
+          "Type the **Current mileage (km)**. It becomes the first entry in the mileage log.",
+          "Tick **This is a new customer delivery** only if the customer has just taken delivery (see below).",
+          "Add any **Internal notes** and click **Register vehicle**."
+        ]
+      },
+      { "type": "callout", "tone": "warning", "text": "Ticking **This is a new customer delivery** sends the customer messages: the delivery survey (if one is switched on) and whatever journey is set up for a new delivery, such as a review request. It is never ticked for you. Leave it unticked for a vehicle you are only recording." },
+      { "type": "h", "text": "Vehicles created at delivery" },
+      { "type": "p", "text": "When stock is delivered, from the Deliveries board or the unit's page, a vehicle is created for the customer from the unit's model, serial number and colour, with its warranty started on the delivery day. You don't need to register it again." },
+      { "type": "h", "text": "The vehicle list" },
+      { "type": "p", "text": "The figures at the top count your **Vehicles**, **Overdue service**, **Due soon** and **Owners**. The list shows each vehicle's model, owner, VIN or serial, current mileage, next service, service status and purchase date." },
+      {
+        "type": "list",
+        "items": [
+          "Click **Service due** to show only vehicles that are overdue or due soon. The button then reads **Showing due**; click it again to show everything.",
+          "Right-click a vehicle for **Edit vehicle** and **Open job card**."
+        ]
+      },
+      { "type": "h", "text": "Changing or deleting a vehicle" },
+      { "type": "p", "text": "Open the vehicle and click **Edit** to change its details. You can't change the owner there: use **Transfer to new owner** instead, so the ownership history stays correct. **Delete** moves the vehicle, with its service history and job cards, to **Trash**, where an owner can restore it for 60 days." },
+      { "type": "h", "text": "If something goes wrong" },
+      {
+        "type": "list",
+        "items": [
+          "**Customer is required** or **Model is required**: fill in the customer and the vehicle model.",
+          "**The scan couldn't read the photo**: take a sharper, closer photo in good light, or type the details yourself.",
+          "**You can't see Register vehicle**: you can view vehicles but not manage them."
+        ]
+      },
+      { "type": "h", "text": "Related guides" },
+      {
+        "type": "list",
+        "items": [
+          "Service history and mileage tracking",
+          "Battery health and warranty claims",
+          "Transferring a vehicle (and its warranty) to a new owner",
+          "PDI, delivery and warranty activation"
+        ]
+      }
+    ]
+  },
+  {
+    "slug": "stock-vehicles-service-and-mileage",
+    "title": "Service history and mileage tracking",
+    "summary": "Record services and odometer readings on a vehicle, and see exactly how the CRM works out when the next service is due.",
+    "category": "stock",
+    "audience": "managers",
+    "keywords": ["service", "mileage", "odometer", "due", "interval", "job card", "next service", "service history", "km"],
+    "body": [
+      { "type": "p", "text": "Each vehicle's page keeps its service history and mileage log. Together with the vehicle's service intervals, they decide when the vehicle is next due, which drives the **Service due** list and service reminders." },
+      { "type": "p", "text": "Recording and deleting need permission to manage vehicles, set by an owner under **Settings → Team & roles**." },
+      { "type": "h", "text": "Recording a service" },
+      {
+        "type": "steps",
+        "items": [
+          "Open the vehicle. In **Service history**, type the **Summary**, for example \"1,000 km first service\". You must fill this in.",
+          "Set the **Date**. Leave it empty for today.",
+          "Type the **Mileage (km)** at the service.",
+          "Only if this service sets a specific next service, fill in **Next due (km)** and **Next due (date)**. Leave them empty to use the vehicle's service intervals.",
+          "Add **Details** and click **Add service record**."
+        ]
+      },
+      { "type": "p", "text": "A mileage you enter here is also added to the mileage log. Each service shows who recorded it and who owned the vehicle at the time. Services written by completing a job card show the job card number." },
+      { "type": "h", "text": "Logging mileage" },
+      { "type": "p", "text": "In **Mileage log**, type the kilometres, add an optional note and click **Log**. The latest reading becomes the vehicle's current mileage. The log shows the 12 most recent readings." },
+      { "type": "callout", "tone": "warning", "text": "The most recently logged reading counts as the current mileage, even if it is lower than an earlier one. Check the number before you click **Log**." },
+      { "type": "h", "text": "How the next service is worked out" },
+      {
+        "type": "list",
+        "items": [
+          "If the latest service has a next-due date or next-due kilometres, those are used.",
+          "Otherwise the date is the last service date (or the purchase date, if there has been no service) plus **Service every (months)**.",
+          "And the kilometres are the mileage at the last service (or zero) plus **Service every (km)**."
+        ]
+      },
+      {
+        "type": "table",
+        "headers": ["Status", "When it shows"],
+        "rows": [
+          ["**Overdue**", "The due date has passed, or the vehicle has gone past the due kilometres."],
+          ["**Due soon**", "The due date is 30 days away or less, or the vehicle is within 200 km of the due kilometres."],
+          ["**OK**", "Neither of the above."],
+          ["**Unknown**", "There are no service intervals and no next-due values, so nothing can be worked out."]
+        ]
+      },
+      { "type": "h", "text": "Deleting a service record" },
+      { "type": "p", "text": "Point at the service and click the ✕ that appears, then confirm. Deleting can't be undone; it is recorded in the customer's history." },
+      { "type": "h", "text": "If something goes wrong" },
+      {
+        "type": "list",
+        "items": [
+          "**A vehicle shows Unknown**: give it service intervals (open it and click **Edit**) or record a service with next-due values.",
+          "**The due date looks wrong**: check the latest service. Its next-due values win over the intervals.",
+          "**Nothing happens when you add a service**: the **Summary** was empty."
+        ]
+      },
+      { "type": "h", "text": "Related guides" },
+      {
+        "type": "list",
+        "items": [
+          "Service due: staying ahead of scheduled work",
+          "Completing a job and writing the service record",
+          "Registering customer vehicles"
+        ]
+      }
+    ]
+  },
+  {
+    "slug": "stock-vehicles-battery-and-warranty",
+    "title": "Battery health and warranty claims",
+    "summary": "Log battery state-of-health checks to see how a battery is ageing, and check a vehicle's warranty and log claims against it.",
+    "category": "stock",
+    "audience": "managers",
+    "keywords": ["battery", "state of health", "soh", "warranty", "claim", "degradation", "replacement", "cover"],
+    "body": [
+      { "type": "p", "text": "For electric vehicles, the vehicle page tracks battery health over time. If your workspace uses warranties, the same page shows the warranty and its claims." },
+      { "type": "h", "text": "Logging a battery check" },
+      { "type": "p", "text": "You need permission to manage vehicles." },
+      {
+        "type": "steps",
+        "items": [
+          "Open the vehicle and find **Battery health**.",
+          "Fill in what you measured: **SoH %** (state of health, 0 to 100), **Voltage**, **Cycles** and **Pack serial**.",
+          "Add any notes and click **Log check**."
+        ]
+      },
+      { "type": "p", "text": "Each check is added to a trend chart. The badges under the chart tell you:" },
+      {
+        "type": "table",
+        "headers": ["Badge", "What it means"],
+        "rows": [
+          ["**Healthy**", "The latest reading is 80% or more."],
+          ["**Degrading — monitor**", "The latest reading is between 60% and 79%."],
+          ["**Replacement candidate** and **Replacement opportunity**", "The latest reading is below 60%."],
+          ["**−…%/mo**", "How fast the battery is losing health each month."],
+          ["**~… mo to 60%**", "Roughly how many months until it drops below 60%."],
+          ["**Warranty claim eligible**", "The reading is 70% or less and the battery is still covered by the warranty."]
+        ]
+      },
+      { "type": "callout", "tone": "tip", "text": "Log a battery check at every service. The trend becomes reliable only with several readings over time." },
+      { "type": "p", "text": "To remove a wrong reading, click its ✕ and confirm. It is deleted permanently; it doesn't go to Trash." },
+      { "type": "h", "text": "The warranty" },
+      { "type": "p", "text": "The **Warranty** panel shows the status and expiry date: **In warranty**, **Expiring soon** (60 days or less left), **Out of warranty** or **No warranty info**. Where cover is set per part, each part's cover is listed. If the vehicle has changed hands, the panel says whether the warranty went to the current owner." },
+      { "type": "h", "text": "Logging and updating a claim" },
+      { "type": "p", "text": "You need permission to manage warranty claims, set by an owner under **Settings → Team & roles**, in the **Workshop** group." },
+      {
+        "type": "steps",
+        "items": [
+          "In the **Warranty** panel, describe the fault in **Log a warranty claim** and click **Log claim**.",
+          "To move a claim on, choose its status (**open**, **approved**, **rejected** or **resolved**), add a **Resolution note** and click **Update**.",
+          "Click **Open** on a claim for its own page, where you can print it."
+        ]
+      },
+      { "type": "callout", "tone": "warning", "text": "Deleting a claim with its ✕ removes it permanently; it doesn't go to Trash. Set it to **resolved** or **rejected** instead so the record stays." },
+      { "type": "h", "text": "If something goes wrong" },
+      {
+        "type": "table",
+        "headers": ["Message", "What to do"],
+        "rows": [
+          ["The warranty didn't transfer to this owner, so a warranty claim can't be logged for them.", "The vehicle changed hands and the warranty stayed with the earlier owner."],
+          ["This owner's warranty transfer is waiting for approval. Approve it on the vehicle's Ownership panel first.", "Someone allowed to manage warranty claims approves the transfer under **Ownership** first."],
+          ["You don't see the Warranty panel", "Warranties aren't switched on for your workspace, or you can't view warranty claims."]
+        ]
+      },
+      { "type": "h", "text": "Related guides" },
+      {
+        "type": "list",
+        "items": [
+          "Warranty and recalls",
+          "Transferring a vehicle (and its warranty) to a new owner",
+          "Service history and mileage tracking"
+        ]
+      }
+    ]
+  }
+]
