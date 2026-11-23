@@ -348,27 +348,30 @@ export async function setTenantModulesAction(
 
     // A newly granted module brings its roles (e.g. automotive → Technician,
     // Workshop manager). Idempotent; a revoked module's roles are hidden, not deleted.
-    // One transaction, so a failed role copy can't leave the grant saved but unaudited.
+    // ONE transaction with its audit: a failed role copy or audit write leaves the grant unchanged, never saved but
+    // reported as failed, or saved without a record.
     await basePrisma.$transaction(async (tx) => {
       await tx.tenant.update({ where: { id: tenantId }, data: { modules } });
       await seedTenantDefaultRoles(tx, tenantId);
-    });
-
-    await logAuditStrict({
-      action: "tenant.modules_changed",
-      summary: `Updated modules for tenant “${tenant.name}”`,
-      entityType: "Tenant",
-      entityId: tenantId,
-      // The actor is a PlatformAdmin, NOT a CRM User. Passing `user` would write its
-      // id into AuditEvent.actorUserId and AuditLog.userId, where it dangles — no
-      // User row has that id, so anything joining those columns silently finds
-      // nothing. Attribute by name + actorType instead, and keep the id in metadata
-      // where it is unambiguous about which identity space it belongs to.
-      userName: actor.name,
-      actorType: "platform_admin",
-      metadata: { platformAdminId: actor.id, platformAdminEmail: actor.email },
-      before: { modules: tenant.modules },
-      after: { modules },
+      await logAuditStrict(
+        {
+          action: "tenant.modules_changed",
+          summary: `Updated modules for tenant “${tenant.name}”`,
+          entityType: "Tenant",
+          entityId: tenantId,
+          // The actor is a PlatformAdmin, NOT a CRM User. Passing `user` would write its
+          // id into AuditEvent.actorUserId and AuditLog.userId, where it dangles — no
+          // User row has that id, so anything joining those columns silently finds
+          // nothing. Attribute by name + actorType instead, and keep the id in metadata
+          // where it is unambiguous about which identity space it belongs to.
+          userName: actor.name,
+          actorType: "platform_admin",
+          metadata: { platformAdminId: actor.id, platformAdminEmail: actor.email },
+          before: { modules: tenant.modules },
+          after: { modules },
+        },
+        tx,
+      );
     });
     revalidatePath(CONSOLE_PATH);
   });

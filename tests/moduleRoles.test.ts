@@ -30,7 +30,8 @@ test("seeding skips module roles until the module is granted, and granting re-se
   assert.match(provisioning, /if \(!roleAvailable\(source\.id, granted\)\) continue;/);
   assert.match(
     code("src/app/actions/tenants.ts"),
-    /await tx\.tenant\.update\(\{ where: \{ id: tenantId \}, data: \{ modules \} \}\);\s*await seedTenantDefaultRoles\(tx, tenantId\);/,
+    /await tx\.tenant\.update\(\{ where: \{ id: tenantId \}, data: \{ modules \} \}\);\s*await seedTenantDefaultRoles\(tx, tenantId\);\s*await logAuditStrict\(\s*\{\s*action: "tenant\.modules_changed",[\s\S]*?after: \{ modules \},\s*\},\s*tx,\s*\);\s*\}\);/,
+    "the grant, its roles and its audit commit together",
   );
   // The founding tenant holds the source roles; seeding it again hit the (tenantId, name) index.
   assert.match(provisioning, /if \(tenantId === DEFAULT_TENANT_ID\) return;/);
