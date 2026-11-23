@@ -5,6 +5,7 @@ import { getSetting, getWorkspaceSetting, putTenantCredential, putTenantCredenti
 import { withSystemScope } from "./tenantScopeEntry";
 import { reconcileTenantChannels } from "./channelRegistration";
 import { claimChannelEndpoint } from "./channelClaim";
+import type { ChannelKind } from "./channelTenant";
 import { withMetaConnectLock } from "./metaConnect";
 import { logError } from "./errorLog";
 import { PLATFORM_URL } from "./platformLegal";
@@ -153,15 +154,24 @@ async function connectWhatsAppNumberLocked(input: { tenantId: string; state: str
   const display = String(phone.display_phone_number ?? input.phoneNumberId);
   const name = String(phone.verified_name ?? "");
 
-  // CLAIMED FIRST, atomically — the first workspace wins, an active owner elsewhere is never moved.
-  const before = await basePrisma.channelIdentity.findUnique({ where: { channel_externalId: { channel: "whatsapp", externalId: input.phoneNumberId } }, select: { tenantId: true, disabledAt: true } });
-  const alreadyOurs = before?.tenantId === input.tenantId && !before.disabledAt;
-  if (!(await claimChannelEndpoint(input.tenantId, "whatsapp", input.phoneNumberId, name ? `${name} ${display}` : display))) {
-    throw new Error("That WhatsApp number is already connected to another workspace.");
-  }
-
+  // SNAPSHOT FIRST, then every claim inside the block that undoes them (review of #1187 — as #1185 did for Facebook).
   const previous = await basePrisma.tenantIntegrationCredential.findMany({ where: { tenantId: input.tenantId, key: { in: CONNECTION_KEYS } }, select: { key: true, value: true } });
+  const previousWaba = await resolveTenantCredential(input.tenantId, WA_CONNECTED.wabaId);
+  const claims: { channel: ChannelKind; externalId: string; label: string | null; refusal: string }[] = [
+    // ONE WORKSPACE PER WHATSAPP BUSINESS ACCOUNT: Meta's webhook subscription is the whole account's, so one
+    // workspace's disconnect would cut off another's number on the same account (review of #1187).
+    { channel: "whatsapp_account", externalId: input.wabaId, label: name || null, refusal: "That WhatsApp Business account is already connected to another workspace." },
+    { channel: "whatsapp", externalId: input.phoneNumberId, label: name ? `${name} ${display}` : display, refusal: "That WhatsApp number is already connected to another workspace." },
+  ];
+  const newlyClaimed: typeof claims = [];
   try {
+    // CLAIMED atomically — the first workspace wins, an active owner elsewhere is never moved.
+    for (const claim of claims) {
+      const before = await basePrisma.channelIdentity.findUnique({ where: { channel_externalId: { channel: claim.channel, externalId: claim.externalId } }, select: { tenantId: true, disabledAt: true } });
+      const alreadyOurs = before?.tenantId === input.tenantId && !before.disabledAt;
+      if (!(await claimChannelEndpoint(input.tenantId, claim.channel, claim.externalId, claim.label))) throw new Error(claim.refusal);
+      if (!alreadyOurs) newlyClaimed.push(claim);
+    }
     const subscribed = await graph("POST", `${input.wabaId}/subscribed_apps`, token);
     if (subscribed.success !== true) throw new Error("Meta didn't subscribe the WhatsApp account to messages.");
     const pin = await registrationPin(input.tenantId, input.phoneNumberId);
@@ -179,16 +189,18 @@ async function connectWhatsAppNumberLocked(input: { tenantId: string; state: str
     await reconcileTenantChannels(input.tenantId, { force: true });
     const row = await basePrisma.channelIdentity.findUnique({ where: { channel_externalId: { channel: "whatsapp", externalId: input.phoneNumberId } }, select: { tenantId: true, disabledAt: true } });
     if (row?.tenantId !== input.tenantId || row.disabledAt) throw new Error("That WhatsApp number is already connected to another workspace.");
+    // Moved to a different account: the old one is no longer held.
+    if (previousWaba && previousWaba !== input.wabaId) await releaseWhatsAppAccount(input.tenantId, previousWaba);
   } catch (error) {
-    // Put the workspace back exactly as it was: its previous WhatsApp (if any), the number released if newly taken.
+    // Put the workspace back exactly as it was: its previous WhatsApp (if any), the account and number released if newly taken.
     await basePrisma
       .$transaction(async (tx) => {
         await tx.tenantIntegrationCredential.deleteMany({ where: { tenantId: input.tenantId, key: { in: CONNECTION_KEYS } } });
         if (previous.length) await tx.tenantIntegrationCredential.createMany({ data: previous.map((r) => ({ tenantId: input.tenantId, key: r.key, value: r.value })) });
       })
       .catch((undo: unknown) => logError("whatsapp-connect", undo, "Connect WhatsApp failed and the previous setup could not be restored").catch(() => {}));
-    if (!alreadyOurs) {
-      await basePrisma.channelIdentity.updateMany({ where: { tenantId: input.tenantId, channel: "whatsapp", externalId: input.phoneNumberId }, data: { disabledAt: new Date() } }).catch(() => {});
+    for (const claim of newlyClaimed) {
+      await basePrisma.channelIdentity.updateMany({ where: { tenantId: input.tenantId, channel: claim.channel, externalId: claim.externalId }, data: { disabledAt: new Date() } }).catch(() => {});
     }
     await reconcileTenantChannels(input.tenantId, { force: true }).catch(() => {});
     throw error;
@@ -219,8 +231,16 @@ async function disconnectWhatsAppLocked(tenantId: string): Promise<string | null
   const connected = await connectedWhatsApp(tenantId);
   if (!connected) return null;
   const token = await resolveTenantCredential(tenantId, "WA_ACCESS_TOKEN");
+  // Safe to unsubscribe the whole account: only this workspace holds it (the whatsapp_account claim above).
   if (token) await graph("DELETE", `${connected.wabaId}/subscribed_apps`, token).catch(() => null);
   await basePrisma.tenantIntegrationCredential.deleteMany({ where: { tenantId, key: { in: CONNECTION_KEYS } } });
   await reconcileTenantChannels(tenantId, { force: true });
+  // Released only after the unsubscribe, so another workspace can't subscribe it in between and be cut off.
+  await releaseWhatsAppAccount(tenantId, connected.wabaId);
   return connected.number;
+}
+
+/** This workspace no longer holds that WhatsApp Business account — another may connect it. */
+async function releaseWhatsAppAccount(tenantId: string, wabaId: string): Promise<void> {
+  await basePrisma.channelIdentity.updateMany({ where: { tenantId, channel: "whatsapp_account", externalId: wabaId, disabledAt: null }, data: { disabledAt: new Date() } });
 }

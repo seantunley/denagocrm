@@ -90,10 +90,29 @@ test("connecting: state spent once, the number checked with Meta, claimed first,
   assert.ok(order.every((at, i) => at > 0 && (i === 0 || at > order[i - 1])), `claim → subscribe → register → store → register endpoint: ${order}`);
   // Undo: previous WhatsApp restored in one (interactive) transaction, the number released when newly taken.
   assert.match(connect, /\} catch \(error\) \{[\s\S]*?\.\$transaction\(async \(tx\) => \{\s*await tx\.tenantIntegrationCredential\.deleteMany\(\{ where: \{ tenantId: input\.tenantId, key: \{ in: CONNECTION_KEYS \} \} \}\);/);
-  assert.match(connect, /if \(!alreadyOurs\) \{\s*await basePrisma\.channelIdentity\.updateMany\(/);
+  assert.match(connect, /for \(const claim of newlyClaimed\) \{\s*await basePrisma\.channelIdentity\.updateMany\(/);
+  // Snapshot BEFORE any claim, and every claim inside the undone block (review of #1187, as #1185 for Facebook).
+  const tryAt = connect.indexOf("  try {\n    // CLAIMED atomically");
+  assert.ok(tryAt > 0, "the claims open the try block");
+  assert.ok(connect.indexOf("const previous = await") < tryAt, "snapshot before the try");
+  assert.ok(connect.indexOf("const previousWaba = await") < tryAt, "previous account read before the try");
+  assert.equal(connect.indexOf("claimChannelEndpoint("), connect.indexOf("claimChannelEndpoint(", tryAt), "no claim outside the block");
   assert.doesNotMatch(lib, /\$transaction\(\[/, "basePrisma refuses the array form");
   // Stored in the ordinary WhatsApp fields, so sending and receiving work unchanged.
   assert.match(connect, /WA_PHONE_NUMBER_ID: input\.phoneNumberId,\s*WA_ACCESS_TOKEN: token,/);
+});
+
+test("one workspace per WhatsApp Business account: claimed before the number, released only after the unsubscribe", () => {
+  // Meta's subscription is the whole account's, so a disconnect unsubscribes every number on it (review of #1187).
+  const lib = code("src/lib/whatsappConnect.ts");
+  const connect = lib.slice(lib.indexOf("async function connectWhatsAppNumberLocked"), lib.indexOf("export async function connectedWhatsApp"));
+  assert.ok(connect.indexOf('channel: "whatsapp_account", externalId: input.wabaId') > 0);
+  assert.ok(connect.indexOf('channel: "whatsapp_account"') < connect.indexOf('channel: "whatsapp", externalId: input.phoneNumberId'), "account before number");
+  assert.match(connect, /if \(previousWaba && previousWaba !== input\.wabaId\) await releaseWhatsAppAccount\(input\.tenantId, previousWaba\);/);
+  const disconnect = lib.slice(lib.indexOf("async function disconnectWhatsAppLocked"));
+  const unsubscribe = disconnect.indexOf("/subscribed_apps`, token)");
+  const release = disconnect.indexOf("await releaseWhatsAppAccount(tenantId, connected.wabaId);");
+  assert.ok(unsubscribe > 0 && release > unsubscribe, "released after the unsubscribe");
 });
 
 test("the routes: owner session, same-browser cookie, nothing trusted beyond its shape", () => {

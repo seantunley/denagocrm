@@ -40,6 +40,7 @@ async function main() {
   const B = fixture.b.tenantId;
   const ids: string[] = [];
   const phones: string[] = [];
+  const waba = `w${SFX}`;
   const realFetch = globalThis.fetch;
   let platformBefore: Awaited<ReturnType<typeof basePrisma.appSetting.findMany>> | null = null;
   const owner = async (externalId: string) =>
@@ -122,8 +123,9 @@ async function main() {
       await putSetting("META_APP_SECRET", "fake-secret");
       await putSetting("WA_SIGNUP_CONFIG_ID", "2000");
     });
-    phones.push(`9${SFX}1`, `9${SFX}2`, `9${SFX}3`);
+    phones.push(`9${SFX}1`, `9${SFX}2`, `9${SFX}3`, `9${SFX}4`, `9${SFX}\u00005`);
     const metaGot: { phone: string; pin: string }[] = [];
+    const unsubscribed: string[] = [];
     let registerFails = false;
     globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
       const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
@@ -132,15 +134,19 @@ async function main() {
       await new Promise((resolve) => setTimeout(resolve, 150));
       if (path === "oauth/access_token") return reply({ access_token: `token-${url.searchParams.get("code")}` });
       if (path.endsWith("/phone_numbers")) return reply({ data: phones.map((id) => ({ id, display_phone_number: `+27 ${id.slice(-4)}`, verified_name: "Test" })) });
-      if (path.endsWith("/subscribed_apps")) return reply({ success: true });
+      if (path.endsWith("/subscribed_apps")) {
+        if (init?.method === "DELETE") unsubscribed.push(path.split("/")[0]);
+        return reply({ success: true });
+      }
       if (path.endsWith("/register")) {
         metaGot.push({ phone: path.split("/")[0], pin: String((JSON.parse(String(init?.body ?? "{}")) as { pin?: string }).pin) });
         return registerFails ? reply({ error: { message: "Timed out" } }, 504) : reply({ success: true });
       }
       return reply({ display_phone_number: "+27 0000", verified_name: "Test" });
     }) as typeof fetch;
-    const begin = async () => (await startWhatsAppSignup({ tenantId: A, userId: "test", origin: "https://a.example" }))!.state;
-    const connectWa = (state: string, phone: string) => connectWhatsAppNumber({ tenantId: A, state, code: `c-${phone}`, wabaId: "111", phoneNumberId: phone });
+    const begin = async (tenantId = A) => (await startWhatsAppSignup({ tenantId, userId: "test", origin: "https://a.example" }))!.state;
+    const connectWa = (state: string, phone: string, tenantId = A) => connectWhatsAppNumber({ tenantId, state, code: `c-${phone}`, wabaId: waba, phoneNumberId: phone });
+    const account = () => basePrisma.channelIdentity.findUnique({ where: { channel_externalId: { channel: "whatsapp_account", externalId: waba } }, select: { tenantId: true, disabledAt: true } });
     const pins = async () => JSON.parse((await resolveTenantCredential(A, "WA_REGISTER_PINS")) ?? "{}") as Record<string, string>;
     const current = () => resolveTenantCredential(A, "WA_PHONE_NUMBER_ID");
 
@@ -169,6 +175,22 @@ async function main() {
     await connectWa(s5, phones[2]);
     check("…and the retry registers with the SAME PIN", metaGot.at(-1)?.phone === phones[2] && metaGot.at(-1)?.pin === kept3);
     check("…the lease is gone", (await lease()) === null);
+
+    // 7. ONE WORKSPACE PER WHATSAPP BUSINESS ACCOUNT (review of #1187): Meta's subscription is the whole account's, so
+    //    B connecting another number on A's account would be cut off when A disconnects. A holds it now (end of 6).
+    const sB = await begin(B);
+    const refusedB = await connectWa(sB, phones[3], B).then(() => null, (error: unknown) => error as Error);
+    check("WhatsApp: another workspace can't connect a number on an account a workspace holds", /Business account is already connected/.test(String(refusedB?.message)), String(refusedB));
+    check("…the account stays A's, and B stores nothing and claims nothing", (await account())?.tenantId === A && !(await resolveTenantCredential(B, "WA_PHONE_NUMBER_ID")) && !(await basePrisma.channelIdentity.findFirst({ where: { channel: "whatsapp", externalId: phones[3], disabledAt: null } })));
+    await disconnectWhatsApp(A);
+    check("A disconnecting unsubscribes the account, then releases it", unsubscribed.at(-1) === waba && (await account())?.disabledAt != null);
+    // A failure right after the account is claimed (the number's lookup throws: a NUL in its id) must release it.
+    const sNul = await begin();
+    check("a claim that throws after the account is claimed fails the connect", await connectWa(sNul, phones[4]).then(() => false, () => true));
+    check("…and releases the account it had just claimed", (await account())?.disabledAt != null, JSON.stringify(await account()));
+    const sB2 = await begin(B);
+    await connectWa(sB2, phones[3], B);
+    check("…so B can now connect it", (await account())?.tenantId === B && (await resolveTenantCredential(B, "WA_PHONE_NUMBER_ID")) === phones[3]);
   } finally {
     globalThis.fetch = realFetch;
     if (platformBefore) {
@@ -177,7 +199,8 @@ async function main() {
     }
     await basePrisma.tenantIntegrationCredential.deleteMany({ where: { tenantId: { in: [A, B] }, key: { startsWith: "WA_" } } });
     await basePrisma.appSetting.deleteMany({ where: { tenantId: { in: [A, B] }, key: { startsWith: "WA_SIGNUP:" } } });
-    await basePrisma.channelIdentity.deleteMany({ where: { channel: "whatsapp", externalId: { in: phones } } });
+    await basePrisma.channelIdentity.deleteMany({ where: { channel: "whatsapp", externalId: { in: phones.filter((id) => !id.includes("\u0000")) } } });
+    await basePrisma.channelIdentity.deleteMany({ where: { channel: "whatsapp_account", externalId: waba } });
     await basePrisma.tenantIntegrationCredential.deleteMany({ where: { tenantId: { in: [A, B] }, key: { in: Object.values(CONNECTED) } } });
     await basePrisma.appSetting.deleteMany({ where: { tenantId: { in: [A, B] }, key: PENDING_KEY } });
     await basePrisma.appSetting.deleteMany({ where: { tenantId: { in: [A, B] }, key: LOCK } });
