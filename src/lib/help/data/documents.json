@@ -1,1 +1,525 @@
-[{"slug":"documents-repository-overview","title":"The document repository","summary":"Browse, search and open every file filed against your customers, vehicles, quotes and job cards.","category":"documents","audience":"everyone","keywords":["documents","files","repository","search","download","versions"],"body":[{"type":"p","text":"The **Documents** page is the central repository for every file in the CRM — uploads, generated PDFs, proofs of payment, delivery photos and more. You only ever see files you are permitted to access, and download and management actions are re-checked on the server."},{"type":"h","text":"What each row shows"},{"type":"list","items":["The file name, type icon and size","Where it is filed: Customer, Vehicle, Quote or Job card (or \"Unfiled\")","Any tag (for example invoice, pop, delivery-note)","Who uploaded it and when","An \"old version\" marker on superseded files"]},{"type":"h","text":"Finding a file"},{"type":"steps","items":["Type part of the file name into the search box and choose Search.","Open or preview a file by clicking its name, or use the external-link icon to open it in a new tab.","Use the Version history toggle to include superseded files; switch back to Current versions to hide them again."]},{"type":"callout","tone":"info","text":"The list shows up to 250 of the most recent accessible files. Narrow the view with search rather than scrolling."},{"type":"callout","tone":"tip","text":"If you manage templates, the Templates & Studio button in the header takes you to Document Studio."}]},{"slug":"documents-uploading-and-managing","title":"Uploading and organising documents","summary":"Upload files, rename and tag them, re-file them against a record, and replace them with a new version.","category":"documents","audience":"everyone","keywords":["upload","rename","tag","move","replace","version","file"],"body":[{"type":"p","text":"Uploading needs the documents.upload permission; renaming, moving and replacing need documents.manage. If you do not have these, the upload box and Manage button will not appear."},{"type":"h","text":"Upload a file"},{"type":"steps","items":["In the upload box on the Documents page, choose a file.","Select Upload. The file is filed into the repository and recorded in the audit log."]},{"type":"callout","tone":"warning","text":"Files must be 25 MB or smaller. Larger files are rejected."},{"type":"h","text":"Rename or tag a file"},{"type":"steps","items":["Select Manage on the file's row.","Edit the name and pick a tag from the list (invoice, pop, delivery-note, delivery-photo, delivery-signature, checkin or other).","Choose Save."]},{"type":"h","text":"Re-file a document against another record"},{"type":"steps","items":["Open Manage and go to \"Move to a different record\".","Pick a destination Customer, Vehicle or Quote.","Choose Move. You need access to the destination record for this to succeed."]},{"type":"h","text":"Replace with a new version"},{"type":"steps","items":["Open Manage and use the \"Upload a new version\" section.","Choose the replacement file and select Replace."]},{"type":"callout","tone":"info","text":"Replacing keeps the previous file in history and marks it as an old version — nothing is lost. Use the Version history toggle to see superseded files."},{"type":"callout","tone":"warning","text":"Removing a document moves it to the Trash, where it is recoverable for 60 days before permanent deletion."}]},{"slug":"studio-overview","title":"Document Studio overview","summary":"Where managers control print layouts and build free-form documents, templates, clauses and merge fields.","category":"documents","audience":"managers","keywords":["studio","templates","layouts","documents","merge fields"],"body":[{"type":"p","text":"**Document Studio** is the template workshop for the CRM. It is split into two clearly separated areas so every edit has a predictable production effect. Access requires the document_templates.manage permission."},{"type":"h","text":"The two areas"},{"type":"list","items":["**Operational templates** — named layouts that control the CRM's existing print and PDF outputs (quotes, job cards and other document types), grouped by kind.","**Free-form Studio** — a standalone editor for building custom documents from blocks, reusable clauses and merge fields, for anything without a dedicated CRM screen."]},{"type":"p","text":"The page also lists your **reusable clauses** and the most **recent free-form documents** that have been generated."},{"type":"callout","tone":"info","text":"Quote signing additionally uses an editable Document Builder layout, reached via \"Edit signing layout\" on the Quote template card. Other document types stay on their existing renderers until each builder layout reaches visual parity."},{"type":"callout","tone":"tip","text":"Use the \"Open document repository\" button to jump straight to the Documents list."}]},{"slug":"studio-operational-templates","title":"Managing operational print templates","summary":"Create and edit the named templates that drive the CRM's quote, job-card and document print layouts.","category":"documents","audience":"managers","keywords":["operational","template","print","pdf","default","logo","quote"],"body":[{"type":"p","text":"Operational templates feed the matching CRM print/PDF route. Each document type ships with a built-in template; you can add your own variants and choose which one is the default."},{"type":"h","text":"Create a template"},{"type":"steps","items":["Find the document type's card in the operational section.","Type a name for the new template.","Leave \"Start from standard\" selected, or pick an existing template to copy it.","Choose Create — the template opens for editing."]},{"type":"h","text":"Edit template content"},{"type":"p","text":"A template editor lets you set the **logo**, an **intro**, **body text**, **terms**, up to four **footer lines**, toggle each **section** on or off, and configure the **signature** block (position and whether the dealer counter-signs)."},{"type":"list","items":["Set a template as the **Default** so it is used automatically for that document type.","**Duplicate** a template to branch a new variant.","**Replace the logo** by uploading an image (2 MB max)."]},{"type":"callout","tone":"warning","text":"You cannot delete the default template — set another template as default first. Every create, edit, default change and deletion is written to the audit log."},{"type":"callout","tone":"info","text":"On the Quote card, \"Edit signing layout\" opens the editable Document Builder used when quotes are sent for signature."}]},{"slug":"studio-free-form-documents","title":"Building free-form documents","summary":"Compose custom proposals and letters from blocks, reusable clauses and merge fields, then finalise to a filed PDF.","category":"documents","audience":"managers","keywords":["free-form","clause","merge field","proposal","letter","finalise","pdf"],"body":[{"type":"p","text":"The free-form Studio creates standalone documents — custom proposals, letters and handover packs — from blocks, clauses and merge fields. Managing templates and clauses needs document_templates.manage; creating a document needs documents.manage."},{"type":"h","text":"Templates, clauses and documents"},{"type":"list","items":["**Free-form templates** are reusable starting points. Publish a template to create a numbered version; new documents draw from the latest published version (or the draft if none is published).","**Reusable clauses** are standard passages. They work only inside the free-form Studio and are copied in by value when inserted — later edits to the clause do not change documents already using it.","**Documents** are individual instances, optionally linked to a contact, lead or quote so merge fields fill automatically."]},{"type":"h","text":"Create and finalise a document"},{"type":"steps","items":["Create a free-form template and edit its content, then Publish it.","Create a document from the template, linking a contact, lead or quote to populate merge fields.","Edit the draft as needed.","Finalise the document — the CRM renders it to a PDF and files it in the document repository."]},{"type":"callout","tone":"warning","text":"Once a document is finalised it is locked. To change it, duplicate it and edit the copy. Deleting a document moves it to Trash."}]},{"slug":"documents-generate-and-sign","title":"Generating and signing builder documents","summary":"Turn a Document Builder template bound to a quote or job card into a filed PDF, or prepare it for e-signing.","category":"documents","audience":"admins","keywords":["generate","pdf","signing","signature","builder","quote","job card"],"body":[{"type":"p","text":"Document Builder templates can be generated against a live record and filed as a PDF, or prepared as a signature request. These actions are restricted to owner-level administrators."},{"type":"h","text":"Record binding rules"},{"type":"callout","tone":"warning","text":"A document may be bound to at most one record — either a quote or a job card, never both. Each template also requires a compatible record type; binding the wrong type is rejected with a clear message."},{"type":"h","text":"Generate to the repository"},{"type":"steps","items":["Choose a compatible quote or job card for the template.","Generate the document — a PDF is produced, filed in the repository with a generated-pdf tag, and opened for you.","The action is recorded in the audit log."]},{"type":"h","text":"Prepare for signing"},{"type":"steps","items":["Make sure the document has at least one recipient and signature field.","Send the document for signing — the CRM generates the PDF, files it, and creates a signature request.","Open the Signatures hub to send the request to recipients."]},{"type":"callout","tone":"info","text":"An empty document, or one with no recipients, cannot be sent — add a recipient and signature field first."}]},{"slug":"library-overview-and-versioning","title":"The document library","summary":"Shared, versioned brochures, price lists and spec sheets so the team always sends the latest approved file.","category":"documents","audience":"everyone","keywords":["library","brochure","price list","spec sheet","version","download","warranty"],"body":[{"type":"p","text":"The **Document library** holds shared reference material — brochures, price lists, spec sheets and warranty documents — with every file versioned so staff never send an outdated copy. Anyone signed in can browse and download; adding and removing files needs the library.manage permission."},{"type":"h","text":"Browse and download"},{"type":"steps","items":["Documents are grouped by category (Brochure, Price list, Spec sheet, Warranty, Other). Use the category chips to filter.","Each card shows the latest version, its size and who last updated it.","Choose \"Download latest\" to get the current approved file.","Expand \"Version history\" to download an earlier version."]},{"type":"h","text":"Add documents"},{"type":"steps","items":["Select \"Add documents\".","Choose one or more files — each file becomes its own library document.","Pick a category that applies to all of them.","Optionally set a custom name (single file only), then Add to library."]},{"type":"h","text":"Upload a new version"},{"type":"steps","items":["On a document card, choose \"New version\".","Select the replacement file and note what changed (for example \"Updated 2026 pricing\").","Upload — it becomes the new latest version and the old one stays in history."]},{"type":"callout","tone":"tip","text":"The change note appears in the version history, so keep it specific. It helps the team see why a file was updated."},{"type":"callout","tone":"warning","text":"Removing a library document moves it and all its versions to the Trash for 60 days before permanent deletion."}]},{"slug":"reports-sales-dashboard","title":"Reading the reports dashboard","summary":"Track leads, won deals, revenue, pipeline, sources, team performance and workshop output across any date range.","category":"governance","audience":"managers","keywords":["reports","dashboard","metrics","leads","revenue","win rate","pipeline","sources"],"body":[{"type":"p","text":"The **Reports** dashboard summarises sales and workshop performance. What you see is scoped to the records you are permitted to view: with reports.view_all you see everything, otherwise the figures are restricted to you and your team."},{"type":"h","text":"Choosing the period"},{"type":"list","items":["Pick a range: month to date, last 30 days, quarter to date, year to date, last 12 months, or a custom from/to.","Every headline figure is compared against the equivalent previous period, shown as an up or down percentage."]},{"type":"h","text":"Headline figures"},{"type":"table","headers":["Metric","Meaning"],"rows":[["New leads","Leads created in the period"],["Deals won","Leads marked won in the period"],["Won value","Total value of deals won, in rand"],["Win rate","Won as a share of all closed (won plus lost) deals"]]},{"type":"h","text":"Charts"},{"type":"list","items":["**Sales trend** — new leads as a line and won-deal value as bars, with the previous period as a dashed line.","**Pipeline right now** — open leads by stage. This is a live snapshot and ignores the date range.","**Lead sources** — share of leads per channel with each channel's win rate.","**Team performance** — value of accessible deals won per team member.","**Workshop** — accessible job cards completed per period."]},{"type":"h","text":"Filters"},{"type":"steps","items":["Use the filter bar to narrow by team member, product or lead source.","The pipeline snapshot respects the filters but not the date range."]},{"type":"callout","tone":"info","text":"You can only filter by team members whose records you are permitted to see."}]},{"slug":"audit-event-log","title":"Using the audit log","summary":"Search the append-only history of who did what, with before/after changes and full request context.","category":"governance","audience":"admins","keywords":["audit","log","governance","history","compliance","export","changes"],"body":[{"type":"p","text":"The **Audit events** page is a tamper-resistant, append-only record of activity across the CRM. Viewing needs the audit.view permission; exporting needs audit.export."},{"type":"h","text":"What each event records"},{"type":"list","items":["When it happened and who did it (actor name and type)","The event type and the affected entity, often as a direct link to the record","The changed fields, with full before and after values","Request context: source, IP address, correlation ID and user agent"]},{"type":"h","text":"Filtering the log"},{"type":"steps","items":["Narrow by event type, entity type or actor using the dropdowns.","Set a From and To date.","Search summaries or entity IDs with the search box.","Choose Filter, or Clear to reset."]},{"type":"callout","tone":"info","text":"The view shows up to the 500 newest matching events. Use the filters to reach older or more specific activity."},{"type":"h","text":"Exporting"},{"type":"steps","items":["Apply the filters you want in the export.","Choose \"Export filtered CSV\" — the current filters are carried through to the download."]},{"type":"callout","tone":"warning","text":"Audit rows cannot be edited or deleted — the database blocks updates and deletes with triggers. The log is a permanent governance record."}]},{"slug":"trash-recycle-bin","title":"Trash and restoring deleted items","summary":"Deleted records are held for 60 days in the Trash, showing who removed them and why, and can be restored.","category":"governance","audience":"everyone","keywords":["trash","recycle bin","restore","recover","deleted","retention","soft delete"],"body":[{"type":"p","text":"Deletions across the CRM are soft — records move to the **Trash** rather than disappearing. Anyone signed in can view the Trash; restoring an item is restricted to owner-level administrators."},{"type":"h","text":"What lands in the Trash"},{"type":"p","text":"Deleted contacts, leads, vehicles, job cards, documents, products, library documents and quotes all appear here during their recovery window."},{"type":"h","text":"What each row shows"},{"type":"list","items":["The item and its type","Who deleted it and the reason recorded at deletion","When it was deleted","How many days remain before permanent removal — shown in red when 7 days or fewer remain"]},{"type":"h","text":"Restore an item"},{"type":"steps","items":["Find the item in the Trash list (or the mobile cards).","Choose Restore — it returns to its normal location and the restore is recorded in the audit log."]},{"type":"callout","tone":"warning","text":"Items are kept for **60 days**, then permanently deleted along with any stored files. Restore anything you need before its countdown reaches zero — permanent removal cannot be undone."},{"type":"callout","tone":"info","text":"If Restore is not available to you, ask an administrator — restoring requires owner-level access."}]}]
+[
+  {
+    "slug": "documents-repository-overview",
+    "title": "The document repository",
+    "summary": "Find any file the CRM holds: the folders by customer and record, search, grid and list views, file types, old versions and the preview panel.",
+    "category": "documents",
+    "audience": "everyone",
+    "keywords": ["documents", "files", "repository", "search", "download", "versions", "folders", "unfiled", "preview", "portal uploads"],
+    "body": [
+      { "type": "p", "text": "**Documents** (in the menu under **Customers → Documents**) holds every file in the CRM: uploads, signed quotes, invoices, proofs of payment, delivery and workshop photos, and the **Library** of brochures, price lists and spec sheets. Files are arranged in folders by the customer and record they belong to, so nothing has to be filed by hand." },
+      { "type": "h", "text": "Who can use it" },
+      { "type": "p", "text": "You see only the files you are allowed to: either every document, or only documents on records you can see. People who can only see the Library are taken straight to it. An owner sets this under **Settings → Team & roles**, in the **Documents** group." },
+      { "type": "h", "text": "The figures at the top" },
+      {
+        "type": "table",
+        "headers": ["Figure", "What it shows"],
+        "rows": [
+          ["**All files**", "Every file you can see (current versions, unless you are showing old versions)."],
+          ["**Customers**", "How many customers have files on record."],
+          ["**Library**", "How many Library documents there are."],
+          ["**Added · 30 days**", "Files uploaded in the last 30 days."]
+        ]
+      },
+      { "type": "h", "text": "The folders" },
+      {
+        "type": "table",
+        "headers": ["Folder", "What is in it"],
+        "rows": [
+          ["**All files**", "Everything you can see."],
+          ["**Recent**", "Files added in the last 30 days."],
+          ["**Unfiled**", "Files not linked to any customer or record. It only appears while something is in it; move each file onto its customer."],
+          ["**Library**", "Shared brochures, price lists and spec sheets, with a folder per category."],
+          ["**Customers**", "A folder per customer. Open one to see its sub-folders: **General** for files on the customer, and one per quote (Quote Q-…), job card (Job card #…) or vehicle."],
+          ["**Other records** → **Files on records**", "Files on records that aren't linked to a customer you can see. **On records you can't open** holds files you can reach but whose record is hidden from you."]
+        ]
+      },
+      { "type": "p", "text": "A file moves folder by itself when you move it to another record." },
+      { "type": "h", "text": "Finding a file" },
+      {
+        "type": "steps",
+        "items": [
+          "Click a folder on the left. The path at the top shows where you are and how many files it holds.",
+          "Type part of the file name in **Search this folder…** and click **Search**.",
+          "Click a type chip to show one kind of file, for example invoices. **All types** clears it; **No type** shows files with no label.",
+          "Switch between the grid and list views with the two buttons beside the search."
+        ]
+      },
+      { "type": "p", "text": "A folder shows up to 300 files at a time, newest first. If there are more, a note says so: search to find the rest, because search covers every file." },
+      { "type": "h", "text": "Opening a file" },
+      { "type": "p", "text": "Click a file to open the preview panel. PDFs and pictures show a preview; other kinds say **No preview for this type of file. Download it to open it.** The panel shows the **Size**, when it was **Added** and its **Type**, with **Open in new tab** and **Download**. If you may manage documents, **Rename, move or replace** opens the file's settings." },
+      { "type": "h", "text": "Old versions" },
+      { "type": "p", "text": "When a file is replaced, the earlier one is kept. Click **Version history** to include old versions (the button then reads **Showing old versions**); each is marked **old version**. Click it again to hide them." },
+      { "type": "h", "text": "Files from the customer portal" },
+      { "type": "p", "text": "Files customers upload in your customer portal appear at the top under **New from the customer portal** until someone looks at them. If you may manage documents, click **Mark reviewed** once you have dealt with each one." },
+      { "type": "callout", "tone": "tip", "text": "If you manage document templates, **Templates & Studio** at the top takes you to Document Studio." },
+      { "type": "h", "text": "If something goes wrong" },
+      {
+        "type": "list",
+        "items": [
+          "**You can't find a file you know exists**: search from **All files**, and click **Version history** in case it has been replaced.",
+          "**A customer's folder is missing**: you can't see that customer, so their files sit under **Other records**.",
+          "**No documents here.**: the folder is empty, or nothing matches your search or type chip."
+        ]
+      },
+      { "type": "h", "text": "Related guides" },
+      {
+        "type": "list",
+        "items": [
+          "Uploading and organising documents",
+          "The document library",
+          "Document Studio overview"
+        ]
+      }
+    ]
+  },
+  {
+    "slug": "documents-uploading-and-managing",
+    "title": "Uploading and organising documents",
+    "summary": "Upload files into the right folder, rename and label them, move them to another record or the Library, replace them with a new version, and delete them.",
+    "category": "documents",
+    "audience": "everyone",
+    "keywords": ["upload", "rename", "tag", "label", "move", "replace", "version", "file", "drag and drop", "delete document"],
+    "body": [
+      { "type": "p", "text": "Uploading needs permission to upload documents to records you can see. Renaming, moving and replacing need permission to rename, re-file, replace and delete documents. Without them, the upload area and **Rename, move or replace** don't appear. An owner sets these under **Settings → Team & roles**, in the **Documents** group." },
+      { "type": "h", "text": "Uploading files" },
+      {
+        "type": "steps",
+        "items": [
+          "On **Documents**, open the folder the files belong in. The hint above the files tells you where they will go.",
+          "Drag the files onto the page, or click **Choose files**. You can upload several at once.",
+          "Each file shows its progress and is filed when it finishes."
+        ]
+      },
+      {
+        "type": "table",
+        "headers": ["Folder you are in", "Where uploaded files go"],
+        "rows": [
+          ["**All files**, **Recent** or **Unfiled**", "Unfiled. Move each one onto its customer or record afterwards."],
+          ["A customer, or its **General** folder", "On that customer."],
+          ["A quote, job card or vehicle folder", "On that record."]
+        ]
+      },
+      { "type": "callout", "tone": "warning", "text": "Each file can be up to 100 MB. A bigger file is refused with a message showing its size." },
+      { "type": "p", "text": "You can also upload from a customer's, quote's or vehicle's own page, in its documents section. Brochures and price lists belong in the Library instead; see The document library." },
+      { "type": "h", "text": "Renaming and labelling a file" },
+      {
+        "type": "steps",
+        "items": [
+          "Click the file, then **Rename, move or replace**.",
+          "Under **Name & tag**, change the name and choose what kind of document it is, or **Not labelled**.",
+          "Click **Save**."
+        ]
+      },
+      { "type": "p", "text": "The kinds of document on offer are your workspace's own list, set under **Settings → Quotes**, in **Document types** (one per line). A label the CRM set itself, such as a signed copy or a customer's proof of payment, shows **set by the CRM** and can't be changed, because other screens rely on it." },
+      { "type": "h", "text": "Moving a file to another record" },
+      {
+        "type": "steps",
+        "items": [
+          "Open **Rename, move or replace** on the file.",
+          "Under **Move to a different record**, choose a customer, vehicle or quote.",
+          "Click **Move**. You need to be able to see the record you are moving it to."
+        ]
+      },
+      { "type": "h", "text": "Moving a brochure or price list into the Library" },
+      { "type": "p", "text": "If someone filed a brochure on a customer by mistake and you may manage the Library, choose a category under **Move to the Library** and click **Move to the Library**. The file goes into the Library and the copy on the record goes to the Trash. Files the CRM filed itself, and documents sent for signature, stay on their record." },
+      { "type": "h", "text": "Replacing a file with a new version" },
+      {
+        "type": "steps",
+        "items": [
+          "Open **Rename, move or replace** on the file.",
+          "Under **Upload a new version (this one is kept in history)**, choose the new file.",
+          "Click **Replace**."
+        ]
+      },
+      { "type": "p", "text": "The old file is kept and marked **old version**; click **Version history** on the Documents page to see it." },
+      { "type": "h", "text": "Deleting a file" },
+      { "type": "p", "text": "Delete a file from the documents section on its customer's, quote's or vehicle's page. It moves to the Trash, where the workspace owner can restore it for 60 days." },
+      { "type": "h", "text": "If something goes wrong" },
+      {
+        "type": "table",
+        "headers": ["Message", "What to do"],
+        "rows": [
+          ["A size followed by **over the 100.0 MB limit**", "The file is too big. Compress it or split it."],
+          ["The file uploaded but could not be filed. Try again, or check you can still access this record.", "Check you can still open the record, then upload again."],
+          ["Give the document a name.", "The name can't be empty."],
+          ["Choose a customer, vehicle or quote to move it to.", "Pick a destination before clicking **Move**."],
+          ["This document was sent for signature, so it stays on its record.", "Signed paperwork can't go into the Library. Upload a separate copy to the Library instead."],
+          ["That document is no longer there — refresh the page.", "Someone moved or deleted it. Refresh the page."]
+        ]
+      },
+      { "type": "h", "text": "Related guides" },
+      {
+        "type": "list",
+        "items": [
+          "The document repository",
+          "The document library",
+          "Trash and restoring deleted items"
+        ]
+      }
+    ]
+  },
+  {
+    "slug": "studio-overview",
+    "title": "Document Studio overview",
+    "summary": "Where managers control print layouts and build free-form documents, templates, clauses and merge fields.",
+    "category": "documents",
+    "audience": "managers",
+    "keywords": ["studio", "templates", "layouts", "documents", "merge fields"],
+    "body": [
+      { "type": "p", "text": "**Document Studio** is the template workshop for the CRM. It is split into two clearly separated areas so every edit has a predictable production effect. Access requires the document_templates.manage permission." },
+      { "type": "h", "text": "The two areas" },
+      {
+        "type": "list",
+        "items": [
+          "**Operational templates** — named layouts that control the CRM's existing print and PDF outputs (quotes, job cards and other document types), grouped by kind.",
+          "**Free-form Studio** — a standalone editor for building custom documents from blocks, reusable clauses and merge fields, for anything without a dedicated CRM screen."
+        ]
+      },
+      { "type": "p", "text": "The page also lists your **reusable clauses** and the most **recent free-form documents** that have been generated." },
+      { "type": "callout", "tone": "info", "text": "Quote signing additionally uses an editable Document Builder layout, reached via \"Edit signing layout\" on the Quote template card. Other document types stay on their existing renderers until each builder layout reaches visual parity." },
+      { "type": "callout", "tone": "tip", "text": "Use the \"Open document repository\" button to jump straight to the Documents list." }
+    ]
+  },
+  {
+    "slug": "studio-operational-templates",
+    "title": "Managing operational print templates",
+    "summary": "Create and edit the named templates that drive the CRM's quote, job-card and document print layouts.",
+    "category": "documents",
+    "audience": "managers",
+    "keywords": ["operational", "template", "print", "pdf", "default", "logo", "quote"],
+    "body": [
+      { "type": "p", "text": "Operational templates feed the matching CRM print/PDF route. Each document type ships with a built-in template; you can add your own variants and choose which one is the default." },
+      { "type": "h", "text": "Create a template" },
+      {
+        "type": "steps",
+        "items": [
+          "Find the document type's card in the operational section.",
+          "Type a name for the new template.",
+          "Leave \"Start from standard\" selected, or pick an existing template to copy it.",
+          "Choose Create — the template opens for editing."
+        ]
+      },
+      { "type": "h", "text": "Edit template content" },
+      { "type": "p", "text": "A template editor lets you set the **logo**, an **intro**, **body text**, **terms**, up to four **footer lines**, toggle each **section** on or off, and configure the **signature** block (position and whether the dealer counter-signs)." },
+      {
+        "type": "list",
+        "items": [
+          "Set a template as the **Default** so it is used automatically for that document type.",
+          "**Duplicate** a template to branch a new variant.",
+          "**Replace the logo** by uploading an image (2 MB max)."
+        ]
+      },
+      { "type": "callout", "tone": "warning", "text": "You cannot delete the default template — set another template as default first. Every create, edit, default change and deletion is written to the audit log." },
+      { "type": "callout", "tone": "info", "text": "On the Quote card, \"Edit signing layout\" opens the editable Document Builder used when quotes are sent for signature." }
+    ]
+  },
+  {
+    "slug": "studio-free-form-documents",
+    "title": "Building free-form documents",
+    "summary": "Compose custom proposals and letters from blocks, reusable clauses and merge fields, then finalise to a filed PDF.",
+    "category": "documents",
+    "audience": "managers",
+    "keywords": ["free-form", "clause", "merge field", "proposal", "letter", "finalise", "pdf"],
+    "body": [
+      { "type": "p", "text": "The free-form Studio creates standalone documents — custom proposals, letters and handover packs — from blocks, clauses and merge fields. Managing templates and clauses needs document_templates.manage; creating a document needs documents.manage." },
+      { "type": "h", "text": "Templates, clauses and documents" },
+      {
+        "type": "list",
+        "items": [
+          "**Free-form templates** are reusable starting points. Publish a template to create a numbered version; new documents draw from the latest published version (or the draft if none is published).",
+          "**Reusable clauses** are standard passages. They work only inside the free-form Studio and are copied in by value when inserted — later edits to the clause do not change documents already using it.",
+          "**Documents** are individual instances, optionally linked to a contact, lead or quote so merge fields fill automatically."
+        ]
+      },
+      { "type": "h", "text": "Create and finalise a document" },
+      {
+        "type": "steps",
+        "items": [
+          "Create a free-form template and edit its content, then Publish it.",
+          "Create a document from the template, linking a contact, lead or quote to populate merge fields.",
+          "Edit the draft as needed.",
+          "Finalise the document — the CRM renders it to a PDF and files it in the document repository."
+        ]
+      },
+      { "type": "callout", "tone": "warning", "text": "Once a document is finalised it is locked. To change it, duplicate it and edit the copy. Deleting a document moves it to Trash." }
+    ]
+  },
+  {
+    "slug": "documents-generate-and-sign",
+    "title": "Generating and signing builder documents",
+    "summary": "Turn a Document Builder template bound to a quote or job card into a filed PDF, or prepare it for e-signing.",
+    "category": "documents",
+    "audience": "admins",
+    "keywords": ["generate", "pdf", "signing", "signature", "builder", "quote", "job card"],
+    "body": [
+      { "type": "p", "text": "Document Builder templates can be generated against a live record and filed as a PDF, or prepared as a signature request. These actions are restricted to owner-level administrators." },
+      { "type": "h", "text": "Record binding rules" },
+      { "type": "callout", "tone": "warning", "text": "A document may be bound to at most one record — either a quote or a job card, never both. Each template also requires a compatible record type; binding the wrong type is rejected with a clear message." },
+      { "type": "h", "text": "Generate to the repository" },
+      {
+        "type": "steps",
+        "items": [
+          "Choose a compatible quote or job card for the template.",
+          "Generate the document — a PDF is produced, filed in the repository with a generated-pdf tag, and opened for you.",
+          "The action is recorded in the audit log."
+        ]
+      },
+      { "type": "h", "text": "Prepare for signing" },
+      {
+        "type": "steps",
+        "items": [
+          "Make sure the document has at least one recipient and signature field.",
+          "Send the document for signing — the CRM generates the PDF, files it, and creates a signature request.",
+          "Open the Signatures hub to send the request to recipients."
+        ]
+      },
+      { "type": "callout", "tone": "info", "text": "An empty document, or one with no recipients, cannot be sent — add a recipient and signature field first." }
+    ]
+  },
+  {
+    "slug": "library-overview-and-versioning",
+    "title": "The document library",
+    "summary": "Shared, versioned brochures, price lists and spec sheets so the team always sends the latest file: browsing, adding, new versions, categories and deleting.",
+    "category": "documents",
+    "audience": "everyone",
+    "keywords": ["library", "brochure", "price list", "spec sheet", "version", "download", "warranty", "categories", "new version"],
+    "body": [
+      { "type": "p", "text": "The **Library** is the shared shelf of material your team sends to customers: brochures, price lists, spec sheets and the like. Every file keeps its versions, so the team always sends the latest one. It lives inside **Documents**, under **Library** in the folder list." },
+      { "type": "h", "text": "Who can use it" },
+      { "type": "p", "text": "Viewing and downloading needs permission to view the company document library. Adding, replacing, re-categorising and deleting needs permission to upload and version company library documents. An owner sets these under **Settings → Team & roles**, in the **Documents** group." },
+      { "type": "h", "text": "Finding and downloading" },
+      {
+        "type": "steps",
+        "items": [
+          "On **Documents**, click **All library**, or a category under it, such as **Brochure** or **Price list**.",
+          "Each item shows its latest version (for example **Library · v3 of 3**), its size and who last updated it.",
+          "Click an item to open it. **Download** gets the latest version.",
+          "Under **Versions**, download any earlier version."
+        ]
+      },
+      { "type": "h", "text": "Adding documents" },
+      {
+        "type": "steps",
+        "items": [
+          "Open the Library and click **Add to library**.",
+          "Under **Files**, choose one or more files. Each file becomes its own Library document.",
+          "Choose the **Category (applies to all)**.",
+          "If you are adding one file, you can give it a **Custom name**.",
+          "Click **Add to library**."
+        ]
+      },
+      { "type": "h", "text": "Uploading a new version" },
+      {
+        "type": "steps",
+        "items": [
+          "Click the item, then **New version**.",
+          "Choose the new file and fill in **What changed?**, for example \"Updated prices for the new season\".",
+          "Click **Upload new version**. It becomes the latest version; the earlier ones stay under **Versions**."
+        ]
+      },
+      { "type": "callout", "tone": "tip", "text": "Keep **What changed?** specific. It shows in the version list, so the team can see why the file was updated." },
+      { "type": "h", "text": "Categories" },
+      { "type": "p", "text": "To change an item's category, open it, choose the **Category** and click **Save**. To change the list of categories, click **Categories** in the Library, type one per line and click **Save categories**. The starting list is Brochure, Price list, Spec sheet, Warranty and Other." },
+      { "type": "h", "text": "Deleting" },
+      { "type": "callout", "tone": "warning", "text": "**Delete** on an item moves the document and all its versions to the Trash for 60 days, where the workspace owner can restore it." },
+      { "type": "h", "text": "If something goes wrong" },
+      {
+        "type": "table",
+        "headers": ["Message", "What to do"],
+        "rows": [
+          ["Choose at least one file first.", "Choose the files before clicking **Add to library**."],
+          ["Choose one of your Library categories.", "Pick a category from the list."],
+          ["A message starting **That file is too large to store**", "Use a smaller file; the message gives the limit."],
+          ["That library document is no longer there — refresh the page.", "Someone deleted it. Refresh the page."]
+        ]
+      },
+      { "type": "h", "text": "Related guides" },
+      {
+        "type": "list",
+        "items": [
+          "The document repository",
+          "Uploading and organising documents",
+          "QR codes that send your brochure on WhatsApp"
+        ]
+      }
+    ]
+  },
+  {
+    "slug": "reports-sales-dashboard",
+    "title": "Reading the reports dashboard",
+    "summary": "Track new leads, deals won, won value, win rate, the pipeline, lead sources, team performance and workshop output for any period.",
+    "category": "governance",
+    "audience": "managers",
+    "keywords": ["reports", "dashboard", "metrics", "leads", "revenue", "win rate", "pipeline", "sources", "team performance"],
+    "body": [
+      { "type": "p", "text": "**Reports** (in the menu under **Insights**) summarises sales and workshop performance for a period you choose." },
+      { "type": "h", "text": "Who sees what" },
+      { "type": "p", "text": "You need one of the report permissions. With permission to view organisation-wide reports you see everyone's figures. Otherwise the figures cover only you and the people in your teams, and only records you can see. An owner sets these under **Settings → Team & roles**." },
+      { "type": "h", "text": "Choosing the period and filters" },
+      {
+        "type": "steps",
+        "items": [
+          "Under **Reporting period**, choose **This month**, **30 days**, **Quarter**, **Year to date**, **12 months** or **Custom** (then set the dates).",
+          "Narrow the report with **Team member**, **Product** and **Source**.",
+          "**Clear filters** puts everything back."
+        ]
+      },
+      { "type": "p", "text": "Each headline figure shows an up or down change against the previous period of the same length. Point at the change to see which period it is compared with." },
+      { "type": "h", "text": "Headline figures" },
+      {
+        "type": "table",
+        "headers": ["Figure", "What it means"],
+        "rows": [
+          ["**New leads**", "Leads created in the period."],
+          ["**Deals won**", "Leads marked won in the period."],
+          ["**Won value**", "The total value of deals won, in your workspace's currency. Deals in other currencies are listed beside it."],
+          ["**Win rate**", "Won deals as a share of all deals closed (won plus lost) in the period. Its change is shown in percentage points."]
+        ]
+      },
+      { "type": "h", "text": "Charts" },
+      {
+        "type": "list",
+        "items": [
+          "**Sales trend**: new leads as a line and won deal value as bars; the dashed line is the previous period.",
+          "**Pipeline right now**: open leads by stage today. The date range doesn't apply to it, but the filters do.",
+          "**Lead sources**: each channel's share of leads in the period, with its win rate.",
+          "**Team performance**: the value of deals won in the period, per team member.",
+          "**Workshop**: job cards completed in each part of the period, if your workspace has the workshop."
+        ]
+      },
+      { "type": "callout", "tone": "info", "text": "The **Team member** filter lists only people whose figures you are allowed to see." },
+      { "type": "h", "text": "If something goes wrong" },
+      {
+        "type": "list",
+        "items": [
+          "**No deals won in this period.**: try a longer period or clear the filters.",
+          "**Your figures differ from a colleague's**: you can each see different people and records."
+        ]
+      },
+      { "type": "h", "text": "Related guides" },
+      {
+        "type": "list",
+        "items": [
+          "Reading the sales forecast",
+          "Monthly targets and progress",
+          "Your dashboards: how they are put together"
+        ]
+      }
+    ]
+  },
+  {
+    "slug": "audit-event-log",
+    "title": "Using the audit log",
+    "summary": "Search the permanent record of who did what and when, see exactly what changed, and export what you filtered.",
+    "category": "governance",
+    "audience": "admins",
+    "keywords": ["audit", "log", "governance", "history", "compliance", "export", "changes", "who did what"],
+    "body": [
+      { "type": "p", "text": "The **Audit log** (in the menu under **Admin**) is a permanent record of activity in your workspace: who did what, when, and what changed. Entries are only ever added; nobody can edit or delete them." },
+      { "type": "p", "text": "Viewing needs permission to view the audit log; exporting needs permission to export it. An owner sets these under **Settings → Team & roles**, in the **Governance** group." },
+      { "type": "h", "text": "What each entry shows" },
+      {
+        "type": "table",
+        "headers": ["Column", "What it shows"],
+        "rows": [
+          ["**When**", "The date and time."],
+          ["**Actor**", "Who did it, and whether it was a person or the system."],
+          ["**Event**", "What kind of action it was."],
+          ["**Entity**", "The kind of record affected, often with a link to it."],
+          ["**Summary**", "A sentence describing the change."],
+          ["**Changes**", "Each field that changed, with its value before and after."],
+          ["**Context**", "Under **Request**: where the action came from, the IP address, a reference number and the browser used."]
+        ]
+      },
+      { "type": "h", "text": "Filtering the log" },
+      {
+        "type": "steps",
+        "items": [
+          "Choose an **Event**, **Entity** or **Actor**, or leave **All events**, **All entities** and **All actors**.",
+          "Set the **From** and **To** dates.",
+          "Type in **Search summary or entity ID** to search the summaries.",
+          "Click **Filter**. **Clear** resets everything."
+        ]
+      },
+      { "type": "callout", "tone": "info", "text": "The page shows up to the 500 newest matching entries. Narrow the filters to reach older or more specific activity." },
+      { "type": "h", "text": "Exporting" },
+      {
+        "type": "steps",
+        "items": [
+          "Set the filters you want.",
+          "Click **Export filtered CSV**. The download contains what your filters match."
+        ]
+      },
+      { "type": "h", "text": "If something goes wrong" },
+      {
+        "type": "list",
+        "items": [
+          "**No audit events match the filters.**: widen the dates or click **Clear**.",
+          "**There is no Export filtered CSV button**: you can view the log but not export it."
+        ]
+      },
+      { "type": "h", "text": "Related guides" },
+      {
+        "type": "list",
+        "items": [
+          "Trash and restoring deleted items",
+          "Roles and permissions"
+        ]
+      }
+    ]
+  },
+  {
+    "slug": "trash-recycle-bin",
+    "title": "Trash and restoring deleted items",
+    "summary": "Deleted records wait in the Trash for 60 days, showing who deleted them and why, and the workspace owner can restore them.",
+    "category": "governance",
+    "audience": "admins",
+    "keywords": ["trash", "recycle bin", "restore", "recover", "deleted", "retention", "undelete"],
+    "body": [
+      { "type": "p", "text": "Deleting most records doesn't remove them straight away. They move to the **Trash**, where they can be restored." },
+      { "type": "h", "text": "Who can use it" },
+      { "type": "p", "text": "Only the workspace owner can open the Trash and restore from it. On a computer, open it from your account menu (click your name) → **Trash**, or search for Trash in the command menu. Anyone else who needs something back should ask the owner." },
+      { "type": "h", "text": "What lands in the Trash" },
+      { "type": "p", "text": "Deleted contacts, leads, quotes, vehicles, job cards, documents, products and Library documents are kept for 60 days. Some other things are kept until someone restores them, with no countdown: fleets, parts, archived stock units, surveys, competitors, signing workflows, document templates and layouts, saved content blocks and suppliers." },
+      { "type": "h", "text": "What each row shows" },
+      {
+        "type": "table",
+        "headers": ["Column", "What it shows"],
+        "rows": [
+          ["**Item**", "What was deleted and what kind of record it is."],
+          ["**Deleted by**", "Who deleted it."],
+          ["**Reason**", "The reason they gave."],
+          ["**Deleted**", "When."],
+          ["**Purges in**", "Days left before it is deleted for good (red when 7 or fewer), or **Kept** for things with no countdown."]
+        ]
+      },
+      { "type": "h", "text": "Restoring an item" },
+      {
+        "type": "steps",
+        "items": [
+          "Find the item in the list.",
+          "Click **Restore**, then confirm with **Restore item**.",
+          "It goes back where it was. The restore is recorded in the audit log."
+        ]
+      },
+      { "type": "callout", "tone": "warning", "text": "After 60 days, an item is deleted for good together with any stored files, and can't be brought back. Restore anything you need before its countdown reaches zero." },
+      { "type": "h", "text": "If something goes wrong" },
+      {
+        "type": "list",
+        "items": [
+          "**Trash is empty**: nothing has been deleted in the last 60 days.",
+          "**You can't find Trash**: only the workspace owner sees it, and not on the phone app."
+        ]
+      },
+      { "type": "h", "text": "Related guides" },
+      {
+        "type": "list",
+        "items": [
+          "Using the audit log",
+          "Uploading and organising documents"
+        ]
+      }
+    ]
+  }
+]
