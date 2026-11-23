@@ -205,9 +205,10 @@ function LeadCard({ lead, dragging, actions, staleAfterDays = null }: { lead: Ka
   return (
     <div
       className={cn(
-        "group relative overflow-hidden rounded-xl border border-border bg-card p-3.5 transition-all",
+        "group relative overflow-hidden rounded-xl border border-border bg-card p-3.5 transition-all motion-reduce:transition-none",
+        // The lift's shadow for everyone; the tilt and grow only when the person hasn't asked for less motion.
         dragging
-          ? "-rotate-2 scale-[1.03] cursor-grabbing depth-lifted"
+          ? "motion-safe:-rotate-2 motion-safe:scale-[1.03] cursor-grabbing depth-lifted"
           : "cursor-grab depth-card hover:-translate-y-px hover:border-primary/35 hover:shadow-lg hover:shadow-black/20",
         lead.isNew && !dragging && "animate-new-lead-glow",
       )}

@@ -108,6 +108,17 @@ test("the vehicle photo tilts only for a mouse, from the whole panel", () => {
   assert.match(deal, /<PointerTilt className="relative overflow-hidden/);
 });
 
+test("a picked-up card tilts and grows only when motion is allowed; the lift's shadow stays for everyone", () => {
+  const kanban = code("src/components/KanbanBoard.tsx");
+  assert.match(kanban, /"motion-safe:-rotate-2 motion-safe:scale-\[1\.03\] cursor-grabbing depth-lifted"/);
+  assert.match(kanban, /transition-all motion-reduce:transition-none/);
+  assert.match(code("src/components/dashboard/editor/DashboardCanvas.tsx"), /motion-safe:-rotate-\[1\.5deg\] motion-safe:scale-\[1\.02\] cursor-grabbing/);
+  // No bare drag tilt or grow left behind.
+  for (const path of ["src/components/KanbanBoard.tsx", "src/components/dashboard/editor/DashboardCanvas.tsx"]) {
+    assert.doesNotMatch(code(path), /(?<![:\w-])-rotate-(?:2|\[1\.5deg\])/, path);
+  }
+});
+
 test("the sign-in planes are decoration on phones only", () => {
   const planes = code("src/app/login/LoginDepthPlanes.tsx");
   assert.match(planes, /aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden lg:hidden"/);
