@@ -2,6 +2,7 @@ import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import { disconnectWhatsAppNumber } from "@/app/actions/whatsappConnect";
 import { connectedWhatsApp, savedRegistrationPin, whatsappSignupApp } from "@/lib/whatsappConnect";
 import { PLATFORM_URL } from "@/lib/platformLegal";
+import { pendingWhatsAppUnsubscribes } from "@/lib/whatsappUnsubscribe";
 import { WhatsAppConnectButton } from "./WhatsAppConnectButton";
 
 /**
@@ -10,8 +11,8 @@ import { WhatsAppConnectButton } from "./WhatsAppConnectButton";
  * exactly as it is — connecting replaces it only when the owner presses the button.
  */
 export default async function WhatsAppConnectBox({ tenantId }: { tenantId: string }) {
-  const [app, connected] = await Promise.all([whatsappSignupApp(), connectedWhatsApp(tenantId)]);
-  if (!app && !connected) return null;
+  const [app, connected, waiting] = await Promise.all([whatsappSignupApp(), connectedWhatsApp(tenantId), pendingWhatsAppUnsubscribes(tenantId)]);
+  if (!app && !connected && !waiting.length) return null;
   const pin = connected?.phoneNumberId ? await savedRegistrationPin(tenantId, connected.phoneNumberId) : null;
   return (
     <div className="mb-5 rounded-lg border border-border bg-background/40 p-4">
@@ -28,6 +29,13 @@ export default async function WhatsAppConnectBox({ tenantId }: { tenantId: strin
           asks for it if the number is ever moved to another provider.
         </p>
       )}
+      {waiting.map((item) => (
+        <p key={item.since} className="mt-2 text-xs text-amber-600">
+          Still asking Meta to stop sending messages from a WhatsApp Business account you no longer use here (since{" "}
+          {new Date(item.since).toLocaleDateString("en-ZA", { day: "numeric", month: "long" })}). We try again every 6 hours;
+          you can also remove the app from that account in Meta Business settings.
+        </p>
+      ))}
       <div className="mt-3 flex flex-wrap items-start gap-2">
         {app && <WhatsAppConnectButton platformOrigin={PLATFORM_URL} label={connected ? "Connect a different number" : "Connect WhatsApp"} />}
         {connected && (

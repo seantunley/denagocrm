@@ -5,6 +5,7 @@ import { getSetting, getWorkspaceSetting, putTenantCredential, putTenantCredenti
 import { withSystemScope } from "./tenantScopeEntry";
 import { reconcileTenantChannels } from "./channelRegistration";
 import { claimChannelEndpoint } from "./channelClaim";
+import { dropWhatsAppUnsubscribe, queueWhatsAppUnsubscribe, retireWhatsAppAccount } from "./whatsappUnsubscribe";
 import type { ChannelKind } from "./channelTenant";
 import { withMetaConnectLock } from "./metaConnect";
 import { logError } from "./errorLog";
@@ -159,6 +160,10 @@ async function connectWhatsAppNumberLocked(input: { tenantId: string; state: str
   const previousWaba = await resolveTenantCredential(input.tenantId, WA_CONNECTED.wabaId);
   const previousToken = previousWaba && previousWaba !== input.wabaId ? await resolveTenantCredential(input.tenantId, "WA_ACCESS_TOKEN") : null;
   let subscribeTried = false;
+  // Switching accounts: the old account's token is kept apart BEFORE the new connection overwrites it, so its
+  // unsubscribe can't be lost (whatsappUnsubscribe.ts). If this connect fails the old account is live again, and the
+  // retry drops it unseen.
+  if (previousWaba && previousToken) await queueWhatsAppUnsubscribe(input.tenantId, previousWaba, previousToken);
   const claims: { channel: ChannelKind; externalId: string; label: string | null; refusal: string }[] = [
     // ONE WORKSPACE PER WHATSAPP BUSINESS ACCOUNT: Meta's webhook subscription is the whole account's, so one
     // workspace's disconnect would cut off another's number on the same account (review of #1187).
@@ -174,8 +179,12 @@ async function connectWhatsAppNumberLocked(input: { tenantId: string; state: str
       if (!(await claimChannelEndpoint(input.tenantId, claim.channel, claim.externalId, claim.label))) throw new Error(claim.refusal);
       if (!alreadyOurs) newlyClaimed.push(claim);
     }
+    // A NEW account: its token kept for an unsubscribe before it's subscribed, so a failure (or a crash) after this can
+    // always undo it. Dropped once the connection stands.
+    const newAccount = newlyClaimed.some((claim) => claim.channel === "whatsapp_account");
+    if (newAccount) await queueWhatsAppUnsubscribe(input.tenantId, input.wabaId, token);
     // Set BEFORE the call: a timeout may hide that Meta did subscribe it, and unsubscribing an unsubscribed account is harmless.
-    subscribeTried = true;
+    subscribeTried = newAccount;
     const subscribed = await graph("POST", `${input.wabaId}/subscribed_apps`, token);
     if (subscribed.success !== true) throw new Error("Meta didn't subscribe the WhatsApp account to messages.");
     const pin = await registrationPin(input.tenantId, input.phoneNumberId);
@@ -193,6 +202,7 @@ async function connectWhatsAppNumberLocked(input: { tenantId: string; state: str
     await reconcileTenantChannels(input.tenantId, { force: true });
     const row = await basePrisma.channelIdentity.findUnique({ where: { channel_externalId: { channel: "whatsapp", externalId: input.phoneNumberId } }, select: { tenantId: true, disabledAt: true } });
     if (row?.tenantId !== input.tenantId || row.disabledAt) throw new Error("That WhatsApp number is already connected to another workspace.");
+    await dropWhatsAppUnsubscribe(input.tenantId, input.wabaId);
   } catch (error) {
     // Put the workspace back exactly as it was: its previous WhatsApp (if any), the account and number released if newly taken.
     await basePrisma
@@ -201,19 +211,20 @@ async function connectWhatsAppNumberLocked(input: { tenantId: string; state: str
         if (previous.length) await tx.tenantIntegrationCredential.createMany({ data: previous.map((r) => ({ tenantId: input.tenantId, key: r.key, value: r.value })) });
       })
       .catch((undo: unknown) => logError("whatsapp-connect", undo, "Connect WhatsApp failed and the previous setup could not be restored").catch(() => {}));
-    // An account newly taken by THIS attempt and subscribed: unsubscribed before it's let go (review of #1187). One
-    // already held (same account, another number) is left subscribed — the previous connection still uses it.
-    const newAccount = newlyClaimed.some((claim) => claim.channel === "whatsapp_account");
-    const keepAccount = newAccount && subscribeTried && !(await unsubscribeWhatsAppAccount(input.tenantId, input.wabaId, token));
+    // An account newly taken by THIS attempt and subscribed: unsubscribed before it's let go, or kept held for the
+    // retry (review of #1187). One already held (same account, another number) is left alone — the previous
+    // connection still uses it.
     for (const claim of newlyClaimed) {
-      if (keepAccount && claim.channel === "whatsapp_account") continue;
+      if (subscribeTried && claim.channel === "whatsapp_account") continue;
       await basePrisma.channelIdentity.updateMany({ where: { tenantId: input.tenantId, channel: claim.channel, externalId: claim.externalId }, data: { disabledAt: new Date() } }).catch(() => {});
     }
+    if (subscribeTried) await retireWhatsAppAccount(input.tenantId, input.wabaId, token).catch(() => {});
+    else await dropWhatsAppUnsubscribe(input.tenantId, input.wabaId).catch(() => {});
     await reconcileTenantChannels(input.tenantId, { force: true }).catch(() => {});
     throw error;
   }
   // Moved to a DIFFERENT account: the old one unsubscribed with its own token, then let go (review of #1187). The new
-  // connection already stands, so Meta refusing doesn't undo it — the old account just stays held (see below).
+  // connection already stands, so Meta refusing doesn't undo it — the old account stays held and is retried.
   if (previousWaba && previousWaba !== input.wabaId) await retireWhatsAppAccount(input.tenantId, previousWaba, previousToken);
   return name ? `${name} (${display})` : display;
 }
@@ -230,8 +241,9 @@ export async function connectedWhatsApp(tenantId: string): Promise<{ wabaId: str
 }
 
 /**
- * Disconnect a number connected through Connect WhatsApp: our app unsubscribed from the account (best effort), the
- * connection forgotten, the number released. The number itself stays registered with Meta — it's the business's.
+ * Disconnect a number connected through Connect WhatsApp: the connection forgotten, the number released, our app
+ * unsubscribed from the account (retried until Meta confirms — whatsappUnsubscribe.ts). The number itself stays
+ * registered with Meta — it's the business's.
  */
 export function disconnectWhatsApp(tenantId: string): Promise<string | null> {
   return withMetaConnectLock(tenantId, () => disconnectWhatsAppLocked(tenantId));
@@ -241,27 +253,10 @@ async function disconnectWhatsAppLocked(tenantId: string): Promise<string | null
   const connected = await connectedWhatsApp(tenantId);
   if (!connected) return null;
   const token = await resolveTenantCredential(tenantId, "WA_ACCESS_TOKEN");
+  // Kept apart BEFORE the connection's token is deleted, so the unsubscribe can always be retried (whatsappUnsubscribe.ts).
+  if (token) await queueWhatsAppUnsubscribe(tenantId, connected.wabaId, token);
   await basePrisma.tenantIntegrationCredential.deleteMany({ where: { tenantId, key: { in: CONNECTION_KEYS } } });
   await reconcileTenantChannels(tenantId, { force: true });
   await retireWhatsAppAccount(tenantId, connected.wabaId, token);
   return connected.number;
-}
-
-/** Ask Meta to stop sending this account's messages to our app. True only when Meta says it did. */
-async function unsubscribeWhatsAppAccount(tenantId: string, wabaId: string, token: string | null): Promise<boolean> {
-  if (!token) return false;
-  const done = await graph("DELETE", `${wabaId}/subscribed_apps`, token).then((res) => res.success === true, () => false);
-  if (!done) await logError("whatsapp-connect", new Error("Meta did not confirm the unsubscribe"), "A WhatsApp Business account could not be unsubscribed from the app; this workspace keeps holding it", { tenantId }).catch(() => {});
-  return done;
-}
-
-/**
- * Let go of a WhatsApp Business account this workspace no longer uses: unsubscribed FIRST (safe — only this workspace
- * holds it, the whatsapp_account claim), released only once Meta confirms. Released before, another workspace could
- * subscribe it in between and be cut off. Not confirmed: it stays held, so no one else inherits — or is cut off by — a
- * live subscription; logged for the platform owner. ponytail: no automatic retry — add a sweep if this shows in ErrorLog.
- */
-async function retireWhatsAppAccount(tenantId: string, wabaId: string, token: string | null): Promise<void> {
-  if (!(await unsubscribeWhatsAppAccount(tenantId, wabaId, token))) return;
-  await basePrisma.channelIdentity.updateMany({ where: { tenantId, channel: "whatsapp_account", externalId: wabaId, disabledAt: null }, data: { disabledAt: new Date() } });
 }

@@ -13,6 +13,7 @@ import { PENDING_KEY, connectMetaPage, withMetaConnectLock } from "../src/lib/me
 import { CONNECTED } from "../src/lib/metaPage";
 import { putSetting, putTenantCredentialBundle, putWorkspaceSetting, resolveTenantCredential } from "../src/lib/settings";
 import { connectWhatsAppNumber, disconnectWhatsApp, startWhatsAppSignup } from "../src/lib/whatsappConnect";
+import { PENDING_UNSUBSCRIBE_KEY, pendingWhatsAppUnsubscribes, retryWhatsAppUnsubscribes } from "../src/lib/whatsappUnsubscribe";
 import { DEFAULT_TENANT_ID } from "../src/lib/tenant";
 import { withSystemScope } from "../src/lib/tenantScopeEntry";
 
@@ -218,6 +219,25 @@ async function main() {
     await connectWa(await begin(B), phones[3], B, waba);
     unsubscribeFails = false;
     check("Meta refusing the old account's unsubscribe: the switch stands, and the old account stays held", (await bNumber()) === phones[3] && (await accountOf(waba2))?.tenantId === B && (await accountOf(waba2))?.disabledAt === null);
+
+    // 9. AN UNCONFIRMED UNSUBSCRIBE IS RECOVERABLE (review of #1187): the old account's token is kept in its own encrypted
+    //    record (not overwritten by the new connection), retried by the cron, and the account released once Meta confirms.
+    const waiting = async () => JSON.parse((await resolveTenantCredential(B, PENDING_UNSUBSCRIBE_KEY)) ?? "{}") as Record<string, { token: string }>;
+    check("WhatsApp: the refused old account's token is kept apart, and the live token is the new one",
+      (await waiting())[waba2]?.token === `token-c-${phones[6]}` && (await resolveTenantCredential(B, "WA_ACCESS_TOKEN")) === `token-c-${phones[3]}` && (await pendingWhatsAppUnsubscribes(B)).length === 1);
+    unsubscribed.length = 0;
+    check("…the retry waits its 6 hours", (await retryWhatsAppUnsubscribes(B)) === 0 && unsubscribed.length === 0);
+    const later = Date.now() + 7 * 60 * 60 * 1000;
+    check("…then unsubscribes with the KEPT token and releases the account",
+      (await retryWhatsAppUnsubscribes(B, later)) === 1 && unsubscribed[0]?.waba === waba2 && unsubscribed[0]?.token === `token-c-${phones[6]}` && (await accountOf(waba2))?.disabledAt != null, JSON.stringify(unsubscribed));
+    check("…the record is gone, and the live connection untouched", !(await resolveTenantCredential(B, PENDING_UNSUBSCRIBE_KEY)) && (await bNumber()) === phones[3]);
+    unsubscribeFails = true;
+    await disconnectWhatsApp(B);
+    unsubscribeFails = false;
+    check("WhatsApp: a Disconnect Meta doesn't confirm — the connection is gone, the account held, its token kept",
+      !(await bNumber()) && (await account())?.tenantId === B && (await account())?.disabledAt === null && (await waiting())[waba]?.token === `token-c-${phones[3]}`);
+    unsubscribed.length = 0;
+    check("…and the retry finishes it", (await retryWhatsAppUnsubscribes(B, later)) === 1 && unsubscribed[0]?.token === `token-c-${phones[3]}` && (await account())?.disabledAt != null && !(await resolveTenantCredential(B, PENDING_UNSUBSCRIBE_KEY)));
   } finally {
     globalThis.fetch = realFetch;
     if (platformBefore) {

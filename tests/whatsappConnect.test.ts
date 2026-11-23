@@ -90,7 +90,7 @@ test("connecting: state spent once, the number checked with Meta, claimed first,
   assert.ok(order.every((at, i) => at > 0 && (i === 0 || at > order[i - 1])), `claim → subscribe → register → store → register endpoint: ${order}`);
   // Undo: previous WhatsApp restored in one (interactive) transaction, the number released when newly taken.
   assert.match(connect, /\} catch \(error\) \{[\s\S]*?\.\$transaction\(async \(tx\) => \{\s*await tx\.tenantIntegrationCredential\.deleteMany\(\{ where: \{ tenantId: input\.tenantId, key: \{ in: CONNECTION_KEYS \} \} \}\);/);
-  assert.match(connect, /for \(const claim of newlyClaimed\) \{\s*if \(keepAccount && claim\.channel === "whatsapp_account"\) continue;\s*await basePrisma\.channelIdentity\.updateMany\(/);
+  assert.match(connect, /for \(const claim of newlyClaimed\) \{\s*if \(subscribeTried && claim\.channel === "whatsapp_account"\) continue;\s*await basePrisma\.channelIdentity\.updateMany\(/);
   // Snapshot BEFORE any claim, and every claim inside the undone block (review of #1187, as #1185 for Facebook).
   const tryAt = connect.indexOf("  try {\n    // CLAIMED atomically");
   assert.ok(tryAt > 0, "the claims open the try block");
@@ -112,14 +112,39 @@ test("one workspace per WhatsApp Business account: claimed before the number, re
   const switchAt = connect.indexOf("if (previousWaba && previousWaba !== input.wabaId) await retireWhatsAppAccount(input.tenantId, previousWaba, previousToken);");
   assert.ok(switchAt > connect.indexOf("    throw error;\n  }"), "after the undo block, so a refused unsubscribe can't undo the new connection");
   assert.ok(connect.indexOf("const previousToken =") < connect.indexOf("  try {\n"), "old token read before anything is claimed");
-  // A failure after a NEW account was subscribed unsubscribes it before letting go; an account already held is left alone.
-  assert.match(connect, /const keepAccount = newAccount && subscribeTried && !\(await unsubscribeWhatsAppAccount\(input\.tenantId, input\.wabaId, token\)\);/);
-  assert.ok(connect.indexOf("subscribeTried = true;") < connect.indexOf('graph("POST", `${input.wabaId}/subscribed_apps`'), "marked before the call — a timeout may hide success");
-  // Disconnect retires through the same path; release only after Meta confirms.
-  assert.match(lib.slice(lib.indexOf("async function disconnectWhatsAppLocked")), /await retireWhatsAppAccount\(tenantId, connected\.wabaId, token\);/);
-  const retire = lib.slice(lib.indexOf("async function retireWhatsAppAccount"));
-  assert.match(retire, /if \(!\(await unsubscribeWhatsAppAccount\(tenantId, wabaId, token\)\)\) return;\s*await basePrisma\.channelIdentity\.updateMany/);
-  assert.match(lib, /\.then\(\(res\) => res\.success === true, \(\) => false\)/, "only Meta's confirmation counts");
+  // Every token an unsubscribe may need is kept apart BEFORE it could be lost (review of #1187):
+  // the old account's before the switch overwrites it…
+  assert.ok(connect.indexOf("await queueWhatsAppUnsubscribe(input.tenantId, previousWaba, previousToken);") < connect.indexOf("  try {\n"), "old account queued before anything is claimed");
+  // …a NEW account's before it is subscribed (and dropped once the connection stands)…
+  const queueNew = connect.indexOf("if (newAccount) await queueWhatsAppUnsubscribe(input.tenantId, input.wabaId, token);");
+  assert.ok(queueNew > 0 && queueNew < connect.indexOf("subscribeTried = newAccount;") && connect.indexOf("subscribeTried = newAccount;") < connect.indexOf('graph("POST", `${input.wabaId}/subscribed_apps`'), "queued, then marked, before the call");
+  assert.ok(connect.indexOf("await dropWhatsAppUnsubscribe(input.tenantId, input.wabaId);") < connect.indexOf("  } catch (error) {"), "dropped on success");
+  // …and a failure after subscribing a new account retires it (held + retried if Meta doesn't confirm), not just releases it.
+  assert.match(connect, /if \(subscribeTried && claim\.channel === "whatsapp_account"\) continue;/);
+  assert.match(connect, /if \(subscribeTried\) await retireWhatsAppAccount\(input\.tenantId, input\.wabaId, token\)/);
+  // Disconnect: queued BEFORE the connection's token is deleted, then retired.
+  const disconnect = lib.slice(lib.indexOf("async function disconnectWhatsAppLocked"));
+  const queued = disconnect.indexOf("if (token) await queueWhatsAppUnsubscribe(tenantId, connected.wabaId, token);");
+  assert.ok(queued > 0 && queued < disconnect.indexOf("tenantIntegrationCredential.deleteMany") && disconnect.indexOf("tenantIntegrationCredential.deleteMany") < disconnect.indexOf("await retireWhatsAppAccount(tenantId, connected.wabaId, token);"));
+});
+
+test("an unconfirmed unsubscribe keeps the account held and its token, retried on the cron, shown to the owner", () => {
+  const lib = code("src/lib/whatsappUnsubscribe.ts");
+  // Only Meta's confirmation releases the account.
+  assert.match(lib, /return res\.ok && json\?\.success === true;/);
+  assert.match(lib, /if \(useToken && \(await unsubscribe\(wabaId, useToken\)\)\) \{\s*await release\(tenantId, wabaId\);/);
+  // Its own encrypted record — never the live connection's fields.
+  assert.match(lib, /export const PENDING_UNSUBSCRIBE_KEY = "WA_PENDING_UNSUBSCRIBE";/);
+  assert.match(code("src/lib/settings.ts"), /"WA_PENDING_UNSUBSCRIBE",/);
+  assert.doesNotMatch(code("src/lib/whatsappConnect.ts"), /WA_PENDING_UNSUBSCRIBE/, "not a connection key, so neither undo nor disconnect deletes it");
+  // A live account is never unsubscribed by the retry.
+  assert.match(lib, /if \(wabaId === live\) \{\s*delete pending\[wabaId\];\s*continue;\s*\}/);
+  // Under the same per-workspace lease as connect/disconnect, at most every 6 hours, the owner told after about a day.
+  assert.match(lib, /return withMetaConnectLock\(tenantId, async \(\) => \{/);
+  assert.match(lib, /const RETRY_EVERY_MS = 6 \* 60 \* 60 \* 1000;/);
+  assert.match(lib, /if \(entry\.tries === ALERT_AFTER_TRIES\) \{/);
+  assert.match(code("src/app/api/cron/automations/route.ts"), /phase\("whatsapp-unsubscribe-retry", \(\) => retryWhatsAppUnsubscribes\(tenantId \?\? DEFAULT_TENANT_ID\), null\)/);
+  assert.match(code("src/components/settings/WhatsAppConnectBox.tsx"), /pendingWhatsAppUnsubscribes\(tenantId\)/);
 });
 
 test("the routes: owner session, same-browser cookie, nothing trusted beyond its shape", () => {
@@ -161,7 +186,7 @@ test("the opener policy is relaxed on exactly two pages; everything else stays s
 test("off until configured; a pasted setup (Denago's) is never disconnected by it", () => {
   const lib = code("src/lib/whatsappConnect.ts");
   assert.match(lib, /return appId && appSecret && configId \? \{ appId, appSecret, configId \} : null;/);
-  assert.match(code("src/components/settings/WhatsAppConnectBox.tsx"), /if \(!app && !connected\) return null;/);
+  assert.match(code("src/components/settings/WhatsAppConnectBox.tsx"), /if \(!app && !connected && !waiting\.length\) return null;/);
   // "Connected" = made by Connect WhatsApp (its account id recorded) — a pasted id + token is not.
   assert.match(lib, /return wabaId && number \? \{ wabaId, number, name, phoneNumberId \} : null;/);
   const disconnect = lib.slice(lib.indexOf("async function disconnectWhatsAppLocked"));

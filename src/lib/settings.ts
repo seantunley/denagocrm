@@ -34,6 +34,8 @@ const SECRET_KEYS = new Set([
   "WA_ACCESS_TOKEN",
   // Connect WhatsApp (lib/whatsappConnect.ts): each number's two-step verification PIN, saved before Meta registers it.
   "WA_REGISTER_PINS",
+  // …and the token of each WhatsApp Business account still waiting for Meta to confirm an unsubscribe (whatsappUnsubscribe.ts).
+  "WA_PENDING_UNSUBSCRIBE",
   "BULKSMS_TOKEN_ID",
   "BULKSMS_TOKEN_SECRET",
   "GOOGLE_PLACES_API_KEY",
