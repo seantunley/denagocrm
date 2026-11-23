@@ -376,7 +376,8 @@ export default async function AccessSettingsPage() {
                             {permissions.filter((p) => p.category === category).map((permission) => (
                               <label key={permission.key} className="rounded-lg border border-border bg-muted/30 p-2 flex gap-2 text-sm">
                                 <input type="checkbox" name="permissions" value={permission.key} defaultChecked={rolePermissionSet.has(`${role.id}:${permission.key}`)} disabled={!canManageRoles} className="h-4 w-4 mt-0.5" />
-                                <span><strong className="font-medium">{permission.key}</strong><span className="block text-xs text-muted-foreground">{permission.description}</span></span>
+                                {/* The plain description is the name people read (and the help guides use); the code is a small reference. */}
+                                <span><span className="font-medium">{permission.description}</span><span className="block font-mono text-[10px] text-muted-foreground">{permission.key}</span></span>
                               </label>
                             ))}
                           </div>
