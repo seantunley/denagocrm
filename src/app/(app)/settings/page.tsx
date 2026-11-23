@@ -40,7 +40,6 @@ import PushToggle from "@/components/PushToggle";
 import SecurityPanel from "@/components/SecurityPanel";
 import PasskeyManager from "@/components/PasskeyManager";
 import OwnerUserControls from "@/components/OwnerUserControls";
-import { saveSessionPolicy } from "@/app/actions/security";
 import { clearErrorLog } from "@/app/actions/ai";
 import { basePrisma } from "@/lib/db";
 import { REGIONAL_KEYS } from "@/lib/settings";
@@ -50,7 +49,6 @@ import { formatDate, formatDateTime, formatZAR, regionalFrom } from "@/lib/forma
 import { DEFAULT_QUOTE_TERMS, quoteValidDays } from "@/lib/quoteExpiry";
 import { DOCUMENT_TYPES_KEY, DOCUMENT_TYPES_MAX, parseDocumentTypes } from "@/lib/documentLabels";
 import { DEAL_BUILTINS, DEAL_FILE_CHECKLIST_KEY, isSupplierOnlyType, parseDealFileConfig } from "@/lib/dealFile";
-import { ABSOLUTE_SESSION_HOURS } from "@/lib/session";
 import { decryptValue } from "@/lib/settings";
 import { PUSH_KINDS } from "@/lib/push";
 import Link from "next/link";
@@ -441,36 +439,9 @@ export default async function SettingsPage({
                   <AddUserForm />
                 </div>
               </details>
-
-              <SaveForm
-                action={saveSessionPolicy}
-                success="Sign-out policy saved"
-                resetOnSuccess={false}
-                className="flex items-center justify-between gap-4 px-5 py-4 flex-wrap"
-              >
-                <div>
-                  <p className="text-sm font-medium">Auto sign-out after inactivity</p>
-                  <p className="text-xs text-muted-foreground">
-                    Everyone re-signs in at least every {ABSOLUTE_SESSION_HOURS}h regardless.
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <select
-                    name="idleMinutes"
-                    className="input w-36"
-                    defaultValue={setting("SESSION_IDLE_MINUTES") || "60"}
-                  >
-                    <option value="15">15 minutes</option>
-                    <option value="30">30 minutes</option>
-                    <option value="60">1 hour</option>
-                    <option value="120">2 hours</option>
-                    <option value="240">4 hours</option>
-                    <option value="480">8 hours</option>
-                    <option value="1440">24 hours</option>
-                  </select>
-                  <SaveButton className="btn-primary btn-sm">Save</SaveButton>
-                </div>
-              </SaveForm>
+              <p className="px-5 py-4 text-xs text-muted-foreground">
+                Auto sign-out after inactivity is under <Link href="/settings/sessions" className="underline">Settings → Sessions &amp; devices</Link>.
+              </p>
             </div>
           )}
         </div>

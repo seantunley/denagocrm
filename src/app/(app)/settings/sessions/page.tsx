@@ -1,5 +1,10 @@
 import { Smartphone, Monitor, LogOut, ShieldOff } from "lucide-react";
-import { requireTenantOwner } from "@/lib/auth";
+import { getIdleMinutes, requireTenantOwner } from "@/lib/auth";
+import { ABSOLUTE_SESSION_HOURS, PWA_SESSION_HOURS } from "@/lib/session";
+import { sessionStatus } from "@/lib/sessionStillValid";
+import { getUserSecurityState } from "@/lib/userSecurity";
+import { saveSessionPolicy } from "@/app/actions/security";
+import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { basePrisma, prisma } from "@/lib/db";
 import { actingOwnerTenantId } from "@/lib/actingScope";
 import { maskWaId } from "@/lib/assistantWhatsAppRules";
@@ -50,6 +55,8 @@ function ago(d: Date): string {
   return `${Math.round(h / 24)}d ago`;
 }
 
+const hoursAgo = (hours: number) => new Date(Date.now() - hours * 3600_000);
+
 export default async function SessionsPage() {
   await requireTenantOwner();
 
@@ -62,17 +69,30 @@ export default async function SessionsPage() {
   // Membership of the ACTING workspace, disabled members included: a disabled
   // account is exactly the one an owner comes here to confirm is signed out.
   const memberIds = await actingTenantMemberIds();
-  const users = await prisma.user.findMany({
+  const idleMinutes = await getIdleMinutes();
+  const rows = await prisma.user.findMany({
     where: memberIds === null ? {} : { id: { in: memberIds } },
     orderBy: { name: "asc" },
     include: {
       sessions: {
-        where: { revokedAt: null },
+        // Nothing older than the longest token lifetime can be live; sessionStillValid decides the rest.
+        where: { revokedAt: null, createdAt: { gt: hoursAgo(PWA_SESSION_HOURS) } },
         orderBy: { lastActiveAt: "desc" },
       },
     },
   });
-  const totalActive = users.reduce((s, u) => s + u.sessions.length, 0);
+  // Only sign-ins that can still be used: a row is never marked ended when it times out, its token expires,
+  // the account is disabled, or everyone is signed out (e.g. saving the policy below).
+  const users = await Promise.all(
+    rows.map(async (u) => {
+      const account = await getUserSecurityState(u.id);
+      const sessions = u.sessions
+        .map((s) => ({ ...s, status: sessionStatus(s, account, idleMinutes) }))
+        .filter((s) => s.status !== "ended");
+      return { ...u, sessions, active: sessions.filter((s) => s.status === "active").length };
+    }),
+  );
+  const totalActive = users.reduce((s, u) => s + u.active, 0);
   // A phone linked to the assistant is a sign-in too. "Sign out all" ends it;
   // revoking ONE device doesn't (the phone isn't that device), so it's shown
   // here, next to the devices, with its own Unlink.
@@ -93,13 +113,40 @@ export default async function SessionsPage() {
       groups={SETTINGS_NAV_GROUPS}
     >
       <div className="space-y-4">
+        {/* Moved from the old Settings "Team" tab, which the regrouped menu no longer links to. */}
+        <SaveForm
+          action={saveSessionPolicy}
+          success="Sign-out policy saved"
+          resetOnSuccess={false}
+          className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-border bg-card p-4 shadow-sm"
+        >
+          <div>
+            <p className="text-sm font-semibold text-foreground">Auto sign-out after inactivity</p>
+            <p className="text-xs text-muted-foreground">
+              Everyone re-signs in at least every {ABSOLUTE_SESSION_HOURS}h regardless. Saving signs everyone else in this
+              workspace out, so they sign in again under the new rule.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <select name="idleMinutes" className="input w-36" defaultValue={String(idleMinutes)}>
+              <option value="15">15 minutes</option>
+              <option value="30">30 minutes</option>
+              <option value="60">1 hour</option>
+              <option value="120">2 hours</option>
+              <option value="240">4 hours</option>
+              <option value="480">8 hours</option>
+              <option value="1440">24 hours</option>
+            </select>
+            <SaveButton className="btn-primary btn-sm">Save</SaveButton>
+          </div>
+        </SaveForm>
         {users.map((u) => (
           <div key={u.id} className="rounded-xl border border-border bg-card p-4 shadow-sm">
             <div className="mb-2 flex items-center justify-between gap-2">
               <p className="text-sm font-semibold text-foreground">
                 {u.name}
                 <span className="ml-2 text-xs font-normal capitalize text-muted-foreground">
-                  {u.role} · {u.sessions.length} device{u.sessions.length === 1 ? "" : "s"}
+                  {u.role} · {u.active} device{u.active === 1 ? "" : "s"}
                 </span>
               </p>
               {u.sessions.length > 0 && (
@@ -153,6 +200,14 @@ export default async function SessionsPage() {
                         {s.platform === "pwa" && (
                           <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
                             Mobile app · 7-day session
+                          </span>
+                        )}
+                        {s.status === "unverified" && (
+                          <span
+                            className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground"
+                            title="Signed in before sign-outs were tracked per device. Revoke to be sure."
+                          >
+                            May already be signed out
                           </span>
                         )}
                       </p>

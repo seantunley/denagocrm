@@ -2674,6 +2674,9 @@ model UserSession {
   createdAt    DateTime  @default(now())
   lastActiveAt DateTime  @default(now())
   revokedAt    DateTime?
+  /// The account's sessionVersion when this sign-in was made. A later bump ends the sign-in without touching
+  /// this row, so Sessions & devices compares the two. Null on rows made before it was recorded.
+  sessionVersion Int?
 
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
