@@ -25,6 +25,7 @@ import { basePrisma } from "@/lib/db";
 import { pruneAssistantTasks } from "@/lib/assistantGoals";
 import { expireReservations } from "@/lib/stockPlatform";
 import { runSupplierDigest } from "@/lib/supplierDigest";
+import { runAnomalyDigest } from "@/lib/anomalyDigest";
 import { resolveTenantActor } from "@/lib/tenantActor";
 import { runCronPerTenant, type CronRun, type CronSliceContext } from "@/lib/tenantCron";
 import { withSystemScope } from "@/lib/tenantScopeEntry";
@@ -130,8 +131,11 @@ async function runOperationalQueues(tenantId: string | null, budget: CronSliceCo
   const repairs = await phase("repairs-detectors", runRepairsDetectors, null);
   // The owner's weekly email of supplier papers still missing on deals (Suppliers module, its own switch).
   const supplierDigest = on("suppliers") ? await phase("supplier-digest", () => runSupplierDigest(tenantId), null) : null;
+  // The owner's weekly email of what moved that nobody asked about (lib/anomalyRules.ts, its own switch). Reads, then one email.
+  const anomalyDigest = await phase("anomaly-digest", () => runAnomalyDigest(tenantId), null);
   return {
     supplierDigest,
+    anomalyDigest,
     staleSigningClaims,
     expiredSigningLinks,
     strandedCompletions,
