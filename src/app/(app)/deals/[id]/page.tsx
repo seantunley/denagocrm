@@ -52,6 +52,7 @@ import { storedFileSrc } from "@/lib/storedFileSrc";
 import { getRecordLabels } from "@/lib/recordLabelsServer";
 import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { StatusPill, Surface } from "@/components/visual-system";
+import PointerTilt from "@/components/PointerTilt";
 
 function statusTone(status: string): "neutral" | "success" | "warning" | "danger" | "info" {
   if (status === "accepted" || status === "completed" || status === "delivered") return "success";
@@ -336,11 +337,12 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
       <div className="space-y-4">
         <Surface className="overflow-hidden">
           <div className="grid min-h-[250px] lg:grid-cols-[minmax(0,1.25fr)_minmax(22rem,.75fr)]">
-            <div className="relative overflow-hidden border-b border-border bg-gradient-to-br from-muted/30 via-background to-background lg:border-b-0 lg:border-r">
+            {/* The photo follows a mouse by a few degrees (PointerTilt); still on phones and with reduced motion. */}
+            <PointerTilt className="relative overflow-hidden border-b border-border bg-gradient-to-br from-muted/30 via-background to-background lg:border-b-0 lg:border-r">
               {vehicleImage ? (
                 <>
                   {/* eslint-disable-next-line @next/next/no-img-element -- authenticated stored-file route */}
-                  <img src={vehicleImage} alt={vehicleName} className="absolute inset-0 size-full object-cover opacity-75" />
+                  <img src={vehicleImage} alt={vehicleName} data-tilt-target className="absolute inset-0 size-full object-cover opacity-75" />
                   <div className="absolute inset-0 bg-gradient-to-r from-background via-background/45 to-transparent" />
                   <div className="absolute inset-0 bg-gradient-to-t from-background via-transparent to-transparent" />
                 </>
@@ -359,7 +361,7 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
                   <Fact label="PDI" value={unit ? unit.pdiStatus.replaceAll("_", " ") : "Pending allocation"} />
                 </div>
               </div>
-            </div>
+            </PointerTilt>
 
             <div className="flex flex-col justify-between p-5 sm:p-6">
               <div>

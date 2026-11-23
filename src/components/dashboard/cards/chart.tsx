@@ -95,7 +95,7 @@ function Bars({ slices, format }: { slices: Slice[]; format: (n: number) => stri
               {format(slice.value)}
             </span>
           </div>
-          <div className="mt-0.5 h-1.5 w-full overflow-hidden rounded-full bg-muted">
+          <div className="mt-0.5 h-1.5 w-full overflow-hidden rounded-full depth-track">
             {/*
               An inline width, deliberately: this is a measured value rather than
               a design token, so there is no class for it to be and no stylesheet

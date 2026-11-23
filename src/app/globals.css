@@ -1,5 +1,7 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+/* Depth for the rest of the app — cards, buttons, floating panels, drag and drop (2026-11-23). */
+@import "./depth.css";
 
 /* A phone on its side (or any very short window): the login page drops its
    vertical padding so the submit button stays above the keyboard. */
@@ -278,13 +280,13 @@
   .btn-primary,
   .btn-secondary,
   .btn-danger {
-    @apply inline-flex min-h-9 cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-medium outline-none transition-[background-color,border-color,color,box-shadow] duration-150 focus-visible:ring-4 focus-visible:ring-primary/15 disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex min-h-9 cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-medium outline-none transition-[background-color,border-color,color,box-shadow,transform] duration-150 depth-press focus-visible:ring-4 focus-visible:ring-primary/15 disabled:cursor-not-allowed disabled:opacity-50;
   }
   .btn-primary {
-    @apply bg-primary text-primary-foreground shadow-[0_4px_14px_color-mix(in_oklab,var(--primary)_18%,transparent)] hover:bg-primary/90 hover:shadow-[0_5px_18px_color-mix(in_oklab,var(--primary)_22%,transparent)];
+    @apply bg-primary text-primary-foreground depth-primary hover:bg-primary/90;
   }
   .btn-secondary {
-    @apply border border-white/10 bg-white/[0.035] text-slate-200 hover:border-white/15 hover:bg-white/[0.065];
+    @apply border border-white/10 bg-white/[0.035] text-slate-200 depth-secondary hover:border-white/15 hover:bg-white/[0.065];
   }
   .btn-danger {
     @apply bg-red-700 text-white hover:bg-red-600;
@@ -302,7 +304,7 @@
     /* min-w-0: cards live inside grids/flex rows — without it a long
        unbroken line inside sets the card's minimum width and drags the
        whole page sideways on phones */
-    @apply min-w-0 rounded-xl border border-white/[0.075] bg-card p-4 shadow-sm;
+    @apply min-w-0 rounded-xl border border-white/[0.075] bg-card p-4 depth-card;
   }
   .badge {
     @apply inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium;

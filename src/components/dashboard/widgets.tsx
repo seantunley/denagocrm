@@ -111,7 +111,7 @@ export function StatSparkCard({ stat, icon }: { stat: SparkStat; icon: React.Rea
       ref={cardRef}
       onMouseMove={onMove}
       onMouseLeave={onLeave}
-      className="group relative block min-w-0 overflow-hidden rounded-xl border border-border bg-card p-4 shadow-sm transition-[transform,border-color,box-shadow] duration-150 will-change-transform hover:border-primary/40 hover:shadow-lg hover:shadow-black/20"
+      className="group relative block min-w-0 overflow-hidden rounded-xl border border-border bg-card p-4 depth-card transition-[transform,border-color,box-shadow] duration-150 will-change-transform hover:border-primary/40 hover:shadow-lg hover:shadow-black/20"
     >
       {/* sparkline sits behind the content, anchored to the bottom */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 h-12 opacity-60 transition-opacity group-hover:opacity-90">
@@ -274,7 +274,10 @@ function Ring({ def, index }: { def: RingDef; index: number }) {
               </motion.span>
             )}
             <svg viewBox="0 0 76 76" className="size-full -rotate-90">
-              <circle cx="38" cy="38" r={R} fill="none" stroke="var(--muted)" strokeWidth="6" />
+              {/* The track is a groove the fill sits in: a dark channel, shadowed on its inner edge and lit on its outer one. */}
+              <circle cx="38" cy="38" r={R} fill="none" stroke="var(--depth-track)" strokeWidth="6" />
+              <circle cx="38" cy="38" r={R - 2.5} fill="none" stroke="oklch(0 0 0 / 45%)" strokeWidth="1" aria-hidden />
+              <circle cx="38" cy="38" r={R + 3.25} fill="none" stroke="oklch(1 0 0 / 6%)" strokeWidth="0.75" aria-hidden />
               {def.target > 0 && (
                 <motion.circle
                   cx="38"

@@ -482,7 +482,9 @@ export default function DashboardCanvas({
               style={{ width: "auto", height: "auto" }}
             >
               {activeCard ? (
-                <div className="flex cursor-grabbing items-center gap-2 rounded-lg border border-primary/40 bg-card px-3 py-2 text-xs font-medium text-foreground shadow-lg">
+                <div className="flex -rotate-[1.5deg] scale-[1.02] cursor-grabbing items-center gap-2 rounded-lg border border-primary/40 bg-card px-3 py-2 text-xs font-medium text-foreground depth-lifted">
+                  {/* Lifted while it is held: a deeper shadow and a degree of tilt. The transform is on this label,
+                      inside the overlay, never on a card in the grid — see "no transforms" above. */}
                   <GripVertical className="size-3.5 text-muted-foreground" />
                   {cardLabel(activeCard)}
                 </div>
@@ -764,7 +766,7 @@ function DropMarker({ card, height }: { card: CardConfig | undefined; height: nu
        */
       style={height ? { minHeight: height } : undefined}
       className={cn(
-        "flex min-h-20 items-center justify-center rounded-xl border-2 border-dashed border-primary bg-primary/10",
+        "flex min-h-20 items-center justify-center rounded-xl border-2 border-dashed border-primary bg-primary/10 depth-well",
         /*
          * THE SAME SHAPE AS THE CARD IT STANDS IN FOR.
          *

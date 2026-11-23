@@ -79,7 +79,7 @@ export function SectionCard({
      * It stays because SectionCard is also used in cells that are genuinely
      * stretched, where a percentage does resolve and this is what fills them.
      */
-    <div className="flex h-full min-w-0 flex-col rounded-xl border border-border bg-card p-4 shadow-sm">
+    <div className="flex h-full min-w-0 flex-col rounded-xl border border-border bg-card p-4 depth-card">
       <div className="mb-2 flex items-center justify-between">
         <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
           {title}
