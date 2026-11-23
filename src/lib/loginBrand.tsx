@@ -1,5 +1,6 @@
 import { headers } from "next/headers";
 import { DEFAULT_BRAND, brandForHost, brandForTenant, brandLogoUrl, brandStyle, type TenantBrand } from "./tenantBrand";
+import { PLATFORM, isPlatformHost } from "./platformLegal";
 
 /**
  * The brand for a LOGIN page, resolved from the hostname the request arrived on.
@@ -41,6 +42,8 @@ export type LoginBrand = {
   logoUrl: string | null;
   /** `:root{…}` accent override, or null to emit no style element at all. */
   style: string | null;
+  /** Set only on the platform's own address: the page links to the platform's privacy, terms and data-deletion pages. */
+  platformLegal?: true;
 };
 
 /**
@@ -87,7 +90,12 @@ export function toLoginBrand(brand: TenantBrand): LoginBrand {
 export async function loginBrand(): Promise<LoginBrand> {
   try {
     const host = (await headers()).get("host");
-    return toLoginBrand(await brandForHost(host));
+    const brand = toLoginBrand(await brandForHost(host));
+    // The platform's own address names the platform (Meta's reviewers land here) and links its legal pages.
+    // Only when no workspace claimed the host, so a tenant's own domain is never relabelled.
+    return !brand.branded && isPlatformHost(host)
+      ? { ...brand, displayName: PLATFORM.name, platformLegal: true }
+      : brand;
   } catch {
     return UNBRANDED;
   }

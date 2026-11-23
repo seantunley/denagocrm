@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { parseMetaSignedRequest } from "../src/lib/metaSignedRequest";
-import { PLATFORM, dataDeletionStatusUrl } from "../src/lib/platformLegal";
+import { PLATFORM, dataDeletionStatusUrl, isPlatformHost } from "../src/lib/platformLegal";
 
 /**
  * Meta App Review needs a public privacy policy, terms and data-deletion page, plus a data-deletion callback, in the
@@ -87,4 +87,24 @@ test("the privacy policy states the recycle bin's exceptions — the records lib
   assert.match(privacy, /normally go to a recycle bin for 60 days/);
   assert.match(privacy, /signed, filed or generated documents/);
   assert.match(privacy, /accepted quotations, won sales, and the ownership history of a vehicle/);
+});
+
+test("only the platform's own address is the platform host", () => {
+  assert.equal(isPlatformHost("crm.honeycombventures.co.za"), true);
+  assert.equal(isPlatformHost("CRM.HoneycombVentures.co.za:443"), true);
+  assert.equal(isPlatformHost("crm.denagocpt.co.za"), false);
+  assert.equal(isPlatformHost("evil.crm.honeycombventures.co.za"), false);
+  assert.equal(isPlatformHost("crm.honeycombventures.co.za.evil.com"), false);
+  assert.equal(isPlatformHost(null), false);
+});
+
+test("the sign-in page on the platform address names Honeycomb 360 and links the legal pages; workspaces keep theirs", () => {
+  const brand = code("src/lib/loginBrand.tsx");
+  // Relabel only when no workspace claimed the host.
+  assert.match(brand, /!brand\.branded && isPlatformHost\(host\)/);
+  assert.match(brand, /displayName: PLATFORM\.name, platformLegal: true/);
+  const login = code("src/app/login/LoginClient.tsx");
+  assert.match(login, /brand\.platformLegal && \(/);
+  for (const href of ["/legal/privacy", "/legal/terms", "/legal/data-deletion"]) assert.ok(login.includes(`href="${href}"`), href);
+  assert.match(code("src/app/layout.tsx"), /brand\.tenantId \? brand\.displayName : isPlatformHost\(host\) \? PLATFORM\.name : PLATFORM_NAME/);
 });
