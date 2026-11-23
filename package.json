@@ -157,7 +157,7 @@
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
     "date-fns": "^4.4.0",
-    "framer-motion": "^13.5.0",
+    "framer-motion": "^14.14.0",
     "imapflow": "^2.11.0",
     "ipaddr.js": "^2.5.0",
     "jose": "^6.2.17",
