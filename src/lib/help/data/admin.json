@@ -407,7 +407,7 @@
   {
     "slug": "admin-integrations",
     "title": "Integrations: connecting your other services",
-    "summary": "Connect WhatsApp, Facebook, Instagram, email, Xero, AI, Google reviews and more, and see which connections need attention.",
+    "summary": "Connect WhatsApp, Facebook, Instagram, X, Threads, email, Xero and Google reviews, and see which connections need attention.",
     "category": "admin",
     "audience": "admins",
     "keywords": ["integrations", "connect", "whatsapp", "facebook", "instagram", "messenger", "email", "smtp", "imap", "xero", "chatgpt", "claude", "ai", "google reviews", "telegram", "sms", "website leads"],
@@ -415,12 +415,12 @@
       { "type": "p", "text": "**Settings → Integrations** is where the CRM connects to the other services your business uses. Each connection shows whether it's **Connected** or **Not set up**, and anything that has stopped working is listed first under **Needs attention**." },
       { "type": "h", "text": "What you can connect" },
       { "type": "table", "headers": ["Group", "Connections"], "rows": [
-        ["Messaging channels", "WhatsApp, Facebook Messenger and Instagram (and Facebook lead ads), X, Threads, Telegram, and SMS for one-time codes"],
+        ["Messaging channels", "WhatsApp, Facebook Messenger and Instagram (with Facebook and Instagram lead ads), X, Threads, and SMS for one-time codes"],
         ["Email", "Outgoing email from your own mail server, and incoming replies brought into the Inbox"],
         ["Accounting", "Xero — send invoices and bring payments back"],
-        ["AI", "Which AI the CRM uses (your ChatGPT plan or pay-per-use Claude), and ElevenLabs for voice"],
-        ["Other services", "Google reviews, Google Maps address suggestions, and website leads"]
+        ["Other services", "Google reviews"]
       ] },
+      { "type": "callout", "tone": "info", "text": "Some services are set up once for the whole CRM by your CRM provider rather than by each business — the AI the CRM uses, voice, Telegram, Google Maps address suggestions and taking leads from a website. If you need one of these changed, ask your CRM provider." },
       { "type": "h", "text": "Connecting a service" },
       { "type": "steps", "items": [
         "Find the service and open its card.",
@@ -429,7 +429,7 @@
       ] },
       { "type": "callout", "tone": "info", "text": "Passwords and keys you enter are stored encrypted and never shown again. To change one, type the new value and save." },
       { "type": "h", "text": "Step-by-step guides" },
-      { "type": "p", "text": "Most services need a few steps on their side too. Follow the guide for the one you're connecting: **Connect WhatsApp with one button**, **Connecting WhatsApp Business (Cloud API)**, **Connecting Facebook Messenger**, **Connecting Instagram DMs**, **Connecting Facebook & Instagram Lead Ads**, **Connecting Google reviews**, **Connect X to the Social inbox**, **Connecting a Telegram bot** and **Xero: sending invoices to your books**." },
+      { "type": "p", "text": "Most services need a few steps on their side too. Follow the guide for the one you're connecting: **Connect WhatsApp with one button**, **Connecting WhatsApp Business (Cloud API)**, **Connecting Facebook Messenger**, **Connecting Instagram DMs**, **Connecting Facebook & Instagram Lead Ads**, **Connecting Google reviews**, **Connect X to the Social inbox** and **Xero: sending invoices to your books**." },
       { "type": "h", "text": "Related guides" },
       { "type": "list", "items": ["Connecting your social channels: the big picture", "Connect WhatsApp with one button", "Xero: sending invoices to your books"] }
     ]
