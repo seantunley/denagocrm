@@ -169,6 +169,8 @@ test("every switch on the page is actually obeyed by the code it names — none 
     SIGNING_SIGNED_COPIES_WHATSAPP: ["src/lib/signing/completionFanout.ts"],
     // The owner's weekly supplier-papers email: named once, checked first thing in the phase it runs as.
     SUPPLIER_DIGEST: ["src/lib/supplierDigestRules.ts"],
+    // The owner's weekly unusual-activity email: the same shape — named once, checked first thing in its phase.
+    ANOMALY_DIGEST: ["src/lib/anomalyRules.ts"],
   };
   const keys = AUTOMATIONS.flatMap((a) => (a.setting ? [a.setting.key] : []));
   assert.deepEqual(keys.filter((k) => !where[k]).sort(), [], "a switch with no known gate — add it here and gate the code");
@@ -185,6 +187,8 @@ test("every switch on the page is actually obeyed by the code it names — none 
   assert.match(fanout, /return automationOn\(SIGNED_COPIES_WHATSAPP_SWITCH, tenantId\)/);
   assert.match(code("src/lib/supplierDigestRules.ts"), /export const SUPPLIER_DIGEST_SWITCH = "SUPPLIER_DIGEST";/);
   assert.match(code("src/lib/supplierDigest.ts"), /if \(!\(await automationOn\(SUPPLIER_DIGEST_SWITCH, tenantId\)\)\) return \{ skipped: "switched-off" \};/);
+  assert.match(code("src/lib/anomalyRules.ts"), /export const ANOMALY_DIGEST_SWITCH = "ANOMALY_DIGEST";/);
+  assert.match(code("src/lib/anomalyDigest.ts"), /if \(!\(await automationOn\(ANOMALY_DIGEST_SWITCH, tenantId\)\)\) return \{ skipped: "switched-off" \};/);
 });
 
 test("an unset or unreadable switch never messages a customer on a guess", () => {

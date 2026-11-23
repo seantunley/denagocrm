@@ -268,6 +268,18 @@ export const AUTOMATIONS: Automation[] = [
     phases: ["supplier-digest"],
   },
   {
+    key: "anomaly-digest",
+    label: "Weekly unusual-activity email",
+    does: "Every Monday morning, emails the workspace owner what moved that nobody asked about: a model with at least twice its usual warranty claims, a team member whose first replies on help desk tickets have become at least twice as slow as their own earlier weeks, and quotes sent with a discount well above what the workspace usually gives. Each line shows the recent figure beside the usual one. No AI is involved, and a week with nothing unusual sends nothing.",
+    reaches: "staff",
+    channels: ["email"],
+    when: "Mondays from 07:00 (workspace time), once a week — only when something stands out",
+    // OFF until an owner switches it on, like the supplier digest: it names team members, so the owner chooses to receive it.
+    setting: { key: "ANOMALY_DIGEST", defaultOn: false },
+    cron: "/api/cron/automations",
+    phases: ["anomaly-digest"],
+  },
+  {
     key: "threads-token-renewal",
     label: "Threads connection renewal",
     does: "Renews a connected Threads account's access before it runs out (every 60 days). If Threads won't renew it, the workspace owner gets one phone notification to press Connect Threads again.",
