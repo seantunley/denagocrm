@@ -3,6 +3,9 @@
 -- that, not "drafted in the last 7 days". Additive.
 ALTER TABLE "Quote" ADD COLUMN IF NOT EXISTS "sentAt" TIMESTAMP(3);
 
+-- The backfill crosses every workspace: lift RLS for this migration's own session.
+SET app.bypass_rls = 'on';
+
 -- Quotes already out: the earliest evidence that they left (emailed, signing link, signed), else their creation. An
 -- estimate for history only; cancelled quotes are left alone (one may never have been sent).
 UPDATE "Quote"
