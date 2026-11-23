@@ -1608,6 +1608,9 @@ model Quote {
   /// only trace being a pop-up that has gone. A revision is a new row and
   /// starts with neither: the new version has not been emailed.
   emailedAt            DateTime?
+  /// When the quote was FIRST sent: set by a database trigger the first time its status becomes sent or accepted
+  /// (whichever code path does it), never moved after. Migration 20261123180000_quote_sent_at. Don't write it here.
+  sentAt               DateTime?
   emailedTo            String?
   // Fulfilment flow after signing (all set manually from the Deliveries board)
   invoicedAt           DateTime?

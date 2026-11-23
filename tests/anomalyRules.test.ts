@@ -81,10 +81,25 @@ test("a first reply is credited to whoever wrote it, not the current assignee", 
   // A message without an author is never credited; nothing left → not counted.
   assert.equal(firstReplier([{ userId: null, createdAt: at(10) }], at(10)), null);
   assert.equal(firstReplier([], at(10)), null);
+  // The reply's own message missing: a later message from someone else is not credited instead.
+  assert.equal(firstReplier([{ userId: "B", createdAt: at(300) }], at(30)), null);
   // The digest takes it from here, not from assignedToId.
   const digest = readFileSync("src/lib/anomalyDigest.ts", "utf8");
   assert.match(digest, /firstReplier\(ticket\.messages, ticket\.firstResponseAt\)/);
   assert.doesNotMatch(digest, /assignedToId/);
+});
+
+test("discounts are dated by when the quote was first sent, whatever happened to it after", () => {
+  const digest = readFileSync("src/lib/anomalyDigest.ts", "utf8");
+  // Drafted 20 days ago and sent today is a quote sent today; one sent then declined is still in the baseline.
+  assert.match(digest, /sentAt: \{ gte: windowStart\(now, DISCOUNT_RECENT_DAYS \+ DISCOUNT_BASELINE_DAYS\) \}/);
+  assert.doesNotMatch(digest, /status: \{ in: \["sent", "accepted"\] \}/);
+  assert.match(digest, /supersededAt: null/, "one offer, counted once: the current revision");
+  // The date is the database's: stamped on the first move to sent/accepted, by any writer, and never moved.
+  const sql = readFileSync("prisma/migrations/20261123180000_quote_sent_at/migration.sql", "utf8");
+  assert.match(sql, /IF NEW\."sentAt" IS NULL AND NEW\."status" IN \('sent', 'accepted'\) THEN\s+NEW\."sentAt" := now\(\);/);
+  assert.match(sql, /IF TG_OP = 'UPDATE' AND OLD\."sentAt" IS NOT NULL THEN\s+NEW\."sentAt" := OLD\."sentAt";/);
+  assert.match(sql, /BEFORE INSERT OR UPDATE ON "Quote"/);
 });
 
 test("an add-on the customer didn't choose is not part of a quote's discount", () => {
@@ -113,7 +128,7 @@ test("median and percentile", () => {
   assert.equal(percentile([7], 0.95), 7);
 });
 
-const quote = (number: number, age: number, pct: number, by: string | null = "Sipho"): DiscountQuote => ({ id: `q${number}`, number, by, createdAt: daysAgo(age), pct });
+const quote = (number: number, age: number, pct: number, by: string | null = "Sipho"): DiscountQuote => ({ id: `q${number}`, number, by, sentAt: daysAgo(age), pct });
 const history = (n: number, pct: (i: number) => number) => Array.from({ length: n }, (_, i) => quote(100 + i, 10 + i * 3, pct(i)));
 
 test("a discount well above what the workspace usually gives is listed, highest first", () => {

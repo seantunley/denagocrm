@@ -97,11 +97,15 @@ export type ReplySlip = { person: string; recentMinutes: number; usualMinutes: n
  * message is written in the same step that sets firstResponseAt (helpdesk.ts), so it is the staff message closest to
  * that time; a staff-opened ticket's opening message (its description) comes earlier and is not a reply.
  */
+const FIRST_REPLY_MATCH_MS = 5 * 60_000;
+
 export function firstReplier(staffMessages: readonly { userId: string | null; createdAt: Date }[], firstResponseAt: Date): string | null {
   let best: { userId: string; gap: number } | null = null;
   for (const message of staffMessages) {
     if (!message.userId) continue;
     const gap = Math.abs(message.createdAt.getTime() - firstResponseAt.getTime());
+    // Written in the same step, so seconds apart at most. Nothing that close (the reply's message is gone) → no one is credited.
+    if (gap > FIRST_REPLY_MATCH_MS) continue;
     if (!best || gap < best.gap) best = { userId: message.userId, gap };
   }
   return best?.userId ?? null;
@@ -170,7 +174,8 @@ export function percentile(values: readonly number[], fraction: number): number 
   return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(fraction * sorted.length) - 1))];
 }
 
-export type DiscountQuote = { id: string; number: number; by: string | null; createdAt: Date; pct: number };
+/** `sentAt`: when the quote was first sent (Quote.sentAt), not when it was drafted. */
+export type DiscountQuote = { id: string; number: number; by: string | null; sentAt: Date; pct: number };
 export type UnusualDiscounts = { usualTopPct: number; quotes: DiscountQuote[] };
 
 /**
@@ -181,12 +186,12 @@ export type UnusualDiscounts = { usualTopPct: number; quotes: DiscountQuote[] };
 export function unusualDiscounts(quotes: readonly DiscountQuote[], now: Date): UnusualDiscounts | null {
   const recentFrom = now.getTime() - DISCOUNT_RECENT_DAYS * DAY;
   const baselineFrom = recentFrom - DISCOUNT_BASELINE_DAYS * DAY;
-  const history = quotes.filter((q) => q.createdAt.getTime() >= baselineFrom && q.createdAt.getTime() < recentFrom).map((q) => q.pct);
+  const history = quotes.filter((q) => q.sentAt.getTime() >= baselineFrom && q.sentAt.getTime() < recentFrom).map((q) => q.pct);
   if (history.length < DISCOUNT_MIN_HISTORY) return null;
   const usualTopPct = percentile(history, 0.95);
   const bar = Math.max(DISCOUNT_MIN_PCT, usualTopPct + DISCOUNT_MARGIN_PCT);
   const unusual = quotes
-    .filter((q) => q.createdAt.getTime() >= recentFrom && q.createdAt.getTime() <= now.getTime() && q.pct >= bar)
+    .filter((q) => q.sentAt.getTime() >= recentFrom && q.sentAt.getTime() <= now.getTime() && q.pct >= bar)
     .sort((a, b) => b.pct - a.pct || b.number - a.number);
   return unusual.length ? { usualTopPct, quotes: unusual } : null;
 }

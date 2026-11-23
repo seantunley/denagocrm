@@ -77,28 +77,29 @@ export async function findAnomalies(tenantId: string, now: Date): Promise<Anomal
   const personIds = [...new Set(replied.map((ticket) => ticket.personId))];
   const people = personIds.length ? await prisma.user.findMany({ where: { id: { in: personIds } }, select: { id: true, name: true } }) : [];
 
-  // Sent or accepted, and the current revision only: a draft is scratch work, and a superseded quote would count one offer twice.
+  // Dated by when each quote was FIRST SENT (Quote.sentAt, set by a trigger), not when it was drafted. Whatever its
+  // status now: a quote sent and later declined or cancelled was still offered. A draft never sent has no sentAt. The
+  // current revision only: a superseded quote would count one offer twice (its revision has its own sentAt).
   const quotes = await prisma.quote.findMany({
     where: {
       tenantId,
       deletedAt: null,
       supersededAt: null,
-      status: { in: ["sent", "accepted"] },
-      createdAt: { gte: windowStart(now, DISCOUNT_RECENT_DAYS + DISCOUNT_BASELINE_DAYS) },
+      sentAt: { gte: windowStart(now, DISCOUNT_RECENT_DAYS + DISCOUNT_BASELINE_DAYS) },
     },
     select: {
       id: true,
       number: true,
-      createdAt: true,
+      sentAt: true,
       createdBy: { select: { name: true } },
       items: { select: { qty: true, unitPriceCents: true, discountPct: true, kind: true, optional: true, selected: true } },
     },
-    orderBy: { createdAt: "desc" },
+    orderBy: { sentAt: "desc" },
     take: READ_CAP,
   });
   const discounted: DiscountQuote[] = quotes.flatMap((quote) => {
-    const pct = quoteDiscountPct(quote.items);
-    return pct === null ? [] : [{ id: quote.id, number: quote.number, by: quote.createdBy?.name ?? null, createdAt: quote.createdAt, pct }];
+    const pct = quote.sentAt ? quoteDiscountPct(quote.items) : null;
+    return pct === null || !quote.sentAt ? [] : [{ id: quote.id, number: quote.number, by: quote.createdBy?.name ?? null, sentAt: quote.sentAt, pct }];
   });
 
   return {
