@@ -17,7 +17,10 @@
  *
  * VEHICLES ONLY. This reads what is stamped on or stuck to a vehicle. It is not
  * for identity documents: a customer's ID stays out of the CRM (the finance
- * module's own rule), and the reader's instructions say so.
+ * module's own rule), and the reader's instructions say so. Those instructions only
+ * stop a document's details reaching the FORM — the photo has already been sent to
+ * the AI by then. What keeps documents from being sent is the warning on the button
+ * (VehiclePhotoScan.tsx), shown before the photo is taken.
  */
 
 export type VehiclePhotoFields = {
@@ -106,4 +109,5 @@ export function parseVehiclePhoto(reply: string): VehiclePhotoResult | null {
   return { ...fields, warnings: vin ? vinWarnings(vin) : [] };
 }
 
-export const foundAnything = (fields: VehiclePhotoFields): boolean => Boolean(fields.vin || fields.regNumber || fields.model || fields.color);
+/** A scan of a VIN or registration found one. Model or colour alone (a photo of the car, not its plate) is not a read. */
+export const foundAnything = (fields: VehiclePhotoFields): boolean => Boolean(fields.vin || fields.regNumber);

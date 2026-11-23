@@ -50,6 +50,15 @@ test("fields of the wrong type or an absurd length are dropped one by one", () =
   assert.deepEqual(found, { vin: null, regNumber: "CA 1", model: null, color: null, warnings: [] });
   assert.equal(foundAnything(found!), true);
   assert.equal(foundAnything(parseVehiclePhoto('{"vin":null,"regNumber":null,"model":null,"color":null}')!), false);
+  // A model or colour without a VIN or registration is not what the button asked for.
+  assert.equal(foundAnything(parseVehiclePhoto('{"vin":null,"regNumber":null,"model":"Rover XL","color":"Blue"}')!), false);
+});
+
+test("the button says, before the photo is taken, that it goes to the AI service and is for vehicles only", () => {
+  // The prompt asks the AI to refuse documents, but by then the photo has been sent — so the person is told first.
+  const scan = source("src/components/VehiclePhotoScan.tsx");
+  assert.match(scan, /sent to the AI service this workspace uses/);
+  assert.match(scan, /Never photograph ID documents, driving licences or bank cards/);
 });
 
 test("control characters in a read value never reach the form", () => {

@@ -77,8 +77,16 @@ export default function VehiclePhotoScan({
           {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Camera className="size-4" aria-hidden />}
           {busy ? "Reading the photo…" : "Scan from a photo"}
         </label>
-        <p className="text-xs text-muted-foreground">Photograph the VIN plate, licence disc or number plate. The photo is read once and not kept.</p>
+        <p className="text-xs text-muted-foreground">Photograph the VIN plate, licence disc or number plate.</p>
       </div>
+      {/* Told BEFORE the photo is taken: the AI is asked to refuse documents, but by then the photo has been sent. */}
+      <p className="flex gap-1.5 text-xs text-foreground">
+        <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-amber-300" aria-hidden />
+        <span>
+          The photo is sent to the AI service this workspace uses to be read, then dropped; the CRM doesn&apos;t keep it.
+          Vehicles only. <strong>Never photograph ID documents, driving licences or bank cards.</strong>
+        </span>
+      </p>
 
       <div role="status" aria-live="polite">
         {problem && <p className="text-sm text-amber-300">{problem}</p>}
