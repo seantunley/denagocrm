@@ -14,7 +14,7 @@
         ["Instagram", "Instagram direct messages and comments", "Settings → Integrations → **Meta (Messenger & Instagram)**"],
         ["Facebook & Instagram lead ads", "New leads, created automatically", "Settings → Integrations → **Meta (Messenger & Instagram)**"],
         ["WhatsApp", "WhatsApp chats", "Settings → Integrations → **WhatsApp Business (Cloud API)**"],
-        ["Telegram", "Telegram chats, answered by the chatbot", "The **Chatbot** page"],
+        ["Telegram", "Telegram chats, answered by the chatbot", "Connected for the whole CRM by your CRM provider — see **Telegram**"],
         ["Google reviews", "New reviews, on their own inbox tab", "Settings → Integrations → **Google reviews**"]
       ] },
       { "type": "h", "text": "Two ways to connect Facebook, Instagram and WhatsApp" },
@@ -28,7 +28,6 @@
       { "type": "steps", "items": [
         "Set up your **Meta app** once. Messenger, Instagram, lead ads and WhatsApp all run through it — see **Step 1 — Create your Meta app**.",
         "Connect the channels you want on top of it: **Messenger**, **Instagram**, **WhatsApp** and **lead ads**, each in its own guide.",
-        "Connect **Telegram** separately with a bot token — see **Connecting a Telegram bot**.",
         "Optionally add **Google reviews**.",
         "Decide whether the **chatbot** should answer automatically. That's a separate switch on the Chatbot page — see **Turning the chatbot on and choosing where it runs**."
       ] },
