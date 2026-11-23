@@ -367,7 +367,8 @@ export async function createSessionCookie(
       jti,
       userId: user.id,
       platform: pwa ? "pwa" : "web",
-      ip: (h.get("x-forwarded-for") ?? "").split(",")[0].trim() || null,
+      sessionVersion,
+      ip:(h.get("x-forwarded-for") ?? "").split(",")[0].trim() || null,
       userAgent: (h.get("user-agent") ?? "").slice(0, 250) || null,
     };
     // Stamp the resolved tenant. If the tenant is deleted between resolve and

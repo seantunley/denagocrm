@@ -8,8 +8,10 @@ test("auto sign-out is on Sessions & devices, with the sign-out warning", () => 
   const sessions = readFileSync("src/app/(app)/settings/sessions/page.tsx", "utf8");
   assert.match(sessions, /action=\{saveSessionPolicy\}/);
   assert.match(sessions, /Saving signs everyone else in this\s+workspace out/);
-  // Expired sign-ins are never marked ended, so the list must drop them by their token lifetime.
-  assert.match(sessions, /s\.platform === "pwa" \? PWA_SESSION_HOURS : ABSOLUTE_SESSION_HOURS/);
+  // Ended sign-ins are never marked ended, so the list must run every row through the validity rule.
+  assert.match(sessions, /sessionStillValid\(s, account, idleMinutes\)/);
+  // ...which needs each new sign-in to record the account's session version.
+  assert.match(readFileSync("src/lib/auth.ts", "utf8"), /platform: pwa \? "pwa" : "web",\s+sessionVersion,/);
   const settings = readFileSync("src/app/(app)/settings/page.tsx", "utf8");
   assert.doesNotMatch(settings, /saveSessionPolicy/, "only one place may save the sign-out policy");
   const nav = readFileSync("src/lib/settings-navigation.ts", "utf8");

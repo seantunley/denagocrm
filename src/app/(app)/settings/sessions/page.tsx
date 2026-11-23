@@ -1,6 +1,8 @@
 import { Smartphone, Monitor, LogOut, ShieldOff } from "lucide-react";
 import { getIdleMinutes, requireTenantOwner } from "@/lib/auth";
 import { ABSOLUTE_SESSION_HOURS, PWA_SESSION_HOURS } from "@/lib/session";
+import { sessionStillValid } from "@/lib/sessionStillValid";
+import { getUserSecurityState } from "@/lib/userSecurity";
 import { saveSessionPolicy } from "@/app/actions/security";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { basePrisma, prisma } from "@/lib/db";
@@ -55,14 +57,6 @@ function ago(d: Date): string {
 
 const hoursAgo = (hours: number) => new Date(Date.now() - hours * 3600_000);
 
-/**
- * Only sign-ins that can still be used. A session row is never marked ended when its token runs out (72h, or 7 days
- * for the mobile app — the expiry is inside the token), so "not revoked" alone listed every sign-in ever made.
- */
-function stillValid(s: { platform: string | null; createdAt: Date }): boolean {
-  return s.createdAt > hoursAgo(s.platform === "pwa" ? PWA_SESSION_HOURS : ABSOLUTE_SESSION_HOURS);
-}
-
 export default async function SessionsPage() {
   await requireTenantOwner();
 
@@ -75,18 +69,26 @@ export default async function SessionsPage() {
   // Membership of the ACTING workspace, disabled members included: a disabled
   // account is exactly the one an owner comes here to confirm is signed out.
   const memberIds = await actingTenantMemberIds();
-  const users = (
-    await prisma.user.findMany({
-      where: memberIds === null ? {} : { id: { in: memberIds } },
-      orderBy: { name: "asc" },
-      include: {
-        sessions: {
-          where: { revokedAt: null, createdAt: { gt: hoursAgo(PWA_SESSION_HOURS) } },
-          orderBy: { lastActiveAt: "desc" },
-        },
+  const idleMinutes = await getIdleMinutes();
+  const rows = await prisma.user.findMany({
+    where: memberIds === null ? {} : { id: { in: memberIds } },
+    orderBy: { name: "asc" },
+    include: {
+      sessions: {
+        // Nothing older than the longest token lifetime can be live; sessionStillValid decides the rest.
+        where: { revokedAt: null, createdAt: { gt: hoursAgo(PWA_SESSION_HOURS) } },
+        orderBy: { lastActiveAt: "desc" },
       },
-    })
-  ).map((u) => ({ ...u, sessions: u.sessions.filter(stillValid) }));
+    },
+  });
+  // Only sign-ins that can still be used: a row is never marked ended when it times out, its token expires,
+  // the account is disabled, or everyone is signed out (e.g. saving the policy below).
+  const users = await Promise.all(
+    rows.map(async (u) => {
+      const account = await getUserSecurityState(u.id);
+      return { ...u, sessions: u.sessions.filter((s) => sessionStillValid(s, account, idleMinutes)) };
+    }),
+  );
   const totalActive = users.reduce((s, u) => s + u.sessions.length, 0);
   // A phone linked to the assistant is a sign-in too. "Sign out all" ends it;
   // revoking ONE device doesn't (the phone isn't that device), so it's shown
@@ -99,7 +101,6 @@ export default async function SessionsPage() {
       })
     : [];
   const phoneOf = new Map(phones.map((p) => [p.userId, p.waId]));
-  const idleMinutes = await getIdleMinutes();
 
   return (
     <SettingsWorkspace
