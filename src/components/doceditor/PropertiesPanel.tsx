@@ -703,7 +703,7 @@ function BannerProps({ block }: { block: BannerBlock }) {
         <div><label className={lbl}>Background</label><input type="color" value={block.bg} onChange={(e) => updateBlock(block.id, { bg: e.target.value })} className="h-8 w-full rounded border border-slate-300" /></div>
         <div><label className={lbl}>Accent</label><input type="color" value={block.accent} onChange={(e) => updateBlock(block.id, { accent: e.target.value })} className="h-8 w-full rounded border border-slate-300" /></div>
       </div>
-      <label className="mt-2 flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={block.showLogo} onChange={(e) => updateBlock(block.id, { showLogo: e.target.checked })} /> Show Denago logo</label>
+      <label className="mt-2 flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={block.showLogo} onChange={(e) => updateBlock(block.id, { showLogo: e.target.checked })} /> Show logo</label>
     </Section>
   );
 }
