@@ -1,13 +1,18 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ChevronLeft, ChevronRight, ArrowLeft } from "lucide-react";
+import { ChevronLeft, ChevronRight, ArrowLeft, ArrowUpRight } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import ArticleBody from "@/components/help/ArticleBody";
 import { getArticle, articlesInCategory, HELP_ARTICLES } from "@/lib/help/content";
 import { isArticleEnabled } from "@/lib/help/modules";
 import { getEnabledModuleIds } from "@/lib/modules/enabled";
 import { CATEGORY_LABEL } from "@/lib/help/categories";
+import { destinationFor } from "@/lib/help/destinations";
+import { readKey } from "@/lib/help/readStore";
+import { requireUser } from "@/lib/auth";
+import { HelpAreaTag } from "@/components/help/HelpAreaIcon";
+import MarkHelpRead from "@/components/help/MarkHelpRead";
 
 export function generateStaticParams() {
   return HELP_ARTICLES.map((a) => ({ slug: a.slug }));
@@ -39,6 +44,9 @@ export default async function HelpArticlePage({ params }: { params: Promise<{ sl
   const prev = idx > 0 ? siblings[idx - 1] : null;
   const next = idx >= 0 && idx < siblings.length - 1 ? siblings[idx + 1] : null;
   const aud = AUDIENCE[article.audience] ?? AUDIENCE.everyone;
+  const user = await requireUser();
+  // "Take me there": the screen this guide is about, when it is about one (lib/help/destinations.ts).
+  const destination = destinationFor(article.slug);
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -46,11 +54,26 @@ export default async function HelpArticlePage({ params }: { params: Promise<{ sl
         <Link href="/help" className="inline-flex items-center gap-1 hover:text-foreground lg:hidden">
           <ArrowLeft className="size-3.5" /> Help
         </Link>
-        <span className="hidden lg:inline">{CATEGORY_LABEL[article.category] ?? article.category}</span>
+<HelpAreaTag area={article.category} label={CATEGORY_LABEL[article.category] ?? article.category} />
         <span className={`ml-auto rounded-full px-2 py-0.5 text-[11px] font-medium ${aud.cls}`}>{aud.label}</span>
       </div>
 
       <PageHeader title={article.title} description={article.summary} />
+      {/* Opening the guide ticks it on this person's guided paths. */}
+      <MarkHelpRead storageKey={readKey(user.id)} slug={article.slug} />
+
+      {destination && (
+        <div className="flex flex-col gap-3 rounded-2xl border border-primary/20 bg-primary/[0.06] p-4 sm:flex-row sm:items-center">
+          <div className="min-w-0 flex-1">
+            <p className="font-semibold text-foreground">Follow along on the real screen</p>
+            <p className="text-sm text-muted-foreground">Opens {destination.label} in a new tab, so this guide stays open beside it.</p>
+          </div>
+          <Link href={destination.href} target="_blank" className="btn-primary shrink-0 self-start sm:self-auto">
+            Open {destination.label}
+            <ArrowUpRight className="size-4" aria-hidden />
+          </Link>
+        </div>
+      )}
 
       <article className="rounded-2xl border border-border bg-card p-6 sm:p-8">
         <ArticleBody body={article.body} />

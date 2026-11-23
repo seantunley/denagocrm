@@ -11,6 +11,9 @@ const rawHeadingAllowlist = new Set([
   "src/app/(app)/jobcards/[id]/page.tsx",
   "src/app/(app)/quotes/[id]/page.tsx",
   "src/app/(app)/bot-builder/[id]/page.tsx",
+  // The help centre's front door: a search hero ("How can we help?") is the
+  // page's whole point, so it leads instead of a title row (2026-11-23).
+  "src/app/(app)/help/page.tsx",
   // Task-first routing workspace: a compact header so the configured-route
   // table is the first thing on screen, not a hero band above it.
   "src/app/(app)/bot-builder/routes/page.tsx",

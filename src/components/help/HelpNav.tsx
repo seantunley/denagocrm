@@ -35,7 +35,8 @@ export default function HelpNav({ groups }: { groups: HelpNavGroup[] }) {
 
   return (
     <nav className="flex flex-col gap-3">
-      <div className="relative">
+      {/* The help home has its own, larger search at the top of the page (HelpSearch); two boxes there would be one too many. */}
+      <div className={cn("relative", pathname === "/help" && "hidden")}>
         <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
         <input
           value={q}

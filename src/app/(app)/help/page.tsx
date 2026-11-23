@@ -1,68 +1,142 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import {
-  Compass, SquareKanban, FileText, Package, Wrench, Megaphone, MessageSquare, Bot, FolderOpen,
-  ChartColumnIncreasing, Cog, ArrowRight, BookOpen, type LucideIcon,
-} from "lucide-react";
-import { PageHeader } from "@/components/page-header";
-import { buttonVariants } from "@/components/ui/button";
-import { categoriesWithArticles } from "@/lib/help/content";
+import { ArrowRight, BookOpen } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { requireUser } from "@/lib/auth";
+import { hasAnyPermission } from "@/lib/permissions";
+import { categoriesWithArticles, getArticle } from "@/lib/help/content";
+import { CATEGORY_LABEL } from "@/lib/help/categories";
+import { HELP_AREA_STYLE } from "@/lib/help/areas";
+import { featuredFor, pathsFor } from "@/lib/help/paths";
+import { readKey } from "@/lib/help/readStore";
 import { getEnabledModuleIds } from "@/lib/modules/enabled";
+import { HelpAreaTag, HelpAreaTile } from "@/components/help/HelpAreaIcon";
+import HelpSearch from "@/components/help/HelpSearch";
+import HelpPaths from "@/components/help/HelpPaths";
 
 export const metadata: Metadata = { title: "Help & user manual" };
 
-const ICONS: Record<string, LucideIcon> = {
-  Compass, SquareKanban, FileText, Package, Wrench, Megaphone, MessageSquare, Bot, FolderOpen, ChartColumnIncreasing, Cog,
-};
-
+/**
+ * The help centre's front door (2026-11-23; the canvas board "Help centre —
+ * home"): search first, then guided paths for the reader's kind of work, a few
+ * guides worth starting with, and every area in its own colour.
+ */
 export default async function HelpHomePage() {
+  const user = await requireUser();
   const enabled = await getEnabledModuleIds();
   const categories = categoriesWithArticles(enabled);
-  const articleCount = categories.reduce((n, c) => n + c.articles.length, 0);
+  const articles = categories.flatMap((category) => category.articles);
+  const visible = new Set(articles.map((article) => article.slug));
+
+  // Who is reading decides which paths are offered: everyone gets the everyday ones, a manager the team one, the owner all.
+  const admin = user.role === "owner";
+  const manager = admin || (await hasAnyPermission(user, "forecast.view", "pipelines.manage"));
+  const paths = pathsFor(visible, { manager, admin }).map((path) => ({
+    key: path.key,
+    label: path.label,
+    blurb: path.blurb,
+    articles: path.slugs.flatMap((slug) => {
+      const article = getArticle(slug);
+      return article ? [{ slug, title: article.title }] : [];
+    }),
+  }));
+  const featured = featuredFor(visible).flatMap((slug) => {
+    const article = getArticle(slug);
+    return article ? [article] : [];
+  });
 
   return (
-    <div className="space-y-8">
-      <PageHeader title="Help &amp; user manual" description={`Step-by-step guides for every part of the CRM — ${articleCount} articles across ${categories.length} areas.`}>
-        <Link href="/manual" target="_blank" className={buttonVariants({ variant: "outline", size: "sm" })}>
-          <BookOpen className="size-4" /> Full manual (print / PDF)
-        </Link>
-      </PageHeader>
+    <div className="space-y-10">
+      <header className="relative overflow-hidden rounded-2xl border border-border bg-sidebar px-5 py-10 text-center depth-card sm:px-8 sm:py-14">
+        {/* Decoration: three still planes behind the search, at three heights. */}
+        <div aria-hidden className="pointer-events-none absolute -left-16 -top-14 hidden h-56 w-72 -rotate-[9deg] rounded-[40px] bg-blue-400/[0.06] depth-key sm:block" />
+        <div aria-hidden className="pointer-events-none absolute -right-14 top-16 hidden h-60 w-72 rotate-[8deg] rounded-[44px] bg-primary/[0.07] depth-key sm:block" />
+        <div aria-hidden className="pointer-events-none absolute right-56 -top-12 hidden size-28 rotate-[16deg] rounded-[30px] bg-emerald-400/[0.07] depth-key lg:block" />
+        <div className="relative flex flex-col items-center gap-4">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-primary">Help centre</p>
+          <h1 className="text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">How can we help?</h1>
+          <p className="max-w-xl text-sm text-muted-foreground">
+            {articles.length} step-by-step guides across {categories.length} areas of the CRM.
+          </p>
+          <HelpSearch
+            items={articles.map((article) => ({
+              slug: article.slug,
+              title: article.title,
+              summary: article.summary,
+              keywords: article.keywords,
+              area: article.category,
+              areaLabel: CATEGORY_LABEL[article.category] ?? article.category,
+            }))}
+          />
+        </div>
+      </header>
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        {categories.map((c) => {
-          const Icon = ICONS[c.icon] ?? BookOpen;
-          const first = c.articles[0];
-          return (
-            <Link
-              key={c.key}
-              href={first ? `/help/${first.slug}` : "/help"}
-              className="group flex flex-col rounded-2xl border border-border bg-card p-5 transition-colors hover:border-primary/30"
-            >
-              <div className="flex items-center gap-3">
-                <span className="flex size-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
-                  <Icon className="size-5" />
-                </span>
-                <div className="min-w-0">
-                  <p className="font-semibold text-foreground">{c.label}</p>
-                  <p className="text-xs text-muted-foreground">{c.articles.length} article{c.articles.length === 1 ? "" : "s"}</p>
-                </div>
-              </div>
-              <p className="mt-3 text-sm text-muted-foreground">{c.description}</p>
-              <ul className="mt-4 space-y-1.5 border-t border-border/60 pt-3">
-                {c.articles.slice(0, 4).map((a) => (
-                  <li key={a.slug} className="flex items-center gap-2 text-[13px] text-muted-foreground/90">
-                    <ArrowRight className="size-3 shrink-0 text-muted-foreground/40 transition-colors group-hover:text-primary" />
-                    <span className="truncate">{a.title}</span>
-                  </li>
-                ))}
-                {c.articles.length > 4 && (
-                  <li className="pl-5 text-[12px] text-muted-foreground/50">+{c.articles.length - 4} more</li>
+      <HelpPaths paths={paths} storageKey={readKey(user.id)} />
+
+      {featured.length > 0 && (
+        <section aria-labelledby="help-featured" className="space-y-3">
+          <h2 id="help-featured" className="text-lg font-semibold text-foreground">Good places to start</h2>
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            {featured.map((article) => (
+              <Link
+                key={article.slug}
+                href={`/help/${article.slug}`}
+                className={cn(
+                  "group flex flex-col gap-2.5 rounded-2xl border border-border border-t-2 bg-card p-4 transition-[transform,border-color] depth-card hover:-translate-y-0.5",
+                  HELP_AREA_STYLE[article.category].edge,
                 )}
-              </ul>
-            </Link>
-          );
-        })}
-      </div>
+              >
+                <span><HelpAreaTag area={article.category} label={CATEGORY_LABEL[article.category] ?? article.category} /></span>
+                <span className="font-semibold leading-snug text-foreground">{article.title}</span>
+                <span className="line-clamp-3 text-[13px] text-muted-foreground">{article.summary}</span>
+                <span className="mt-auto inline-flex items-center gap-1 text-xs font-medium text-muted-foreground transition-colors group-hover:text-primary">
+                  Read the guide <ArrowRight className="size-3" aria-hidden />
+                </span>
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <section aria-labelledby="help-areas" className="space-y-3">
+        <h2 id="help-areas" className="text-lg font-semibold text-foreground">Browse by area</h2>
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          {categories.map((category) => {
+            const first = category.articles[0];
+            return (
+              <Link
+                key={category.key}
+                href={first ? `/help/${first.slug}` : "/help"}
+                className="group flex items-start gap-3.5 rounded-2xl border border-border bg-card p-4 transition-[transform,border-color] depth-card hover:-translate-y-0.5 hover:border-white/15"
+              >
+                <HelpAreaTile area={category.key} icon={category.icon} />
+                <span className="min-w-0">
+                  <span className="flex items-baseline gap-2">
+                    <span className="font-semibold text-foreground">{category.label}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {category.articles.length} guide{category.articles.length === 1 ? "" : "s"}
+                    </span>
+                  </span>
+                  <span className="mt-0.5 block text-[13px] text-muted-foreground">{category.description}</span>
+                </span>
+              </Link>
+            );
+          })}
+          <Link
+            href="/manual"
+            target="_blank"
+            className="flex items-center gap-3.5 rounded-2xl border border-dashed border-white/20 p-4 transition-colors hover:border-white/35"
+          >
+            <span aria-hidden className="flex size-11 shrink-0 items-center justify-center rounded-xl text-muted-foreground depth-inset">
+              <BookOpen className="size-5" />
+            </span>
+            <span>
+              <span className="block font-semibold text-foreground">Full manual</span>
+              <span className="block text-[13px] text-muted-foreground">Everything in one place, to print or save as PDF.</span>
+            </span>
+          </Link>
+        </div>
+      </section>
     </div>
   );
 }
