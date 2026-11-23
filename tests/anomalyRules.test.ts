@@ -80,7 +80,9 @@ test("discounts are dated by when the quote was first sent, whatever happened to
   // Drafted 20 days ago and sent today is a quote sent today; one sent then declined is still in the baseline.
   assert.match(digest, /sentAt: \{ gte: windowStart\(now, DISCOUNT_RECENT_DAYS \+ DISCOUNT_BASELINE_DAYS\) \}/);
   assert.doesNotMatch(digest, /status: \{ in: \["sent", "accepted"\] \}/);
-  assert.match(digest, /supersededAt: null/, "one offer, counted once: the current revision");
+  // Every SENT version counts: (a) sent, then an unsent draft revision — the sent one stays; (b) both sent — two offers;
+  // (c) a baseline quote later revised stays in the baseline. Only sentAt decides; a draft revision has none.
+  assert.doesNotMatch(digest, /supersededAt/, "a sent quote isn't dropped for being revised later");
   // The date is the database's: stamped on the first move to sent/accepted, by any writer, and never moved.
   const sql = readFileSync("prisma/migrations/20261123180000_quote_sent_at/migration.sql", "utf8");
   assert.match(sql, /IF NEW\."sentAt" IS NULL AND NEW\."status" IN \('sent', 'accepted'\) THEN\s+NEW\."sentAt" := now\(\);/);

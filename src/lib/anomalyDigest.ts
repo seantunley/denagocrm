@@ -66,14 +66,14 @@ export async function findAnomalies(tenantId: string, now: Date): Promise<Anomal
       })
     : [];
 
-  // Dated by when each quote was FIRST SENT (Quote.sentAt, set by a trigger), not when it was drafted. Whatever its
-  // status now: a quote sent and later declined or cancelled was still offered. A draft never sent has no sentAt. The
-  // current revision only: a superseded quote would count one offer twice (its revision has its own sentAt).
+  // Dated by when each quote was FIRST SENT (Quote.sentAt, set by a trigger), not when it was drafted. Every version
+  // that was sent counts, whatever happened to it after — declined, cancelled, or replaced by a revision (review of
+  // #1196: a revision starts as an unsent draft, so dropping the replaced version lost an offer the customer had). A
+  // revision that is sent too is a second offer, and counts as one. A draft never sent has no sentAt.
   const quotes = await prisma.quote.findMany({
     where: {
       tenantId,
       deletedAt: null,
-      supersededAt: null,
       sentAt: { gte: windowStart(now, DISCOUNT_RECENT_DAYS + DISCOUNT_BASELINE_DAYS) },
     },
     select: {
