@@ -7,11 +7,14 @@ ALTER TABLE "Quote" ADD COLUMN IF NOT EXISTS "sentAt" TIMESTAMP(3);
 SET app.bypass_rls = 'on';
 
 -- Quotes already out: the earliest evidence that they left (emailed, signing link, signed), else their creation. An
--- estimate for history only; cancelled quotes are left alone (one may never have been sent).
+-- estimate for history only. A cancelled quote counts only with that evidence (one may never have been sent).
 UPDATE "Quote"
    SET "sentAt" = COALESCE(LEAST("emailedAt", "signLinkCreatedAt", "signedAt"), "createdAt")
  WHERE "sentAt" IS NULL
-   AND "status" IN ('sent', 'accepted', 'declined');
+   AND (
+     "status" IN ('sent', 'accepted', 'declined')
+     OR ("status" = 'cancelled' AND COALESCE("emailedAt", "signLinkCreatedAt", "signedAt") IS NOT NULL)
+   );
 
 CREATE OR REPLACE FUNCTION "Quote_stamp_sent_at"() RETURNS trigger AS $$
 BEGIN
