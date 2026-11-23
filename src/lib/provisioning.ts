@@ -101,6 +101,9 @@ export async function ensureFoundingMembership(client: Client, userId: string): 
  * and the source roles in DEFAULT_TENANT_ID are visible.
  */
 export async function seedTenantDefaultRoles(client: Client, tenantId: string): Promise<void> {
+  // The founding tenant HOLDS the source roles (un-suffixed ids). Copying them into it again
+  // clashes with their own names (tenantId, name) — saving its modules in the console failed on that.
+  if (tenantId === DEFAULT_TENANT_ID) return;
   const sourceRoles = await client.role.findMany({
     where: { id: { in: [...SYSTEM_ROLE_IDS] } },
     include: { permissions: { select: { permissionKey: true } } },
