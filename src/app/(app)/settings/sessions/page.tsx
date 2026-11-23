@@ -1,7 +1,7 @@
 import { Smartphone, Monitor, LogOut, ShieldOff } from "lucide-react";
 import { getIdleMinutes, requireTenantOwner } from "@/lib/auth";
 import { ABSOLUTE_SESSION_HOURS, PWA_SESSION_HOURS } from "@/lib/session";
-import { sessionStillValid } from "@/lib/sessionStillValid";
+import { sessionStatus } from "@/lib/sessionStillValid";
 import { getUserSecurityState } from "@/lib/userSecurity";
 import { saveSessionPolicy } from "@/app/actions/security";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
@@ -86,10 +86,13 @@ export default async function SessionsPage() {
   const users = await Promise.all(
     rows.map(async (u) => {
       const account = await getUserSecurityState(u.id);
-      return { ...u, sessions: u.sessions.filter((s) => sessionStillValid(s, account, idleMinutes)) };
+      const sessions = u.sessions
+        .map((s) => ({ ...s, status: sessionStatus(s, account, idleMinutes) }))
+        .filter((s) => s.status !== "ended");
+      return { ...u, sessions, active: sessions.filter((s) => s.status === "active").length };
     }),
   );
-  const totalActive = users.reduce((s, u) => s + u.sessions.length, 0);
+  const totalActive = users.reduce((s, u) => s + u.active, 0);
   // A phone linked to the assistant is a sign-in too. "Sign out all" ends it;
   // revoking ONE device doesn't (the phone isn't that device), so it's shown
   // here, next to the devices, with its own Unlink.
@@ -143,7 +146,7 @@ export default async function SessionsPage() {
               <p className="text-sm font-semibold text-foreground">
                 {u.name}
                 <span className="ml-2 text-xs font-normal capitalize text-muted-foreground">
-                  {u.role} · {u.sessions.length} device{u.sessions.length === 1 ? "" : "s"}
+                  {u.role} · {u.active} device{u.active === 1 ? "" : "s"}
                 </span>
               </p>
               {u.sessions.length > 0 && (
@@ -197,6 +200,14 @@ export default async function SessionsPage() {
                         {s.platform === "pwa" && (
                           <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
                             Mobile app · 7-day session
+                          </span>
+                        )}
+                        {s.status === "unverified" && (
+                          <span
+                            className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground"
+                            title="Signed in before sign-outs were tracked per device. Revoke to be sure."
+                          >
+                            May already be signed out
                           </span>
                         )}
                       </p>

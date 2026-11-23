@@ -22,13 +22,23 @@ export type AccountState = { sessionVersion: number; disabledAt: Date | null } |
  * A session row is never marked ended when any of those happen, so the row alone can't say.
  * lastActiveAt is written at most every 10 minutes, so a sign-in can still be listed for up to 10 minutes
  * after it timed out — never the other way round.
+ *
+ * "unverified": passes every rule we can check, but was made before the version was recorded, so a later
+ * sign-everyone-out can't be ruled out. Not counted as active; listed so it can still be revoked. This
+ * cohort is gone 7 days after the migration.
  */
-export function sessionStillValid(
+export function sessionStatus(
   s: SessionRow,
   account: AccountState,
   idleMinutes: number,
   now: number = Date.now(),
-): boolean {
+): "active" | "unverified" | "ended" {
+  return sessionPassesKnownRules(s, account, idleMinutes, now)
+    ? s.sessionVersion === null ? "unverified" : "active"
+    : "ended";
+}
+
+function sessionPassesKnownRules(s: SessionRow, account: AccountState, idleMinutes: number, now: number): boolean {
   if (s.revokedAt || !account || account.disabledAt) return false;
   if (s.sessionVersion !== null && s.sessionVersion !== account.sessionVersion) return false;
   const pwa = s.platform === "pwa";

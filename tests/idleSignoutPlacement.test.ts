@@ -9,7 +9,9 @@ test("auto sign-out is on Sessions & devices, with the sign-out warning", () => 
   assert.match(sessions, /action=\{saveSessionPolicy\}/);
   assert.match(sessions, /Saving signs everyone else in this\s+workspace out/);
   // Ended sign-ins are never marked ended, so the list must run every row through the validity rule.
-  assert.match(sessions, /sessionStillValid\(s, account, idleMinutes\)/);
+  assert.match(sessions, /sessionStatus\(s, account, idleMinutes\)/);
+  // Only verified sign-ins count towards "N active device sessions".
+  assert.match(sessions, /totalActive = users\.reduce\(\(s, u\) => s \+ u\.active, 0\)/);
   // ...which needs each new sign-in to record the account's session version.
   assert.match(readFileSync("src/lib/auth.ts", "utf8"), /platform: pwa \? "pwa" : "web",\s+sessionVersion,/);
   const settings = readFileSync("src/app/(app)/settings/page.tsx", "utf8");

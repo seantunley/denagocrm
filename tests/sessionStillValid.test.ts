@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { sessionStillValid, type SessionRow } from "../src/lib/sessionStillValid";
+import { sessionStatus, type SessionRow } from "../src/lib/sessionStillValid";
 
 const NOW = Date.UTC(2026, 10, 23, 12, 0, 0);
 const minsAgo = (m: number) => new Date(NOW - m * 60_000);
@@ -13,8 +13,9 @@ const row = (over: Partial<SessionRow> = {}): SessionRow => ({
   ...over,
 });
 const account = { sessionVersion: 3, disabledAt: null };
-const valid = (s: SessionRow, a: Parameters<typeof sessionStillValid>[1] = account, idle = 60) =>
-  sessionStillValid(s, a, idle, NOW);
+const status = (s: SessionRow, a: Parameters<typeof sessionStatus>[1] = account, idle = 60) =>
+  sessionStatus(s, a, idle, NOW);
+const valid = (s: SessionRow, a?: Parameters<typeof sessionStatus>[1], idle?: number) => status(s, a, idle) === "active";
 
 test("a recent, active sign-in is listed", () => {
   assert.equal(valid(row()), true);
@@ -48,6 +49,10 @@ test("disabled accounts, missing accounts and revoked rows list nothing", () => 
   assert.equal(valid(row({ revokedAt: minsAgo(1) })), false);
 });
 
-test("rows from before the version was recorded fall back to the time rules", () => {
-  assert.equal(valid(row({ sessionVersion: null }), { sessionVersion: 9, disabledAt: null }), true);
+test("a sign-in from before the version was recorded is never counted active, even after a policy save", () => {
+  // Account bumped to 9 by a policy save / sign-out-all: we can't tell whether this row's token predates it.
+  assert.equal(status(row({ sessionVersion: null }), { sessionVersion: 9, disabledAt: null }), "unverified");
+  // The time and account rules still end it outright.
+  assert.equal(status(row({ sessionVersion: null, lastActiveAt: minsAgo(71) })), "ended");
+  assert.equal(status(row({ sessionVersion: null }), { sessionVersion: 9, disabledAt: minsAgo(1) }), "ended");
 });
