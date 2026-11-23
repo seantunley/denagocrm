@@ -33,6 +33,7 @@ import admin from "./data/admin.json";
 import { signatureBannerArticles } from "./articles/signature-banners";
 import { emailSignatureArticles } from "./articles/email-signatures";
 import { vehicleTransferArticles } from "./articles/vehicle-transfer";
+import { whatsappConnectArticles } from "./articles/whatsapp-connect";
 
 // data/marketing.json is the original generated marketing set. Where an article
 // has since been re-authored by hand under the SAME slug, the generated one is
@@ -108,6 +109,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
   ...signingAndInboxArticles.filter((article) => article.category === "comms"),
   ...generated(commsAutomation),
   ...generated(channels),
+  ...whatsappConnectArticles,
   ...generated(admin),
   // Order within a category follows this list, so what is left of the
   // hand-authored sets reads after the generated articles of its category.

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import ConfirmActionDialog from "@/components/ConfirmActionDialog";
 import { disconnectWhatsAppNumber } from "@/app/actions/whatsappConnect";
 import { connectedWhatsApp, savedRegistrationPin, whatsappSignupApp } from "@/lib/whatsappConnect";
@@ -21,7 +22,8 @@ export default async function WhatsAppConnectBox({ tenantId }: { tenantId: strin
         Sign in with Facebook, choose or create your WhatsApp Business account and verify a number by SMS or call. Messages
         to that number then arrive in this workspace only. Meta charges for some WhatsApp messages and bills your own
         WhatsApp account — add a payment method in WhatsApp Manager. A number already on the WhatsApp Business phone app
-        has to move to this connection first; it can&apos;t be used in both.
+        has to move to this connection first; it can&apos;t be used in both.{" "}
+        <Link href="/help/connect-whatsapp-button" className="underline">How Connect WhatsApp works</Link>
       </p>
       {pin && (
         <p className="mt-2 text-xs text-muted-foreground">
