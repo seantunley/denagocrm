@@ -279,6 +279,17 @@ export const AUTOMATIONS: Automation[] = [
     phases: ["threads-token-renewal"],
   },
   {
+    key: "whatsapp-unsubscribe-retry",
+    label: "WhatsApp account clean-up",
+    does: "When Meta hasn't confirmed it stopped sending messages from a WhatsApp Business account the workspace no longer uses (after Disconnect or a switch to another account), asks again. After about a day of failures the workspace owner gets one phone notification. Shown on the Integrations page until it's done.",
+    reaches: "staff",
+    channels: ["push"],
+    when: "Every 30 minutes — acts only while an account is waiting, at most every 6 hours",
+    managedAt: { label: "Integrations", href: "/settings/integrations" },
+    cron: "/api/cron/automations",
+    phases: ["whatsapp-unsubscribe-retry"],
+  },
+  {
     key: "activity-reminders",
     label: "Activity reminders",
     does: "Phone notifications to the team for calls and meetings coming up.",

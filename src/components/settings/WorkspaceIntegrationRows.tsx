@@ -24,6 +24,7 @@ const KEYS = [
   "META_APP_SECRET",
   "META_APP_ID",
   "META_LOGIN_CONFIG_ID",
+  "WA_SIGNUP_CONFIG_ID",
   "TELEGRAM_BOT_TOKEN",
   "BOT_TG_ENABLED",
   "GOOGLE_MAPS_BROWSER_API_KEY",
@@ -166,6 +167,18 @@ export default async function platformIntegrationRows({ xAccountId }: { xAccount
             <div className="flex-1">
               <label className="label">Login for Business configuration ID (optional)</label>
               <input name="value" className="input" defaultValue={setting("META_LOGIN_CONFIG_ID")} placeholder="Facebook Login for Business → Configurations — blank asks for the permissions directly" />
+            </div>
+            <SaveButton className="btn-primary">Save</SaveButton>
+          </SaveForm>
+          {/* Connect WhatsApp (lib/whatsappConnect.ts): Meta's Embedded Signup on this same app. Blank = switched off. */}
+          <SaveForm resetOnSuccess={false} action={saveSetting} className="flex gap-2 items-end">
+            <input type="hidden" name="key" value="WA_SIGNUP_CONFIG_ID" />
+            <div className="flex-1">
+              <label className="label">WhatsApp Embedded Signup configuration ID</label>
+              <input name="value" className="input" defaultValue={setting("WA_SIGNUP_CONFIG_ID")} placeholder="Facebook Login for Business → Configurations → WhatsApp Embedded Signup (v4) — blank keeps Connect WhatsApp off" />
+              <p className="mt-1 text-xs text-muted-foreground">
+                The popup runs on <code>{PLATFORM_URL}</code> — add that domain to the app&apos;s Allowed Domains and Valid OAuth Redirect URIs.
+              </p>
             </div>
             <SaveButton className="btn-primary">Save</SaveButton>
           </SaveForm>

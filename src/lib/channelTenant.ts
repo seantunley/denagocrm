@@ -17,8 +17,12 @@ import { basePrisma } from "./db";
  * endpoint, or a deleted tenant (no `Tenant` row) must NOT resolve. Returns the
  * owning `tenantId`, or null to fail closed.
  */
-/** `threads`: the workspace's Threads account id (lib/threads.ts, 2026-11-21). */
-export type ChannelKind = "whatsapp" | "messenger" | "instagram" | "x" | "threads";
+/**
+ * `threads`: the workspace's Threads account id (lib/threads.ts, 2026-11-21).
+ * `whatsapp_account`: a WhatsApp Business account connected through Connect WhatsApp — held by ONE workspace, because
+ * Meta's webhook subscription covers every number on the account (lib/whatsappConnect.ts). Not an inbound route.
+ */
+export type ChannelKind = "whatsapp" | "messenger" | "instagram" | "x" | "threads" | "whatsapp_account";
 
 export async function resolveChannelTenant(
   channel: ChannelKind,

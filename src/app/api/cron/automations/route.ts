@@ -9,6 +9,7 @@ import { syncFacebookLeads } from "@/lib/metaLeadSync";
 import { syncGoogleReviews } from "@/lib/googleReviews";
 import { syncInboundEmail } from "@/lib/imapSync";
 import { renewThreadsToken } from "@/lib/threadsRenewal";
+import { retryWhatsAppUnsubscribes } from "@/lib/whatsappUnsubscribe";
 import { isAuthorizedCron } from "@/lib/cronAuth";
 import { getEnabledModuleIds } from "@/lib/modules/enabled";
 import type { ModuleId } from "@/lib/modules/registry";
@@ -102,6 +103,8 @@ async function runOperationalQueues(tenantId: string | null, budget: CronSliceCo
   const inboundEmail = await phase("imap-sync", syncInboundEmail, -1);
   // A connected Threads account renews itself before its 60 days run out (lib/threadsRenewal.ts).
   const threadsRenewal = await phase("threads-token-renewal", () => renewThreadsToken(), null);
+  // A WhatsApp Business account Meta hasn't confirmed unsubscribing is retried (lib/whatsappUnsubscribe.ts).
+  const whatsappUnsubscribes = await phase("whatsapp-unsubscribe-retry", () => retryWhatsAppUnsubscribes(tenantId ?? DEFAULT_TENANT_ID), null);
   const activityReminders = await phase("activity-reminders", runActivityReminders, -1);
   // Automatic lead research moved to /api/cron/research. A research call on the
   // ChatGPT subscription takes 50–80 seconds; this route is killed at 60, and
@@ -136,6 +139,7 @@ async function runOperationalQueues(tenantId: string | null, budget: CronSliceCo
     googleReviews,
     inboundEmail,
     threadsRenewal,
+    whatsappUnsubscribes,
     campaignSent,
     surveyQueue,
     activityReminders,

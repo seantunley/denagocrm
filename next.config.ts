@@ -103,6 +103,20 @@ const nextConfig: NextConfig = {
           // block every script the proxy had just authorised.
         ],
       },
+      // CONNECT WHATSAPP (lib/whatsappConnect.ts) needs two windows to keep talking across origins, which
+      // `same-origin` above forbids — on these two pages only (the last matching header wins):
+      //  - Settings → Integrations opens the signup popup on the platform's address and hears back from it:
+      //    `same-origin-allow-popups` keeps its own popups linked, while no other site can open it and keep a handle.
+      //  - The signup popup opens Meta's window (Meta's Embedded Signup requires it) and answers the page that
+      //    opened it: no opener policy. It shows only Meta's button; every message it handles is checked by exact origin.
+      {
+        source: "/settings/integrations",
+        headers: [{ key: "Cross-Origin-Opener-Policy", value: "same-origin-allow-popups" }],
+      },
+      {
+        source: "/connect/whatsapp",
+        headers: [{ key: "Cross-Origin-Opener-Policy", value: "unsafe-none" }],
+      },
     ];
   },
 };

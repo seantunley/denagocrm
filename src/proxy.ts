@@ -41,6 +41,10 @@ const PUBLIC_PATHS = [
   // and Meta's crawler fetches them with no session. Static wording only; the deletion status takes a code and answers
   // just "completed on <date>".
   "/legal",
+  // Connect WhatsApp's popup on the platform's address (src/app/connect/whatsapp): no session there by design — it
+  // connects NOTHING; it runs Meta's sign-up and hands the result back to the Settings page that opened it, whose
+  // /finish checks that person's own session and state cookie (lib/whatsappConnect.ts).
+  "/connect/whatsapp",
   "/api/track", // campaign open/click tracking
   // "Save my contact" in email signatures (lib/contactCardServer.ts): a customer's phone opens the card with no
   // account. The token is signed (not guessable), the card holds only what the signature already shows, and it is
