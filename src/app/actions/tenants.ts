@@ -346,10 +346,13 @@ export async function setTenantModulesAction(
       return { success: "No change — the grants were already set that way" };
     }
 
-    await basePrisma.tenant.update({ where: { id: tenantId }, data: { modules } });
     // A newly granted module brings its roles (e.g. automotive → Technician,
     // Workshop manager). Idempotent; a revoked module's roles are hidden, not deleted.
-    await basePrisma.$transaction((tx) => seedTenantDefaultRoles(tx, tenantId));
+    // One transaction, so a failed role copy can't leave the grant saved but unaudited.
+    await basePrisma.$transaction(async (tx) => {
+      await tx.tenant.update({ where: { id: tenantId }, data: { modules } });
+      await seedTenantDefaultRoles(tx, tenantId);
+    });
 
     await logAuditStrict({
       action: "tenant.modules_changed",

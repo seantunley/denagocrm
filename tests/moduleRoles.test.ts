@@ -28,7 +28,12 @@ test("seeding skips module roles until the module is granted, and granting re-se
   const provisioning = code("src/lib/provisioning.ts");
   assert.match(provisioning, /const granted = grantedModuleIds\(tenant\?\.modules\);/);
   assert.match(provisioning, /if \(!roleAvailable\(source\.id, granted\)\) continue;/);
-  assert.match(code("src/app/actions/tenants.ts"), /data: \{ modules \} \}\);\s*await basePrisma\.\$transaction\(\(tx\) => seedTenantDefaultRoles\(tx, tenantId\)\);/);
+  assert.match(
+    code("src/app/actions/tenants.ts"),
+    /await tx\.tenant\.update\(\{ where: \{ id: tenantId \}, data: \{ modules \} \}\);\s*await seedTenantDefaultRoles\(tx, tenantId\);/,
+  );
+  // The founding tenant holds the source roles; seeding it again hit the (tenantId, name) index.
+  assert.match(provisioning, /if \(tenantId === DEFAULT_TENANT_ID\) return;/);
 });
 
 test("hidden on the roles screen and refused by the assign action, unless already held", () => {
