@@ -108,7 +108,7 @@ export const signingAndInboxArticles: HelpArticle[] = [
         "If someone else must sign first, you will see **Not their turn yet** instead of the document.",
         "The download link and the **I have a question** button are left off, because the device is yours and you are there to answer.",
         "Reading time and page progress are not measured on your device — see “The Engagement line”.",
-        "You need the **signing.manage** permission, and you must be able to open the quote or job card the request belongs to.",
+        "You need the **Send, remind, withdraw and sign in person** permission for signing, and you must be able to open the quote or job card the request belongs to.",
       ] },
       { type: "callout", tone: "info", text: "Delivery notes have their own version of this: on the delivery screen, **Customer signs on this device** opens the delivery note for the customer to sign at handover." },
       { type: "callout", tone: "warning", text: "Stay with the customer while they hold your device. They are using a device that is signed in to your CRM." },
@@ -296,8 +296,8 @@ export const signingAndInboxArticles: HelpArticle[] = [
     body: [
       { type: "p", text: "Signing has two permissions, listed under **Documents** when you open a role in **Settings → Team & roles**. Holding either one puts **Signatures** in a person's menu." },
       { type: "table", headers: ["Permission", "What it allows"], rows: [
-        ["**signing.view** — View signature requests on accessible quotes, job cards and documents", "Open the Signatures hub and a request's page, read recipients, engagement and the audit trail, download the evidence pack, and decide an approval assigned to them."],
-        ["**signing.manage** — Send, remind, withdraw and sign in person on accessible quotes, job cards and documents", "Everything above, plus **Send for signing**, **Resend**, **Void**, **Remind**, changing a recipient's email or phone, **Sign in person**, **Retry**, **Send signed copy again**, and resending or reassigning an approval."],
+        ["**View signature requests on accessible quotes, job cards and documents**", "Open the Signatures hub and a request's page, read recipients, engagement and the audit trail, download the evidence pack, and decide an approval assigned to them."],
+        ["**Send, remind, withdraw and sign in person on accessible quotes, job cards and documents**", "Everything above, plus **Send for signing**, **Resend**, **Void**, **Remind**, changing a recipient's email or phone, **Sign in person**, **Retry**, **Send signed copy again**, and resending or reassigning an approval."],
       ] },
       { type: "h", text: "“Accessible” matters" },
       { type: "p", text: "A permission says what a person may do; it does not say on which records. Someone who can only open their own quotes sees and manages only the signing requests on those quotes. A request for a quote they cannot open does not appear in their hub and cannot be opened by its link. Workspace owners see every request." },
@@ -317,7 +317,7 @@ export const signingAndInboxArticles: HelpArticle[] = [
       { type: "steps", items: [
         "Open **Settings → Team & roles** and go to **Roles & permissions**.",
         "Open the role the person holds.",
-        "Under **Documents**, tick **signing.view**, **signing.manage**, or both.",
+        "Under **Documents**, tick **View signature requests…**, **Send, remind, withdraw and sign in person…**, or both.",
         "Click **Save permissions**.",
       ] },
       { type: "callout", tone: "tip", text: "If a colleague says a request is missing from Signatures, check whether they can open the quote or job card it belongs to. That is almost always the reason." },
