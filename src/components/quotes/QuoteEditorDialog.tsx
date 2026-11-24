@@ -165,6 +165,8 @@ export type QuoteEditorDefaults = {
   terms: string;
   /** VAT for new lines, and the currency/locale the editor shows money in. */
   regional: Regional;
+  /** The workspace's business name (Company Profile), as the printed quote shows it. */
+  businessName: string;
 };
 
 type DraftLine = {
@@ -1390,7 +1392,7 @@ export function QuoteEditorDialog({
                 <div className="mx-auto min-h-[42rem] max-w-4xl rounded-sm bg-white px-6 py-8 text-slate-900 shadow-[0_24px_80px_rgba(0,0,0,.45)] sm:px-12 sm:py-12">
                   <div className="flex items-start justify-between gap-6 border-b-2 border-orange-500 pb-7">
                     <div>
-                      <p className="text-xs font-bold uppercase tracking-[0.24em] text-orange-600">Denago Cape Town EV</p>
+                      <p className="text-xs font-bold uppercase tracking-[0.24em] text-orange-600">{defaults.businessName}</p>
                       <h2 className="mt-3 text-3xl font-semibold tracking-[-0.04em]">Customer proposal</h2>
                     </div>
                     <div className="text-right">

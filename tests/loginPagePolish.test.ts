@@ -237,12 +237,15 @@ test("phones: keyboard, safe areas, touch targets, inputs", () => {
 
 test("decoration stays decoration, and the pulse folds on tablets", () => {
   const login = shipped("src/app/login/LoginClient.tsx");
-  const scene = login.slice(login.indexOf("function BrandScene"));
+  const parts = shipped("src/app/login/LoginScene.tsx");
+  const scene = parts.slice(parts.indexOf("export function BrandScene"));
   assert.match(scene, /aria-hidden="true"/);
-  assert.match(login, /aria-hidden="true" className=\{`[^`]*rounded-full[^`]*`\}>Secure access/);
-  const strip = login.slice(login.indexOf("function PulseStrip"), login.indexOf("function Metric"));
+  // The badge is the workspace's wording now (lib/loginLook.ts), still decoration.
+  assert.match(login, /aria-hidden="true" className=\{`[^`]*rounded-full[^`]*`\}>\{brand\.look\.badge\}/);
+  const strip = parts.slice(parts.indexOf("export function PulseStrip"), parts.indexOf("function Metric"));
   assert.match(strip, /aria-hidden="true" className="[^"]*hidden md:block lg:hidden/, "tablet portrait only");
-  assert.doesNotMatch(strip, /brand\.|props|fetch|prisma/, "fixed illustrative figures, never data");
+  assert.doesNotMatch(strip, /brand\.|fetch|prisma/, "fixed illustrative figures, never data");
+  assert.match(parts, /const FIGURES = \["14", "6", "3"\];/, "the figures are fixed, never a workspace's data");
   assert.match(shipped("src/app/login/page.tsx"), /<LoginClient brand=\{brand\} \/>/, "still only the brand is passed in");
 });
 

@@ -17,6 +17,8 @@ const shipped = (rel: string) =>
 
 const STAFF = "src/app/login/LoginClient.tsx";
 const PORTAL = "src/app/portal/login/PortalLoginClient.tsx";
+/** The staff page's right-hand side and intro live in LoginScene.tsx (shared with the editor's preview). */
+const page = (file: string) => (file === STAFF ? shipped(STAFF) + shipped("src/app/login/LoginScene.tsx") : shipped(file));
 
 /**
  * The login pages are the only surfaces that cannot name their tenant from
@@ -125,10 +127,10 @@ test("a bare brand render is now correct, and the gates are gone", () => {
   assert.match(shipped("src/lib/loginBrand.tsx"), /branded: boolean;/);
   // …and the gate really is what makes the attribute case safe.
   for (const file of [STAFF, PORTAL]) {
-    for (const match of shipped(file).matchAll(/=\{brand\.displayName\}/g)) {
+    for (const match of page(file).matchAll(/=\{brand\.displayName\}/g)) {
       void match;
       assert.match(
-        shipped(file),
+        page(file),
         /brand\.logoUrl \? \(/,
         `${file}: an attribute may use brand.displayName only inside the logoUrl branch`,
       );
@@ -142,7 +144,7 @@ test("no login page renders a built-in customer logo", () => {
   // Acme's hostname and on an unrecognised one alike. The portal page is the
   // worse of the two: it is shown to a tenant's CUSTOMERS.
   for (const file of [STAFF, PORTAL] as const) {
-    const code = shipped(file);
+    const code = page(file);
     assert.doesNotMatch(code, /\/branding\/denago/, `${file}: no customer artwork as a fallback`);
     // \r?\n, because a Windows checkout has CRLF and this then fails locally
     // while passing on CI — a false alarm that costs someone an afternoon.

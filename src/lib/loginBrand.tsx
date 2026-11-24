@@ -1,6 +1,7 @@
 import { headers } from "next/headers";
 import { DEFAULT_BRAND, brandForHost, brandForTenant, brandLogoUrl, brandStyle, type TenantBrand } from "./tenantBrand";
 import { PLATFORM, isPlatformHost } from "./platformLegal";
+import { LOGIN_DEFAULTS, loginImageUrl, type LoginLook } from "./loginLook";
 
 /**
  * The brand for a LOGIN page, resolved from the hostname the request arrived on.
@@ -44,6 +45,11 @@ export type LoginBrand = {
   style: string | null;
   /** Set only on the platform's own address: the page links to the platform's privacy, terms and data-deletion pages. */
   platformLegal?: true;
+  /** The sign-in screen's wording and layout — the standard page until the workspace edits it. */
+  look: LoginLook;
+  /** The workspace's own background photo and card picture, when it chose them. */
+  backgroundUrl: string | null;
+  cardImageUrl: string | null;
 };
 
 /**
@@ -56,12 +62,24 @@ export type LoginBrand = {
  * an unknown visitor was the leak; DEFAULT_BRAND now carries PLATFORM_NAME and
  * this follows it.
  */
+/** A look with the links to its pictures — what the sign-in page and the editor's preview both render. */
+export function lookFields(tenantId: string | null, look: LoginLook): Pick<LoginBrand, "look" | "backgroundUrl" | "cardImageUrl"> {
+  return {
+    look,
+    backgroundUrl: look.background === "image" ? loginImageUrl(tenantId, look.backgroundImage) : null,
+    cardImageUrl: look.card === "image" ? loginImageUrl(tenantId, look.cardImage) : null,
+  };
+}
+
 export const UNBRANDED: LoginBrand = {
   branded: false,
   displayName: DEFAULT_BRAND.displayName,
   tagline: null,
   logoUrl: null,
   style: null,
+  look: LOGIN_DEFAULTS,
+  backgroundUrl: null,
+  cardImageUrl: null,
 };
 
 export function toLoginBrand(brand: TenantBrand): LoginBrand {
@@ -74,6 +92,7 @@ export function toLoginBrand(brand: TenantBrand): LoginBrand {
     tagline: brand.tagline,
     logoUrl: brandLogoUrl(brand),
     style: brandStyle(brand),
+    ...lookFields(brand.tenantId, brand.login ?? LOGIN_DEFAULTS),
   };
 }
 

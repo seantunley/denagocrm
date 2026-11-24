@@ -4,6 +4,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { getAccessibleContactIds, getAccessibleVehicleIds, hasPermission, hasAnyPermission } from "@/lib/permissions";
 import { contactName } from "@/lib/format";
 import { editorDefaults, quoteFromLeadDefaults } from "@/lib/quoteFromLead";
+import { getCompanyProfile } from "@/lib/companyProfile";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { listActingTenantStaff } from "@/lib/tenantActor";
 import { fleetPicker } from "@/lib/fleetDirectory";
@@ -52,7 +53,7 @@ export async function GET(request: Request) {
         colors: product.colors.map((color) => color.name),
       })),
       contacts: contacts.map((contact) => ({ id: contact.id, label: contactName(contact) })),
-      quoteDefaults: editorDefaults(quoteDefaults),
+      quoteDefaults: editorDefaults(quoteDefaults, (await getCompanyProfile()).name),
       stages: [],
       users: [],
       vehicles: [],
@@ -156,7 +157,7 @@ export async function GET(request: Request) {
     contacts: contacts.map((c) => ({ id: c.id, label: contactName(c) })),
     users,
     fleetPicker: picker,
-    quoteDefaults: quoteDefaults ? editorDefaults(quoteDefaults) : null,
+    quoteDefaults: quoteDefaults ? editorDefaults(quoteDefaults, (await getCompanyProfile()).name) : null,
     vehicles: vehicles.map((v) => ({ id: v.id, label: `${v.model} — ${contactName(v.contact)}` })),
   });
   });
