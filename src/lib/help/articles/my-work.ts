@@ -36,6 +36,17 @@ export const myWorkArticles: HelpArticle[] = [
       },
       { type: "p", text: "Urgent job cards and cases go to the top of their section. Use the buttons at the top to show one area at a time." },
       { type: "p", text: "Rows marked **Suggested** were worked out from the record — for example a deal worth contacting — rather than set as a task by someone. They go away by themselves once the record changes." },
+      { type: "h", text: "Later: snooze or dismiss" },
+      {
+        type: "list",
+        items: [
+          "**Snooze** takes a row off your list until tomorrow, for 3 days or for a week. Nothing on the record changes — a snoozed task is still due — and it comes back on the day you picked. **Snoozed** shows what you have snoozed, with **Bring back now**.",
+          "**Dismiss** is for suggestions only: \"not this one\". It comes back if its reason changes, or after 30 days. A task can't be dismissed — it leaves the list when it is done on its record.",
+        ],
+      },
+      { type: "callout", tone: "info", text: "Snoozing and dismissing only change your own list. Nobody else's list, and no record, is affected." },
+      { type: "h", text: "Done today and Team" },
+      { type: "p", text: "**Done today** lists what you finished today: tasks marked done, cases closed and job cards completed. Workspace owners also see **Team**: for each person, how many planned activities are overdue and due today, and how many open cases and job cards they have — counts only." },
       { type: "callout", tone: "tip", text: "My Work is a module. A workspace owner can ask for it to be switched on; while it is off, the page and its menu link are hidden." },
     ],
   },

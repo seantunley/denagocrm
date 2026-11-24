@@ -3,13 +3,17 @@ import { AlertTriangle, ArrowRight, CalendarDays, CheckCircle2, Clock, ListTodo,
 import { requireUser } from "@/lib/auth";
 import { requireModuleEnabled } from "@/lib/modules/enabled";
 import { loadMyWork, myDealsAtRisk } from "@/lib/myWork/load";
-import { ACTION_LABEL, QUEUE_ROWS, WORK_AREAS, priorityOf, rankWork, workKey, type WorkArea, type WorkBucket } from "@/lib/myWork/rules";
+import { ACTION_LABEL, QUEUE_ROWS, WORK_AREAS, fingerprintOf, priorityOf, rankWork, workKey, type WorkArea, type WorkBucket } from "@/lib/myWork/rules";
 import { getRegionalSettings } from "@/lib/settings";
 import { johannesburgDateKey } from "@/lib/activityDay";
 import { formatDate, formatDue } from "@/lib/format";
 import { MetricCard, EmptyState, StatusPill } from "@/components/visual-system";
 import { MobileDataCard, MobileDataHeader, MobileDataList, ResponsiveDataView } from "@/components/responsive-patterns";
 import { CardEmpty, CardRow, CentreCards, CentreHeader, CentreMain, Panel, StatRow, ViewChips } from "@/components/centre";
+import WorkItemMenu from "@/components/WorkItemMenu";
+import { DoneList, SnoozedList, TeamTable } from "@/components/myWork/WorkViews";
+import { applyDispositions, DISMISSABLE_SOURCES } from "@/lib/myWork/dispositions";
+import { myDispositions, myDoneToday, teamWorkload } from "@/lib/myWork/extras";
 
 export const metadata = { title: "My Work" };
 
@@ -22,14 +26,25 @@ const PRIORITY_TONE = { High: "danger", Medium: "warning", Low: "neutral" } as c
  * (brief §6; layout from Sean's mockups, 2026-11-24). Each row opens the record
  * where the work is done; doing it there takes it off this list.
  */
-export default async function MyWorkPage({ searchParams }: { searchParams: Promise<{ area?: string; all?: string }> }) {
+export default async function MyWorkPage({ searchParams }: { searchParams: Promise<{ area?: string; view?: string; all?: string }> }) {
   await requireModuleEnabled("work");
   const user = await requireUser();
-  const { area, all: showAll } = await searchParams;
+  const { area, view: viewParam, all: showAll } = await searchParams;
   const only = WORK_AREAS.find((a) => a === area) as WorkArea | undefined;
   const now = new Date();
-  const [all, atRisk, regional] = await Promise.all([loadMyWork(user, now), myDealsAtRisk(user, now), getRegionalSettings()]);
-  const ranked = rankWork(all, now);
+  const [all, atRisk, regional, dispositions, done, team] = await Promise.all([
+    loadMyWork(user, now),
+    myDealsAtRisk(user, now),
+    getRegionalSettings(),
+    myDispositions(user, now),
+    myDoneToday(user, now),
+    teamWorkload(user, now),
+  ]);
+  // My snoozes and dismissals (brief §6). They hide items from MY list only; the records are untouched.
+  const { shown, snoozed } = applyDispositions(rankWork(all, now), dispositions, now);
+  const ranked = shown;
+  const view = viewParam === "snoozed" || viewParam === "done" || (viewParam === "team" && team) ? viewParam : "list";
+  // Every item is counted; the queue draws the most pressing QUEUE_ROWS unless asked for all (review of #1226).
   const matching = only ? ranked.filter((item) => item.area === only) : ranked;
   const rows = showAll ? matching : matching.slice(0, QUEUE_ROWS);
   const allHref = `/work?${only ? `area=${only}&` : ""}all=1`;
@@ -90,7 +105,7 @@ export default async function MyWorkPage({ searchParams }: { searchParams: Promi
         <Panel icon={ListTodo} title="Prioritised work queue" description="Your list across sales, deliveries, the workshop, support and approvals — most pressing first.">
           <ViewChips
             label="Area"
-            active={only ?? "all"}
+            active={view === "list" ? (only ?? "all") : view}
             chips={[
               { key: "all", label: "All work", href: "/work", count: ranked.length },
               ...WORK_AREAS.filter((a) => ranked.some((item) => item.area === a)).map((a) => ({
@@ -99,9 +114,18 @@ export default async function MyWorkPage({ searchParams }: { searchParams: Promi
                 href: `/work?area=${a}`,
                 count: ranked.filter((item) => item.area === a).length,
               })),
+              ...(snoozed.length ? [{ key: "snoozed", label: "Snoozed", href: "/work?view=snoozed", count: snoozed.length, hint: "Off your list for now; back on the day shown" }] : []),
+              { key: "done", label: "Done today", href: "/work?view=done", count: done.length, hint: "What you finished today, on the records" },
+              ...(team ? [{ key: "team", label: "Team", href: "/work?view=team", hint: "Everyone's load, as counts" }] : []),
             ]}
           />
-          {rows.length === 0 ? (
+          {view === "snoozed" ? (
+            <SnoozedList items={snoozed} regional={regional} />
+          ) : view === "done" ? (
+            <DoneList items={done} time={time} />
+          ) : view === "team" && team ? (
+            <TeamTable rows={team} />
+          ) : rows.length === 0 ? (
             <EmptyState icon={ListTodo} title="Nothing waiting on you." description="No deal, task, delivery, job card, case or approval is on you right now." />
           ) : (
             <ResponsiveDataView
@@ -154,8 +178,11 @@ export default async function MyWorkPage({ searchParams }: { searchParams: Promi
                         </td>
                         <td><StatusPill tone={PRIORITY_TONE[priority]}>{priority}</StatusPill></td>
                         <td className="max-w-80 text-xs text-muted-foreground">{item.reason}</td>
-                        <td className="text-right">
-                          <Link href={item.href} className="btn-secondary btn-sm">{ACTION_LABEL[item.source.type]}<ArrowRight className="size-3.5" /></Link>
+                        <td className="whitespace-nowrap text-right">
+                          <span className="inline-flex items-center gap-1.5">
+                            <Link href={item.href} className="btn-secondary btn-sm">{ACTION_LABEL[item.source.type]}<ArrowRight className="size-3.5" /></Link>
+                            <WorkItemMenu itemKey={workKey(item)} dismissable={item.kind === "suggestion" && DISMISSABLE_SOURCES.has(item.source.type)} fingerprint={fingerprintOf(item)} />
+                          </span>
                         </td>
                       </tr>
                     );
@@ -166,7 +193,7 @@ export default async function MyWorkPage({ searchParams }: { searchParams: Promi
               }
             />
           )}
-          {rows.length < matching.length && (
+          {view === "list" && rows.length < matching.length && (
             <p className="mt-3 text-sm text-muted-foreground">
               Showing the {rows.length} most pressing of {matching.length}.{" "}
               <Link href={allHref} className="text-primary hover:underline">Show all {matching.length}</Link>
