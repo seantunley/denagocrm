@@ -49,7 +49,7 @@ export default function HelpNav({ groups }: { groups: HelpNavGroup[] }) {
           className="h-10 w-full rounded-lg border border-border bg-background/40 pl-9 pr-9 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary/40 focus:outline-none"
         />
         {q && (
-          <button type="button" onClick={() => setQ("")} className="absolute right-1 top-1/2 grid size-8 -translate-y-1/2 place-items-center text-muted-foreground hover:text-foreground" aria-label="Clear search">
+          <button type="button" onClick={() => setQ("")} className="absolute right-1 top-1/2 grid size-8 -translate-y-1/2 place-items-center text-muted-foreground hover:text-foreground" aria-label="Clear search" title="Clear search">
             <X className="size-4" />
           </button>
         )}

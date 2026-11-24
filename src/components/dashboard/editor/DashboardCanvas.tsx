@@ -948,7 +948,7 @@ function SortableCard({
             ref={setActivatorNodeRef}
             {...attributes}
             {...listeners}
-            aria-label={`Move ${cardLabel(card)}`}
+            aria-label={`Move ${cardLabel(card)}`} title="Drag to move"
             className="flex size-7 cursor-grab items-center justify-center rounded-md border border-border bg-card text-muted-foreground shadow-sm hover:text-foreground active:cursor-grabbing"
           >
             <GripVertical className="size-3.5" />
@@ -956,7 +956,7 @@ function SortableCard({
           <button
             type="button"
             onClick={() => onConfigure(card.id)}
-            aria-label={`Settings for ${cardLabel(card)}`}
+            aria-label={`Settings for ${cardLabel(card)}`} title="Card settings"
             className="flex size-7 items-center justify-center rounded-md border border-border bg-card text-muted-foreground shadow-sm hover:text-foreground"
           >
             <Settings2 className="size-3.5" />
@@ -964,7 +964,7 @@ function SortableCard({
           <button
             type="button"
             onClick={() => removeCard(card.id)}
-            aria-label={`Remove ${cardLabel(card)}`}
+            aria-label={`Remove ${cardLabel(card)}`} title="Remove this card"
             className="flex size-7 items-center justify-center rounded-md border border-border bg-card text-muted-foreground shadow-sm hover:border-destructive/50 hover:text-destructive"
           >
             <X className="size-3.5" />

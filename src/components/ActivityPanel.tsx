@@ -312,7 +312,7 @@ export default function ActivityPanel({
                     <button
                       type="button"
                       className="text-xs text-slate-600 hover:text-red-500 cursor-pointer mt-1.5"
-                      title="Cancel"
+                      title="Cancel this activity"
                       aria-label={`Cancel ${a.summary}`}
                     >
                       ✕

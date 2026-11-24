@@ -214,6 +214,8 @@ export default function SurveyBuilder({ survey }: { survey: Initial }) {
                   className="btn-secondary btn-sm"
                   onClick={() => move(i, -1)}
                   disabled={i === 0}
+                  title="Move this question up"
+                  aria-label="Move this question up"
                 >
                   ↑
                 </button>
@@ -222,6 +224,8 @@ export default function SurveyBuilder({ survey }: { survey: Initial }) {
                   className="btn-secondary btn-sm"
                   onClick={() => move(i, 1)}
                   disabled={i === questions.length - 1}
+                  title="Move this question down"
+                  aria-label="Move this question down"
                 >
                   ↓
                 </button>

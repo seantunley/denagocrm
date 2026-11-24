@@ -35,7 +35,7 @@ export default function HelpSearch({ items }: { items: HelpSearchItem[] }) {
           className="h-14 w-full rounded-2xl border border-white/10 bg-popover pl-12 pr-12 text-base text-foreground outline-none depth-float-shadow placeholder:text-muted-foreground focus:border-primary/60 [&::-webkit-search-cancel-button]:hidden"
         />
         {searching && (
-          <button type="button" onClick={() => setQuery("")} aria-label="Clear search" className="absolute right-2 top-1/2 grid size-10 -translate-y-1/2 cursor-pointer place-items-center rounded-lg text-muted-foreground hover:text-foreground">
+          <button type="button" onClick={() => setQuery("")} aria-label="Clear search" title="Clear search" className="absolute right-2 top-1/2 grid size-10 -translate-y-1/2 cursor-pointer place-items-center rounded-lg text-muted-foreground hover:text-foreground">
             <X className="size-4" />
           </button>
         )}

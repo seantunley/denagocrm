@@ -80,7 +80,7 @@ export default function RepoRow({
             target="_blank"
             rel="noreferrer"
             className="truncate hover:text-primary"
-            title="Open / preview"
+            title="Open or preview"
           >
             {doc.fileName}
           </a>
@@ -105,7 +105,7 @@ export default function RepoRow({
         target="_blank"
         rel="noreferrer"
         className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-        title="Open / preview"
+        title="Open or preview"
       >
         <ExternalLink className="size-4" />
       </a>

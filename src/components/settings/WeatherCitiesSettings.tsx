@@ -111,7 +111,7 @@ export default function WeatherCitiesSettings({ initial }: { initial: WeatherCit
             <button
               type="button"
               onClick={() => setCities(cities.filter((entry) => entry !== city))}
-              aria-label={`Remove ${city.name}`}
+              aria-label={`Remove ${city.name}`} title={`Remove ${city.name}`}
               className="flex size-6 items-center justify-center rounded text-muted-foreground hover:text-destructive"
             >
               <X className="size-3.5" />

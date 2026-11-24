@@ -63,7 +63,7 @@ export function VersionHistory({ id, save, onPublished, hasStandardLayout = fals
           <div className="fixed right-0 top-0 z-50 flex h-full w-80 flex-col border-l border-slate-200 bg-white shadow-xl">
             <div className="flex items-center justify-between border-b border-slate-200 p-3">
               <span className="text-sm font-semibold text-slate-800">Version history</span>
-              <button type="button" className="text-slate-400 hover:text-slate-700" onClick={() => setOpen(false)}>✕</button>
+              <button type="button" className="text-slate-400 hover:text-slate-700" onClick={() => setOpen(false)} title="Close version history" aria-label="Close version history">✕</button>
             </div>
             <div className="border-b border-slate-100 p-3">
               <input className="mb-2 w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm" placeholder="Label (optional) e.g. Sent to client" value={label} onChange={(e) => setLabel(e.target.value)} />

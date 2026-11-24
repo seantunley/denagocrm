@@ -480,7 +480,7 @@ export default async function JobCardDetailPage({
                         />
                       )}
                       <SaveForm success="Inspection item removed" resetOnSuccess={false} action={deleteInspectionItem.bind(null, item.id, jobCard.id)}>
-                        <SaveButton className="text-xs text-slate-600 hover:text-red-500">✕</SaveButton>
+                        <SaveButton className="text-xs text-slate-600 hover:text-red-500" title="Remove this inspection item" aria-label="Remove this inspection item">✕</SaveButton>
                       </SaveForm>
                     </div>
                   );
@@ -533,7 +533,7 @@ export default async function JobCardDetailPage({
                       </div>
                     )}
                     <SaveForm success="Approval removed" resetOnSuccess={false} action={deleteApproval.bind(null, a.id, jobCard.id)}>
-                      <SaveButton className="text-xs text-slate-600 hover:text-red-500">✕</SaveButton>
+                      <SaveButton className="text-xs text-slate-600 hover:text-red-500" title="Remove this approval request" aria-label="Remove this approval request">✕</SaveButton>
                     </SaveForm>
                   </div>
                 ))}
@@ -689,7 +689,7 @@ export default async function JobCardDetailPage({
                         <span className="text-emerald-400">running…</span>
                       )}
                       <SaveForm success="Time entry removed" resetOnSuccess={false} action={deleteTimeEntry.bind(null, e.id, jobCard.id)}>
-                        <SaveButton className="text-xs text-slate-600 hover:text-red-500">✕</SaveButton>
+                        <SaveButton className="text-xs text-slate-600 hover:text-red-500" title="Remove this time entry" aria-label="Remove this time entry">✕</SaveButton>
                       </SaveForm>
                     </span>
                   </div>

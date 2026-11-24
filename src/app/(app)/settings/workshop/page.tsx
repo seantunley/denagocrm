@@ -200,7 +200,7 @@ export default async function WorkshopSettingsPage() {
                           <span className="min-w-0 truncate text-muted-foreground"><span className="capitalize">{i.kind}</span> · {i.qty}× {i.description}</span>
                           <span className="flex items-center gap-2 shrink-0">
                             <span className="tabular-nums">{formatZAR(Math.round(i.qty * i.unitPriceCents), moneyFmt)}</span>
-                            <SaveForm success="Line item removed" resetOnSuccess={false} action={deletePackageItem.bind(null, i.id)}><SaveButton className="text-xs text-slate-600 hover:text-red-500">✕</SaveButton></SaveForm>
+                            <SaveForm success="Line item removed" resetOnSuccess={false} action={deletePackageItem.bind(null, i.id)}><SaveButton className="text-xs text-slate-600 hover:text-red-500" title="Remove this line from the package" aria-label="Remove this line from the package">✕</SaveButton></SaveForm>
                           </span>
                         </div>
                       ))}

@@ -578,7 +578,7 @@ export function DocEditor({
           >
             <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white p-3 md:hidden">
               <span className="text-sm font-semibold">Content palette</span>
-              <button type="button" onClick={() => setPaletteOpen(false)}>
+              <button type="button" onClick={() => setPaletteOpen(false)} title="Close the content palette" aria-label="Close the content palette">
                 <X className="size-4" />
               </button>
             </div>
@@ -594,7 +594,7 @@ export function DocEditor({
           >
             <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white p-3 md:hidden">
               <span className="text-sm font-semibold">Inspector</span>
-              <button type="button" onClick={() => setInspectorOpen(false)}>
+              <button type="button" onClick={() => setInspectorOpen(false)} title="Close the inspector" aria-label="Close the inspector">
                 <X className="size-4" />
               </button>
             </div>
@@ -616,6 +616,8 @@ export function DocEditor({
           <button
             type="button"
             className="rounded px-1 hover:bg-slate-100"
+            title="Zoom out"
+            aria-label="Zoom out"
             onClick={() =>
               setZoom((value) =>
                 Math.max(0.4, Math.round((value - 0.1) * 10) / 10),
@@ -628,6 +630,8 @@ export function DocEditor({
           <button
             type="button"
             className="rounded px-1 hover:bg-slate-100"
+            title="Zoom in"
+            aria-label="Zoom in"
             onClick={() =>
               setZoom((value) =>
                 Math.min(1.6, Math.round((value + 0.1) * 10) / 10),

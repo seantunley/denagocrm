@@ -109,6 +109,7 @@ export default function TestDriveWeather({
                 onClick={() => setOpen(false)}
                 className="text-slate-400 hover:text-white text-lg leading-none cursor-pointer"
                 aria-label="Close"
+                title="Close"
               >
                 ✕
               </button>

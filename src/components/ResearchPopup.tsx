@@ -42,7 +42,7 @@ export default function ResearchPopup({
             <Search className="size-3.5" />
           </button>
         </TooltipTrigger>
-        <TooltipContent>AI research — click to read</TooltipContent>
+        <TooltipContent>Web research on this person — click to read</TooltipContent>
       </Tooltip>
 
       <Dialog open={open} onOpenChange={setOpen}>

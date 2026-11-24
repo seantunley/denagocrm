@@ -93,7 +93,7 @@ function CaptureBody({ pathname, can, onClose, children }: {
         <SheetHeader className="border-b border-border px-4 pb-3 pt-4 text-left">
           <div className="flex items-center gap-2">
             {mode && !saved && (
-              <button type="button" onClick={() => setMode(null)} className="-ml-1 grid size-8 place-items-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" aria-label="Back to capture choices">
+              <button type="button" onClick={() => setMode(null)} className="-ml-1 grid size-8 place-items-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" aria-label="Back to capture choices" title="Back">
                 <ArrowLeft className="size-4" />
               </button>
             )}

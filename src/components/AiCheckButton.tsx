@@ -54,7 +54,7 @@ export default function AiCheckButton({
         onClick={run}
         className="text-xs text-slate-400 hover:text-orange-300 underline cursor-pointer"
         disabled={pending}
-        title="AI proofread: spelling, wrong names, odd numbers"
+        title="Check the spelling, names and figures before you send"
       >
         {pending ? "✨ Checking…" : label}
       </button>

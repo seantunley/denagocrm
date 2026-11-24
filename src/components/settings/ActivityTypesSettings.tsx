@@ -155,7 +155,7 @@ export default function ActivityTypesSettings({ initial }: { initial: ActivityTy
               <button
                 type="button"
                 onClick={() => setTypes(types.filter((entry) => entry.key !== type.key))}
-                aria-label={`Remove ${type.label}`}
+                aria-label={`Remove ${type.label}`} title={`Remove ${type.label}`}
                 className="flex size-6 items-center justify-center rounded text-muted-foreground hover:text-destructive"
               >
                 <X className="size-3.5" />

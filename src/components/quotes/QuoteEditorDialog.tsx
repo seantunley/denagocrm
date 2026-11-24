@@ -1258,7 +1258,7 @@ export function QuoteEditorDialog({
                                 <input id={`${line.key}-discount`} className="input" inputMode="decimal" placeholder="0" value={line.discount} disabled={!editable} onChange={(event) => updateLine(line.key, { discount: event.target.value })} />
                               </div>
                               {editable && (
-                                <Button type="button" variant="ghost" size="icon" className="text-muted-foreground hover:text-red-300" onClick={() => removeLine(line.key)} aria-label={`Remove line ${index + 1}`}>
+                                <Button type="button" variant="ghost" size="icon" className="text-muted-foreground hover:text-red-300" onClick={() => removeLine(line.key)} aria-label={`Remove line ${index + 1}`} title="Remove this line">
                                   <Trash2 />
                                 </Button>
                               )}
@@ -1304,7 +1304,7 @@ export function QuoteEditorDialog({
                                 <input id={`${fee.key}-amount`} className="input tabular-nums" inputMode="decimal" value={fee.amount} disabled={!editable} onChange={(event) => updateFee(fee.key, { amount: event.target.value })} />
                               </div>
                               {editable && (
-                                <Button type="button" variant="ghost" size="icon" className="text-muted-foreground hover:text-red-300" onClick={() => removeFee(fee.key)} aria-label="Remove fee"><Trash2 /></Button>
+                                <Button type="button" variant="ghost" size="icon" className="text-muted-foreground hover:text-red-300" onClick={() => removeFee(fee.key)} aria-label="Remove fee" title="Remove this fee"><Trash2 /></Button>
                               )}
                             </div>
                           ))}

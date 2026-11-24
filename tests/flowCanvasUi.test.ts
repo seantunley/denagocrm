@@ -73,7 +73,7 @@ test("large flows avoid animating every edge", () => {
 
 test("node quick actions include duplicate and set start without changing node semantics", () => {
   assert.match(source, /function duplicateNode/);
-  assert.match(source, /title="Duplicate node"/);
+  assert.match(source, /title="Duplicate this step"/);
   assert.match(source, /Set start/);
   assert.doesNotMatch(source, /prisma\./);
 });

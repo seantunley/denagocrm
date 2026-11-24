@@ -73,6 +73,7 @@ function AccountCluster({ user, isOwner, tenantId, unreadNotices = 0, birthdaysT
         type="button"
         onClick={openCommandMenu}
         aria-label="Search"
+        title="Search"
         className="grid size-7 place-items-center rounded-lg text-muted-foreground hover:text-foreground md:hidden"
       >
         <Search className="size-3.5" />

@@ -413,8 +413,8 @@ function StepList({ steps, onChange, depth, lists }: { steps: BuilderStep[]; onC
             {/* A muted step still occupies its place in the sequence, so the list has to show which one is off. */}
             {step.enabled === false && <span className="badge bg-amber-500/15 text-amber-300">Off</span>}
             <StepTypeSelect step={step} depth={depth} onChange={(next) => put(index, next)} />
-            <button type="button" className="btn-secondary btn-sm" onClick={() => move(index, -1)}>↑</button>
-            <button type="button" className="btn-secondary btn-sm" onClick={() => move(index, 1)}>↓</button>
+            <button type="button" className="btn-secondary btn-sm" onClick={() => move(index, -1)} title="Move this step up" aria-label="Move this step up">↑</button>
+            <button type="button" className="btn-secondary btn-sm" onClick={() => move(index, 1)} title="Move this step down" aria-label="Move this step down">↓</button>
             <button type="button" className="text-red-400 text-sm disabled:opacity-40" disabled={depth > 0 && steps.length === 1} title={depth > 0 && steps.length === 1 ? "A branch needs at least one step" : undefined} onClick={() => onChange(steps.filter((_, i) => i !== index))}>Remove</button>
           </div>
 

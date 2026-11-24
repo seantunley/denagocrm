@@ -173,6 +173,7 @@ export default function ContactPicker({
           <button
             type="button"
             aria-label="Clear customer"
+            title="Clear customer"
             className="absolute right-8 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground"
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => choose(null)}

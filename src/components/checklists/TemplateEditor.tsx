@@ -744,6 +744,7 @@ function ItemRow({
           {...attributes}
           {...listeners}
           aria-label={`Reorder step ${position}${item.label ? `, ${item.label}` : ""}`}
+          title="Drag to reorder"
           className="mt-1 flex size-7 shrink-0 cursor-grab items-center justify-center rounded-md border border-border text-muted-foreground hover:text-foreground active:cursor-grabbing"
         >
           <GripVertical className="size-3.5" aria-hidden="true" />
@@ -863,6 +864,7 @@ function ItemRow({
           type="button"
           onClick={() => onRemove(item.key)}
           aria-label={`Remove step ${position}${item.label ? `, ${item.label}` : ""}`}
+          title="Remove this step"
           className="mt-1 flex size-7 shrink-0 items-center justify-center rounded-md border border-border text-muted-foreground hover:border-destructive/50 hover:text-destructive"
         >
           <Trash2 className="size-3.5" aria-hidden="true" />

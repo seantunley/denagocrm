@@ -223,7 +223,7 @@ function ConditionRow({
         <button
           type="button"
           onClick={onRemove}
-          aria-label="Remove this rule"
+          aria-label="Remove this rule" title="Remove this rule"
           className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
         >
           <X className="size-3.5" />

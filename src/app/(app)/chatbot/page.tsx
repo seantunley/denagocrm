@@ -121,7 +121,7 @@ export default async function ChatbotSettingsPage() {
             <p className="text-xs text-muted-foreground mb-3">Canonical answers for common questions. When matched, the exact owner-approved answer is sent.</p>
             <ul className="space-y-2 mb-3">
               {botFaqs.length === 0 && <li className="text-xs text-muted-foreground">No pathways yet.</li>}
-              {botFaqs.map((f) => <li key={f.id} className="rounded-lg border border-border bg-muted/40 px-3 py-2 flex items-start gap-3"><div className="flex-1 min-w-0"><p className="text-xs font-semibold text-primary">{f.question}{f.handoff && <span className="ml-2 text-amber-400">→ hands off</span>}</p><p className="text-xs text-muted-foreground whitespace-pre-wrap">{f.answer}</p></div><form action={deleteFaq.bind(null, f.id)}><button className="text-xs text-muted-foreground hover:text-red-400 cursor-pointer">✕</button></form></li>)}
+              {botFaqs.map((f) => <li key={f.id} className="rounded-lg border border-border bg-muted/40 px-3 py-2 flex items-start gap-3"><div className="flex-1 min-w-0"><p className="text-xs font-semibold text-primary">{f.question}{f.handoff && <span className="ml-2 text-amber-400">→ hands off</span>}</p><p className="text-xs text-muted-foreground whitespace-pre-wrap">{f.answer}</p></div><form action={deleteFaq.bind(null, f.id)}><button className="text-xs text-muted-foreground hover:text-red-400 cursor-pointer" title="Delete this pathway" aria-label="Delete this pathway">✕</button></form></li>)}
             </ul>
             <details className="rounded-lg border border-border bg-muted/40">
               <summary className="px-3 py-2 text-sm font-medium cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">+ Add pathway</summary>

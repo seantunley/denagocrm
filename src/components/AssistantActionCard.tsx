@@ -114,7 +114,7 @@ export default function AssistantActionCard({
           {reason && <p className="mt-1 text-xs text-muted-foreground">{reason}</p>}
         </div>
         {state === "open" && (
-          <button type="button" onClick={dismiss} disabled={pending} className="text-muted-foreground hover:text-foreground disabled:opacity-40" aria-label="Dismiss">
+          <button type="button" onClick={dismiss} disabled={pending} className="text-muted-foreground hover:text-foreground disabled:opacity-40" aria-label="Dismiss" title="Dismiss">
             <X className="size-4" />
           </button>
         )}

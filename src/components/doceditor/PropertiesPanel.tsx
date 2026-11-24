@@ -741,7 +741,7 @@ function TermsProps({ block }: { block: TermsBlock }) {
         {block.items.map((it, i) => (
           <div key={i} className="flex gap-1">
             <input className={inp} value={it.text} onChange={(e) => set(block.items.map((x, j) => (j === i ? { text: e.target.value } : x)))} />
-            <button type="button" className="px-1 text-red-500" onClick={() => set(block.items.filter((_, j) => j !== i))}>✕</button>
+            <button type="button" className="px-1 text-red-500" onClick={() => set(block.items.filter((_, j) => j !== i))} title="Remove this item" aria-label="Remove this item">✕</button>
           </div>
         ))}
         <button type="button" className="w-full rounded-md border border-dashed border-slate-300 py-1 text-xs text-slate-500 hover:border-orange-300 hover:text-orange-600" onClick={() => set([...block.items, { text: "New term" }])}>＋ Add term</button>
@@ -778,7 +778,7 @@ function FooterProps({ block }: { block: FooterBlock }) {
             {block.lines.map((l, i) => (
               <div key={i} className="flex gap-1">
                 <input className={inp} value={l.text} onChange={(e) => set(block.lines.map((x, j) => (j === i ? { text: e.target.value } : x)))} />
-                <button type="button" className="px-1 text-red-500" onClick={() => set(block.lines.filter((_, j) => j !== i))}>✕</button>
+                <button type="button" className="px-1 text-red-500" onClick={() => set(block.lines.filter((_, j) => j !== i))} title="Remove this line" aria-label="Remove this line">✕</button>
               </div>
             ))}
             <button type="button" className="w-full rounded-md border border-dashed border-slate-300 py-1 text-xs text-slate-500 hover:border-orange-300 hover:text-orange-600" onClick={() => set([...block.lines, { text: "New line" }])}>＋ Add line</button>

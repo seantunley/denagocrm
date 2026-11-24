@@ -407,7 +407,7 @@ function GroupEditor({ group, fields, depth, onChange, removable = false, onRemo
 
   return (
     <div className={depth > 0 ? "rounded-xl border border-border bg-background/30 p-3" : "space-y-2"}>
-      {depth > 0 && <div className="mb-3 flex flex-wrap items-center justify-between gap-2"><span className="flex items-center gap-1.5 text-xs font-medium"><FolderPlus className="size-3.5" /> Condition group</span><div className="flex items-center gap-2"><MatchToggle value={group.operator} onChange={(operator) => onChange({ ...group, operator })} />{removable && onRemove && <button type="button" onClick={onRemove} className="btn-danger btn-sm" aria-label="Remove condition group"><Trash2 className="size-3.5" /></button>}</div></div>}
+      {depth > 0 && <div className="mb-3 flex flex-wrap items-center justify-between gap-2"><span className="flex items-center gap-1.5 text-xs font-medium"><FolderPlus className="size-3.5" /> Condition group</span><div className="flex items-center gap-2"><MatchToggle value={group.operator} onChange={(operator) => onChange({ ...group, operator })} />{removable && onRemove && <button type="button" onClick={onRemove} className="btn-danger btn-sm" aria-label="Remove condition group" title="Remove this group"><Trash2 className="size-3.5" /></button>}</div></div>}
       <div className="space-y-2">{group.rules.map((node, index) => isGroup(node) ? (
         <GroupEditor key={`${depth}-${index}`} group={node} fields={fields} depth={depth + 1} onChange={(next) => replace(index, next)} removable onRemove={() => remove(index)} />
       ) : (
@@ -452,7 +452,7 @@ function RuleEditor({ rule, fields, onChange, onRemove, canRemove }: { rule: Aud
       <select className="input" aria-label="Audience field" value={definition.value} onChange={(event) => { const next = fields.find((field) => field.value === event.target.value) ?? fields[0]; onChange({ field: next.value, operator: operatorsFor(next.kind)[0], value: defaultValue(next) }); }}>{fields.map((field) => <option key={field.value} value={field.value}>{field.label}</option>)}</select>
       <select className="input" aria-label="Comparison" value={operator} onChange={(event) => { const next = event.target.value; onChange({ ...rule, operator: next, value: ["is_empty", "is_not_empty"].includes(next) ? undefined : rule.value ?? defaultValue(definition) }); }}>{operators.map((item) => <option key={item} value={item}>{OPERATOR_LABELS[item] ?? title(item)}</option>)}</select>
       {noValue ? <div className="flex h-10 items-center rounded-xl border border-dashed border-border px-3 text-xs text-muted-foreground">No value needed</div> : <ValueEditor definition={definition} operator={operator} value={rule.value} onChange={(value) => onChange({ ...rule, operator, value })} />}
-      <button type="button" className="btn-secondary btn-sm md:size-10 md:p-0" onClick={onRemove} disabled={!canRemove} aria-label="Remove condition"><Trash2 className="size-3.5" /></button>
+      <button type="button" className="btn-secondary btn-sm md:size-10 md:p-0" onClick={onRemove} disabled={!canRemove} aria-label="Remove condition" title="Remove this condition"><Trash2 className="size-3.5" /></button>
       <p className="text-[10px] leading-4 text-muted-foreground md:col-span-4">{definition.help}</p>
     </div>
   );

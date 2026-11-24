@@ -528,6 +528,7 @@ function LeadActionsButton({
           type="button"
           className="grid size-6 place-items-center rounded-md text-muted-foreground opacity-70 hover:bg-muted hover:text-foreground group-hover:opacity-100"
           aria-label={`Actions for ${lead.name}`}
+                title="More actions"
           onPointerDown={(event) => event.stopPropagation()}
           onClick={(event) => event.stopPropagation()}
         >
@@ -1407,7 +1408,7 @@ export default function KanbanBoard({
                 variant="outline"
                 size="icon-sm"
                 onClick={() => scrollBoard(-1)}
-                aria-label="Previous pipeline stages"
+                aria-label="Previous pipeline stages" title="Previous stages"
               >
                 <ChevronLeft className="size-4" />
               </Button>
@@ -1416,7 +1417,7 @@ export default function KanbanBoard({
                 variant="outline"
                 size="icon-sm"
                 onClick={() => scrollBoard(1)}
-                aria-label="Next pipeline stages"
+                aria-label="Next pipeline stages" title="Next stages"
               >
                 <ChevronRight className="size-4" />
               </Button>

@@ -54,7 +54,7 @@ export default async function FlowBlocksPage({ params }: { params: Promise<{ id:
               <Surface key={snippet.id} className="p-5">
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0"><h2 className="font-semibold">{snippet.name}</h2>{snippet.description && <p className="mt-1 text-xs leading-5 text-muted-foreground">{snippet.description}</p>}<p className="mt-2 text-[10px] text-muted-foreground">{nodeCount} node{nodeCount === 1 ? "" : "s"} · saved {new Date(snippet.updatedAt).toLocaleDateString("en-ZA")}</p></div>
-                  <form action={deleteFlowSnippet.bind(null, snippet.id)}><button className="btn-secondary btn-sm text-red-400" aria-label={`Delete ${snippet.name}`}><Trash2 className="size-3.5" /></button></form>
+                  <form action={deleteFlowSnippet.bind(null, snippet.id)}><button className="btn-secondary btn-sm text-red-400" aria-label={`Delete ${snippet.name}`} title={`Delete ${snippet.name}`}><Trash2 className="size-3.5" /></button></form>
                 </div>
                 <div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-border bg-muted/25 p-3">
                   <p className="text-xs leading-5 text-muted-foreground">Insert a copied, disconnected block to the right of the current canvas. Open the draft afterwards and connect its entry node where you want it.</p>

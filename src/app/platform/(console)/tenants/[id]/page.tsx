@@ -727,7 +727,7 @@ export default async function TenantProfilePage({
                       ) : (
                         <span
                           className="text-xs text-muted-foreground"
-                          title="A tenant must keep at least one member"
+                          title="A workspace must keep at least one member"
                         >
                           Last member
                         </span>
