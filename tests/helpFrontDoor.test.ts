@@ -5,7 +5,7 @@ import { HELP_ARTICLES } from "../src/lib/help/content";
 import { HELP_CATEGORIES } from "../src/lib/help/categories";
 import { HELP_AREA_STYLE } from "../src/lib/help/areas";
 import { HELP_DESTINATIONS, destinationFor } from "../src/lib/help/destinations";
-import { FEATURED_SLUGS, HELP_PATHS, featuredFor, parseRead, pathProgress, pathsFor, withRead } from "../src/lib/help/paths";
+import { FEATURED_SLUGS, HELP_PATHS, featuredFor, featuredPathKey, parseRead, pathProgress, pathsFor, withRead } from "../src/lib/help/paths";
 import { rankHelp } from "../src/lib/help/quickSearch";
 
 const code = (path: string) => readFileSync(path, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
@@ -131,4 +131,22 @@ test("ticks are kept in the browser, and a browser that refuses storage breaks n
   const store = code("src/lib/help/readStore.ts");
   assert.equal(store.match(/try \{/g)?.length, 2);
   assert.doesNotMatch(store, /prisma|fetch\(/);
+});
+
+test("the help home has the page to itself; a guide keeps the side menu", () => {
+  const frame = code("src/components/help/HelpFrame.tsx");
+  assert.match(frame, /if \(pathname === "\/help"\) return <div className="mx-auto w-full max-w-6xl">\{children\}<\/div>;/);
+  assert.match(frame, /<aside[^>]*>\{nav\}<\/aside>/);
+  assert.match(code("src/app/(app)/help/layout.tsx"), /<HelpFrame nav=\{<HelpNav groups=\{groups\} \/>\}>\{children\}<\/HelpFrame>/);
+});
+
+test("one path is shown in full: the one in progress, else the first unfinished", () => {
+  const paths = [{ key: "a", slugs: ["a1", "a2"] }, { key: "b", slugs: ["b1", "b2"] }, { key: "c", slugs: ["c1"] }];
+  assert.equal(featuredPathKey(paths, new Set()), "a");
+  assert.equal(featuredPathKey(paths, new Set(["b1"])), "b", "part-way through wins");
+  assert.equal(featuredPathKey(paths, new Set(["a1", "a2"])), "b", "a finished path steps aside");
+  assert.equal(featuredPathKey(paths, new Set(["a1", "a2", "b1", "b2", "c1"])), "a", "all done: the first again");
+  assert.equal(featuredPathKey([], new Set()), null);
+  const view = code("src/components/help/HelpPaths.tsx");
+  assert.equal(view.match(/<ol /g)?.length, 1, "only one list of guides is ever open");
 });

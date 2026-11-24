@@ -79,6 +79,16 @@ export function pathProgress(slugs: readonly string[], read: ReadonlySet<string>
 }
 
 /**
+ * Which ONE path the help home shows in full: the first the reader is part-way
+ * through, else the first they have not finished, else simply the first. The
+ * rest are shown small.
+ */
+export function featuredPathKey(paths: readonly { key: string; slugs: readonly string[] }[], read: ReadonlySet<string>): string | null {
+  const progress = paths.map((path) => ({ key: path.key, ...pathProgress(path.slugs, read) }));
+  return (progress.find((p) => p.done > 0 && !p.complete) ?? progress.find((p) => !p.complete) ?? progress[0])?.key ?? null;
+}
+
+/**
  * Guides worth pointing at from the front page. CHOSEN BY HAND, not measured:
  * the CRM does not record which guides are read most, so this is not called
  * "popular". The first few that exist for the workspace are shown.

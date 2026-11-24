@@ -166,10 +166,11 @@ test("the new help pages don't shadow a built-in guide", () => {
   for (const taken of ["ours", "whats-new"]) assert.ok(!SLUGS.has(taken), taken);
 });
 
-test("own guides lead the side menu, and the home shows both doors on every screen size", () => {
+test("own guides lead the side menu, and the home shows both doors beside the reader's path", () => {
   const layout = code("src/app/(app)/help/layout.tsx");
   assert.match(layout, /slug: `ours\/\$\{g\.id\}`/);
-  assert.match(layout, /<HelpHomeStrip latest=/);
   assert.match(layout, /loadCustomGuides\(\)\.catch\(\(\) => \[\]\)/, "help still opens if the setting can't be read");
-  assert.match(code("src/components/help/HelpHomeStrip.tsx"), /if \(pathname !== "\/help"\) return null;/);
+  const home = code("src/app/(app)/help/page.tsx");
+  assert.match(home, /beside=\{<HelpDoors latest=/);
+  assert.match(home, /slug: `ours\/\$\{guide\.id\}`/, "the big search finds the workspace's own guides");
 });

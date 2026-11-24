@@ -13,6 +13,9 @@ import { getEnabledModuleIds } from "@/lib/modules/enabled";
 import { HelpAreaTag, HelpAreaTile } from "@/components/help/HelpAreaIcon";
 import HelpSearch from "@/components/help/HelpSearch";
 import HelpPaths from "@/components/help/HelpPaths";
+import HelpDoors from "@/components/help/HelpDoors";
+import { loadCustomGuides } from "@/lib/help/customGuidesStore";
+import { WHATS_NEW, whatsNewFor } from "@/lib/help/whatsNew";
 
 export const metadata: Metadata = { title: "Help & user manual" };
 
@@ -42,6 +45,20 @@ export default async function HelpHomePage() {
       return article ? [{ slug, title: article.title }] : [];
     }),
   }));
+  // Beside the path: what changed lately, and the workspace's own guides — which the big search finds too.
+  const ownGuides = await loadCustomGuides().catch(() => []);
+  const latest = whatsNewFor(WHATS_NEW, { owner: admin, modules: enabled })[0] ?? null;
+  const searchable = [
+    ...ownGuides.map((guide) => ({ slug: `ours/${guide.id}`, title: guide.title, summary: guide.summary, keywords: [] as string[], area: guide.area, areaLabel: "Our own guide" })),
+    ...articles.map((article) => ({
+      slug: article.slug,
+      title: article.title,
+      summary: article.summary,
+      keywords: article.keywords,
+      area: article.category,
+      areaLabel: CATEGORY_LABEL[article.category] ?? article.category,
+    })),
+  ];
   const featured = featuredFor(visible).flatMap((slug) => {
     const article = getArticle(slug);
     return article ? [article] : [];
@@ -49,31 +66,27 @@ export default async function HelpHomePage() {
 
   return (
     <div className="space-y-10">
-      <header className="relative overflow-hidden rounded-2xl border border-border bg-sidebar px-5 py-10 text-center depth-card sm:px-8 sm:py-14">
+      <header className="relative overflow-hidden rounded-3xl border border-border bg-sidebar px-5 py-12 text-center depth-card sm:px-8 sm:py-16">
         {/* Decoration: three still planes behind the search, at three heights. */}
-        <div aria-hidden className="pointer-events-none absolute -left-16 -top-14 hidden h-56 w-72 -rotate-[9deg] rounded-[40px] bg-blue-400/[0.06] depth-key sm:block" />
-        <div aria-hidden className="pointer-events-none absolute -right-14 top-16 hidden h-60 w-72 rotate-[8deg] rounded-[44px] bg-primary/[0.07] depth-key sm:block" />
-        <div aria-hidden className="pointer-events-none absolute right-56 -top-12 hidden size-28 rotate-[16deg] rounded-[30px] bg-emerald-400/[0.07] depth-key lg:block" />
+        <div aria-hidden className="pointer-events-none absolute -left-16 -top-14 hidden h-56 w-72 -rotate-[9deg] rounded-[40px] bg-blue-400/[0.13] depth-key sm:block" />
+        <div aria-hidden className="pointer-events-none absolute -right-14 top-16 hidden h-60 w-72 rotate-[8deg] rounded-[44px] bg-primary/[0.16] depth-key sm:block" />
+        <div aria-hidden className="pointer-events-none absolute right-56 -top-12 hidden size-28 rotate-[16deg] rounded-[30px] bg-emerald-400/[0.14] depth-key lg:block" />
         <div className="relative flex flex-col items-center gap-4">
           <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-primary">Help centre</p>
-          <h1 className="text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">How can we help?</h1>
+          {/* `!`: the workspace sets every page h1 to one compact size; this hero is the one heading meant to be large. */}
+          <h1 className="!text-4xl font-semibold !leading-tight tracking-tight text-foreground sm:!text-5xl">How can we help?</h1>
           <p className="max-w-xl text-sm text-muted-foreground">
             {articles.length} step-by-step guides across {categories.length} areas of the CRM.
           </p>
-          <HelpSearch
-            items={articles.map((article) => ({
-              slug: article.slug,
-              title: article.title,
-              summary: article.summary,
-              keywords: article.keywords,
-              area: article.category,
-              areaLabel: CATEGORY_LABEL[article.category] ?? article.category,
-            }))}
-          />
+          <HelpSearch items={searchable} />
         </div>
       </header>
 
-      <HelpPaths paths={paths} storageKey={readKey(user.id)} />
+      <HelpPaths
+        paths={paths}
+        storageKey={readKey(user.id)}
+        beside={<HelpDoors latest={latest ? { title: latest.title, text: latest.text } : null} guideCount={ownGuides.length} canWrite={admin} />}
+      />
 
       {featured.length > 0 && (
         <section aria-labelledby="help-featured" className="space-y-3">
@@ -102,7 +115,7 @@ export default async function HelpHomePage() {
 
       <section aria-labelledby="help-areas" className="space-y-3">
         <h2 id="help-areas" className="text-lg font-semibold text-foreground">Browse by area</h2>
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {categories.map((category) => {
             const first = category.articles[0];
             return (
