@@ -1,1 +1,263 @@
-[{"slug":"quotes-overview","title":"Quotes: the basics","summary":"Understand the Quotes list, quote numbers, statuses and how a quote flows from draft to accepted.","category":"sales","audience":"everyone","keywords":["quotes","quote status","proposal","q-number","sales"],"body":[{"type":"p","text":"The **Quotes** page is where you build, price and send every customer proposal. Each quote gets a sequential number shown as **Q-1234**, and the list shows only the current version of each quote (older revisions are kept in version history)."},{"type":"h","text":"Reading the list"},{"type":"p","text":"For every quote you see the customer, the linked lead (if any), the total (including VAT), the status, the valid-until date, and who created it. Click a **Q-number** to open the quote in the editor; click the customer or lead to jump to their record."},{"type":"h","text":"Quote statuses"},{"type":"table","headers":["Status","Meaning"],"rows":[["draft","Being prepared. Fully editable."],["sent","Marked as sent to the customer. Frozen — revise to change it."],["accepted","Customer accepted. A linked lead is marked won automatically."],["declined","Customer declined. You can revise it."]]},{"type":"p","text":"A quote can also be **superseded** (replaced by a revision) or **signed** (accepted online). Both states are permanently read-only."},{"type":"h","text":"Starting a new quote"},{"type":"steps","items":["Click **New quote** at the top of the Quotes page.","Pick the customer, and optionally link an open lead.","Add line items and any fees, then save."]},{"type":"callout","tone":"tip","text":"You can also start a quote straight from a lead — it pre-fills the lead's product as the first line."},{"type":"h","text":"Deleting a quote"},{"type":"p","text":"Use **Delete** to move a quote to the Trash. It is restorable for **60 days**. Deleting an accepted quote may reopen its lead if no other accepted quote remains."}]},{"slug":"quotes-build-and-price","title":"Building and pricing a quote","summary":"Add product and custom lines, apply discounts, add fees and delivery, set a deposit and choose the VAT basis.","category":"sales","audience":"everyone","keywords":["quote editor","line items","discount","deposit","vat","fees","delivery"],"body":[{"type":"p","text":"The quote editor opens in a dialog with four tabs — **Build**, **Preview**, **Versions** and **Send**. The Build tab is where you assemble the quote; the running total updates live in the right-hand panel."},{"type":"h","text":"Adding line items"},{"type":"p","text":"You can add two kinds of lines:"},{"type":"list","items":["**Product line** — pick a catalogue product. Its name and base price fill in automatically, and if the product has colours you can set a **colour preference**.","**Custom line** — type your own description and price for anything not in the catalogue."]},{"type":"p","text":"Each line has a **quantity**, a **unit price (R)** and an optional **discount %** (0–100). The line total is the discounted amount."},{"type":"callout","tone":"info","text":"A colour preference can only be set on a catalogue product line, and it must be a colour configured for that product."},{"type":"h","text":"Fees and delivery"},{"type":"steps","items":["Add a **Delivery** or **Fee** line.","Give it a label (for example, 'Delivery to Cape Town').","Enter the amount. VAT is applied at 15%."]},{"type":"h","text":"Deposit, VAT basis and settings"},{"type":"p","text":"In the **Quote settings** panel you can set:"},{"type":"list","items":["**Valid until** — the quote's expiry date.","**Pricing basis** — *Prices include VAT* (the default) or *Add VAT on top*.","**Deposit** — none, a percentage of the total, or a fixed rand amount. The total, deposit and balance-on-delivery are all shown.","**Terms** — the terms text printed on the quote."]},{"type":"callout","tone":"tip","text":"Use the **Preview** tab to see exactly how the proposal will look to the customer before sending."}]},{"slug":"quotes-send-revise-lock","title":"Sending, accepting and revising quotes","summary":"Mark a quote sent, record acceptance or decline, and revise a customer-facing quote without overwriting it.","category":"sales","audience":"everyone","keywords":["send quote","accept","decline","revision","locked","supersede"],"body":[{"type":"p","text":"Once a quote leaves draft it becomes a fixed record — the customer must never see a quote change under them. To make changes to a sent or declined quote you create a **revision** instead."},{"type":"h","text":"Marking a quote sent"},{"type":"p","text":"From the editor's **Send** tab choose **Save & mark sent**, or use **Mark sent** on the full quote record. This freezes the version at the exact price the customer received. A quote needs at least one line before it can be marked sent."},{"type":"h","text":"Recording the outcome"},{"type":"p","text":"On a sent quote's record you can mark it **Accepted** or **Declined**. Accepting a quote that is linked to a lead automatically marks the lead **won**, triggers any lead automations, and flags a referral fee as earned if the deal came through a referral. Use **Back to draft** to reopen an accepted or declined quote."},{"type":"callout","tone":"info","text":"If you move a quote out of 'accepted' and the lead has no other accepted quote, the lead is reopened so it no longer counts as a sale."},{"type":"h","text":"Cancelling or duplicating a quote"},{"type":"p","text":"**Cancel quote** (in the quote editor, the quote list, and the quote lists on a lead or customer) works on any quote, including a signed one, and asks for a reason. The quote is marked cancelled and leaves Deliveries; any signing request still out with the customer is voided and stock allocated to it is released. Nothing is deleted: the signed PDF and the full history stay on record. **Duplicate** copies a quote into a new, unsigned draft with a new Q-number and opens it — use it to start again from a signed or cancelled quote."},{"type":"h","text":"Creating a revision"},{"type":"steps","items":["Open the sent or declined quote's full record.","Click **↻ Create revision**. The quote is copied into a fresh editable draft with a new Q-number.","The original is marked superseded and kept read-only for the record."]},{"type":"callout","tone":"warning","text":"A quote is locked from editing when a signing link is active, once it is signed, once it is superseded, or as soon as it leaves draft. Revoke the signing link or create a revision to make changes."},{"type":"h","text":"Version history and change requests"},{"type":"p","text":"Every version stays on record. When a quote family has more than one version, a **Version history** panel lists them all. If a customer requests changes online, a banner appears on the quote with their note and a shortcut to create a revision."}]},{"slug":"quotes-documents-and-fulfilment","title":"Quote documents, printing and handover","summary":"Print or PDF a quote, generate the invoice and sales agreement, and track fulfilment on an accepted quote.","category":"sales","audience":"everyone","keywords":["print","pdf","invoice","sales agreement","delivery photos","fulfilment"],"body":[{"type":"p","text":"The full quote record carries the print and document actions plus the fulfilment tracking that starts once a quote is accepted."},{"type":"h","text":"Printing and documents"},{"type":"list","items":["**Print / PDF** — available on any quote.","**Invoice** and **Sales agreement** — appear once the quote is accepted.","**Generate** — owners can generate a builder-template document for the quote and file it in the repository."]},{"type":"h","text":"Fulfilment tracker"},{"type":"p","text":"An accepted quote shows a **Fulfilment** strip of badges: *Invoiced*, *Deposit paid*, *Delivery scheduled* and *Delivered*. Each lights up green as that step is completed. A shortcut links through to the Deliveries board to manage the handover."},{"type":"h","text":"Delivery photos"},{"type":"steps","items":["Open the accepted quote.","In the **Delivery photos** card, choose one or more images (your phone camera works).","Click **Upload**. Photos are filed on both the customer and the quote."]},{"type":"callout","tone":"tip","text":"Line totals, quote totals and every printed document all use the same pricing rules, so a discount you set is reflected identically everywhere."}]},{"slug":"deliveries-board","title":"Managing deliveries and handovers","summary":"Get paid, schedule and hand over accepted vehicles on the Deliveries board — the money side is on the Invoices page.","category":"sales","audience":"everyone","keywords":["deliveries","handover","invoice","deposit","schedule","proof of delivery"],"body":[{"type":"p","text":"The **Deliveries** board tracks every accepted vehicle from sale to handover. A quote appears here the moment it is accepted, and stays in **Delivered this month** after the handover until the month ends. A quote sits in whichever stage it has not yet completed. Totals, what's been received and what's still owing — with each invoice's Xero copy — are on the **Invoices** page, where each row's **Payments** button records the deposit and later payments and opens the customer's statement."},{"type":"table","headers":["Column","What it means"],"rows":[["Awaiting payment","Invoice it, then the deposit."],["Ready to schedule","Paid — pick the delivery date."],["Scheduled","Hand it over on the day."],["Delivered this month","Handed over — kept here until the month ends."]]},{"type":"h","text":"Working a card"},{"type":"p","text":"Each card shows its status as chips and ONE next step. Everything else — print links, corrections, Xero, transport bookings — is behind its **Details** button."},{"type":"steps","items":["In **Awaiting payment**, invoice it: with Xero connected, press **Send invoice to Xero** (Xero's PDF is filed as the invoice — nothing to upload); without Xero, attach the invoice file and click **Mark invoiced**.","Still in **Awaiting payment**, the deposit: with Xero, press **Refresh** once the customer has paid — the CRM records the deposit from Xero; or **Record the deposit by hand** with the proof of payment. Without Xero, attach the proof of payment and click **Deposit paid**.","In **Ready to schedule**, pick the date (and optionally attach a file) and click **Schedule delivery**.","In **Scheduled**, press **Open handover**, then **Complete delivery** (or **Review, sign & complete** where a guided handover is set up) to record who handed over and the handover checklist, then press **Customer signs on this device**: the customer reads the delivery note and signs it on its own screen, and the sealed, signed note is filed with the quote. Delivery photos are added from the same card."]},{"type":"p","text":"Cards show chips for where things stand — invoiced (or its Xero number and status), the deposit, a photo count, and the scheduled or delivered date. **Print delivery note** is under **Details** from the scheduled stages. If stock has been allocated, a chip shows the unit's readiness (allocated, in PDI, or ready to hand over) and links to the unit."},{"type":"callout","tone":"info","text":"The stat strip at the top shows active handovers, counts per stage, and total pipeline value."},{"type":"callout","tone":"warning","text":"The action buttons on each card require the **manage deliveries** permission. Without it the board is read-only visibility of vehicles moving to handover."}]},{"slug":"targets-monthly-goals","title":"Monthly targets and progress","summary":"See this month's goals and live progress across leads, sales value, deliveries and services.","category":"sales","audience":"everyone","keywords":["targets","goals","kpi","progress","monthly"],"body":[{"type":"p","text":"The **Targets** page shows this month's goals with live progress. Each metric has a progress bar that turns green once you hit the target."},{"type":"h","text":"The four metrics"},{"type":"table","headers":["Metric","Counts"],"rows":[["New leads","Leads created this month."],["Sales value (won)","Total value of leads won this month."],["Deliveries","Quotes delivered this month."],["Services completed","Service records this month."]]},{"type":"p","text":"Each card shows the actual figure, and where a target is set, the target and the percentage achieved. If no target has been set for the month, the card notes that."},{"type":"callout","tone":"info","text":"Setting the targets is owner-only — see the managers' guide. Everyone can view progress."}]},{"slug":"targets-setting-goals","title":"Setting this month's targets","summary":"Owners set the monthly goals for leads, sales value, deliveries and services.","category":"sales","audience":"admins","keywords":["set targets","goals","owner","monthly targets"],"body":[{"type":"p","text":"Owners can set the goals that the whole team tracks against on the Targets page. Targets are set per calendar month."},{"type":"steps","items":["Open the **Targets** page.","In **Set this month's targets**, enter a value for each metric — New leads, Sales value (in rand), Deliveries and Services completed.","Click **Save targets**."]},{"type":"callout","tone":"tip","text":"Leave a metric blank to have no target for it that month; its card will simply show the running actual with no percentage."}]},{"slug":"forecast-sales-pipeline","title":"Reading the sales forecast","summary":"View weighted, commit and best-case pipeline for a period, filtered by pipeline, team and owner.","category":"sales","audience":"everyone","keywords":["forecast","pipeline","weighted","commit","best case","probability"],"body":[{"type":"p","text":"The **Sales forecast** projects open pipeline for a month. Access requires the *view forecast* permission, and what you see is scoped to the leads, teams and owners you're allowed to view."},{"type":"h","text":"Filtering"},{"type":"p","text":"Use the filter bar to choose the **Period** (month), **Pipeline**, **Team** and **Owner**, then click **Apply**. The KPI cards and table update to match."},{"type":"h","text":"The KPI cards"},{"type":"table","headers":["Card","Meaning"],"rows":[["Open","Total open value."],["Weighted","Value adjusted by each deal's probability."],["Commit","Deals categorised as commit."],["Best case","Deals categorised as best case."],["Pipeline","Total pipeline value."],["Deals","Number of opportunities."]]},{"type":"p","text":"The table lists each open lead with its pipeline and stage, owner and team, expected close date, forecast category, probability, value, and weighted value (value × probability)."}]},{"slug":"forecast-managing-deals","title":"Adjusting forecast deals and capturing snapshots","summary":"Managers set per-deal probability, category and close date, and snapshot the forecast for the record.","category":"sales","audience":"managers","keywords":["forecast","probability","forecast category","snapshot","commit","manage"],"body":[{"type":"p","text":"With the *manage forecast* permission you can tune the forecast inputs for each deal and capture point-in-time snapshots. These controls are hidden for users who can only view."},{"type":"h","text":"Editing a deal"},{"type":"steps","items":["In the forecast table, open the **Edit** control on a lead's row.","Set the **probability** (0–100).","Choose a **forecast category**: Pipeline, Best case, Commit or Omitted.","Set the **expected close date** and, optionally, an **estimated cost**.","If you can assign leads, set the **team**. Save."]},{"type":"callout","tone":"info","text":"The forecast category determines which KPI a deal rolls into — for example, deals marked *Commit* count toward the Commit total, and *Omitted* deals are excluded."},{"type":"h","text":"Capturing a snapshot"},{"type":"p","text":"Click **Capture snapshot** to freeze the current forecast (for the selected period, pipeline, team and owner). Recent snapshots are listed at the bottom of the page showing open value, weighted value, deal count and when they were captured."}]},{"slug":"signatures-sign-a-quote","title":"Getting a quote signed online","summary":"Countersign for your business, then send the customer a secure link so they sign on their phone and accept the quote.","category":"sales","audience":"everyone","keywords":["e-sign","signature","sign quote","countersign","signing link","workflow"],"body":[{"type":"p","text":"A quote can be signed online from the **Online signature** card on its record. Signing a quote both accepts it and, if it's linked to a lead, wins the lead — no printing needed."},{"type":"h","text":"The two-step quote flow"},{"type":"steps","items":["**Step 1 — you countersign.** Use the signature pad on the quote to countersign for your business (you can reuse a saved signature).","Optionally pick a **signing workflow** — the built-in flow (you countersign, then the customer) or a custom approval chain.","Click **Send for signing**.","**Step 2 — the customer signs.** Copy the secure link and send it, or resend from the card. The customer reviews and signs on their phone."]},{"type":"h","text":"While a request is active"},{"type":"p","text":"The card shows each recipient's status (sent, viewed, signed) with a copyable link. You can **Resend link**, **Manage in hub**, or **Void request** to stop the link working and start over."},{"type":"callout","tone":"warning","text":"While a signing request is active the quote is **locked for editing**. Void the request to make changes, then send a fresh one."},{"type":"callout","tone":"info","text":"An expired quote can't be sent for signing — issue an updated quote first. Once signed, the sealed PDF is filed in the customer's documents with a SHA-256 tamper-evidence hash."}]},{"slug":"signatures-hub","title":"Tracking signatures in the hub","summary":"Monitor every signing request, chase recipients, run approvals, and read the full audit trail.","category":"sales","audience":"admins","keywords":["signatures hub","audit trail","recipients","approvals","void","remind"],"body":[{"type":"p","text":"The **Signatures** hub is the owner-only command centre for every signing request. It shows all requests with progress, plus headline stats: total, awaiting, completed, completion rate and median time to complete."},{"type":"h","text":"Request status and signers"},{"type":"p","text":"Each request shows how many signers have signed, whether it runs **sequential** or **parallel**, and a per-signer state (signed, opened but not signed, sent but not opened, or not sent) with exact dates. In a sequential run the signer you're waiting on is flagged as *up next*. Recipients can be **signers**, **approvers** or **viewers**."},{"type":"h","text":"Working a request"},{"type":"list","items":["**Send for signing / Resend** — dispatch to recipients.","**Void** — recipients can no longer sign; the audit record is kept.","**Remind** a specific recipient, or update their **email / phone** for delivery.","**Sign in person** — open the signing surface on your device and hand it to the recipient.","Open the **Unsigned PDF** or, once complete, the **Signed PDF**."]},{"type":"h","text":"Approvals"},{"type":"p","text":"When a workflow includes approval steps, **Pending approvals** appears at the top of the hub. Approve a step, or reject it with a reason."},{"type":"callout","tone":"info","text":"The audit trail logs every event — sent, viewed, signed, reminded, voided — with the actor, channel, IP and time. A failed email or WhatsApp is flagged so it doesn't look like a successful send."}]},{"slug":"signing-workflows-builder","title":"Building custom signing workflows","summary":"Owners design node-based approval and signing chains that can be applied when sending a quote.","category":"sales","audience":"admins","keywords":["signing workflow","approval chain","builder","signer","approver"],"body":[{"type":"p","text":"Signing workflows let owners design a custom chain of signers and approvers, instead of using the built-in flow. They're built in a visual, node-based editor and managed under **Settings → Signing workflows**."},{"type":"h","text":"Editing a workflow"},{"type":"steps","items":["Open a workflow to launch the visual builder.","Lay out the signer and approver nodes and assign staff where needed.","Name and save the workflow. Use **Delete workflow** to remove one."]},{"type":"p","text":"Once saved, a workflow appears in the **Signing workflow** dropdown on a quote's Online signature card, so you can route that quote through the custom chain when you send it for signing."},{"type":"callout","tone":"info","text":"Building and editing signing workflows is owner-only."}]},{"slug":"referrals-overview","title":"Tracking and rewarding referrals","summary":"Follow customer introductions from referral code to won deal, and redeem the reward when it's earned.","category":"sales","audience":"everyone","keywords":["referrals","referral code","reward","redeem","introduction"],"body":[{"type":"p","text":"The **Referrals** page tracks customer introductions from a shared referral code through to a won deal and reward redemption. Every customer has one permanent, unique **referral code** on their contact record — three letters from your workspace's name and four characters, for example ACM-K7PQ."},{"type":"h","text":"How a referral progresses"},{"type":"table","headers":["Status","Meaning"],"rows":[["pending","Introduction made — awaiting a won deal."],["fee due (earned)","The referred deal was won — the reward is now owed."],["redeemed","The reward has been fulfilled."]]},{"type":"p","text":"When a new lead is captured with a customer's code, a referral is linked to that referrer. When the deal is won, the referral automatically becomes **fee due**. Self-referrals and unknown codes are ignored, so lead capture never fails on a typo."},{"type":"h","text":"Redeeming a reward"},{"type":"steps","items":["Find the referral marked **fee due**.","In the **Reward provided** field, note what was given (for example, 'R1,000 voucher').","Click **Mark reward redeemed**."]},{"type":"callout","tone":"info","text":"The three KPI cards summarise rewards due, introductions in progress, and rewards already redeemed. Redeeming a reward requires the *manage referrals* permission."}]}]
+[
+  {
+    "slug": "quotes-overview",
+    "title": "Quotes: the basics",
+    "summary": "The Quotes list, quote numbers and statuses, and how a quote goes from draft to accepted.",
+    "category": "sales",
+    "audience": "everyone",
+    "keywords": ["quotes", "quote status", "proposal", "q-number", "draft", "sent", "accepted", "declined", "cancelled"],
+    "body": [
+      { "type": "p", "text": "The **Quotes** page is where you build, price and send every quote. Each one gets a number like **Q-1234**. The list shows only the latest version of each quote; earlier versions are kept in its version history." },
+      { "type": "h", "text": "Reading the list" },
+      { "type": "p", "text": "Each row shows the customer, the lead it belongs to (if any), the total including VAT, the status, the date it's valid until, and who created it. Click a **Q-number** to open the quote; click the customer or lead to go to them." },
+      { "type": "h", "text": "Statuses" },
+      { "type": "table", "headers": ["Status", "Meaning"], "rows": [
+        ["Draft", "Being prepared. You can change anything."],
+        ["Sent", "The customer has it. It's fixed — to change it, create a revision."],
+        ["Accepted", "The customer said yes. Its lead is marked won and the deal moves to Deliveries."],
+        ["Declined", "The customer said no. You can create a revision with a better offer."],
+        ["Cancelled", "Called off, with a reason. Nothing is deleted."]
+      ] },
+      { "type": "p", "text": "A quote can also be **superseded** (replaced by a revision) or **signed** (signed online by the customer). Both are permanently read-only, so the record of what the customer saw never changes." },
+      { "type": "h", "text": "Starting a quote" },
+      { "type": "steps", "items": [
+        "Press **New quote**.",
+        "Choose the customer and, if there is one, the lead under **Link to a lead (optional)**.",
+        "Add lines and any fees, then save."
+      ] },
+      { "type": "callout", "tone": "tip", "text": "You can also start a quote from a lead with **Create quote** — the lead's product is already on it." },
+      { "type": "h", "text": "Deleting a quote" },
+      { "type": "p", "text": "**Delete quote** moves it to Trash, where it can be restored for **60 days**. Deleting an accepted quote reopens its lead if no other accepted quote is left. To call off a quote but keep it on record, use **Cancel quote** instead." },
+      { "type": "h", "text": "Related guides" },
+      { "type": "list", "items": ["Building and pricing a quote", "Sending, accepting and revising quotes", "Getting a quote signed online"] }
+    ]
+  },
+  {
+    "slug": "quotes-build-and-price",
+    "title": "Building and pricing a quote",
+    "summary": "Add products and your own lines, discounts, fees and delivery, a deposit, and choose how VAT is shown.",
+    "category": "sales",
+    "audience": "everyone",
+    "keywords": ["quote editor", "line items", "discount", "deposit", "vat", "fees", "delivery", "colour", "currency"],
+    "body": [
+      { "type": "p", "text": "The quote editor has four tabs: **Build**, **Preview**, **Versions** and **Send**. You put the quote together on **Build**; the total on the right updates as you go." },
+      { "type": "h", "text": "Lines" },
+      { "type": "list", "items": [
+        "**Product line** — pick a product from your catalogue. Its name and price fill in. If it comes in colours, set the **Colour preference**.",
+        "**Custom line** — type your own description and price for anything not in the catalogue."
+      ] },
+      { "type": "p", "text": "Each line has a quantity, a **Unit price** and an optional discount (**Disc %**, 0–100). The line total is after the discount." },
+      { "type": "h", "text": "Fees and delivery" },
+      { "type": "steps", "items": [
+        "Under **Fees & delivery**, add a **Delivery** or **Fee** line.",
+        "Give it a **Label**, for example \"Delivery to the coast\".",
+        "Enter the amount. VAT is added at your workspace's rate."
+      ] },
+      { "type": "h", "text": "Quote settings" },
+      { "type": "list", "items": [
+        "**Valid until** — when the offer expires. It starts at your usual number of days, set under **Settings → Quotes**.",
+        "**Pricing basis** — **Prices include VAT** (the usual) or **Add VAT on top**.",
+        "**Deposit** — none, a percentage of the total, or a fixed amount. The total, deposit and **Balance on delivery** are all shown.",
+        "**Terms** — the terms printed on the quote. Your standard terms are filled in from **Settings → Quotes**."
+      ] },
+      { "type": "callout", "tone": "info", "text": "Your VAT rate and currency are set under **Settings → Quotes**. If your workspace uses more than one currency, a quote can be in the customer's currency." },
+      { "type": "callout", "tone": "tip", "text": "Check the **Preview** tab before sending — it shows exactly what the customer will see." },
+      { "type": "callout", "tone": "info", "text": "Every total — on screen, on the printed quote, invoice and agreement — is worked out the same way, so a discount shows the same everywhere." }
+    ]
+  },
+  {
+    "slug": "quotes-send-revise-lock",
+    "title": "Sending, accepting and revising quotes",
+    "summary": "Mark a quote sent, record the customer's answer, and change a sent quote safely with a revision.",
+    "category": "sales",
+    "audience": "everyone",
+    "keywords": ["send quote", "mark sent", "accept", "decline", "revision", "locked", "cancel", "duplicate", "change request"],
+    "body": [
+      { "type": "p", "text": "Once a quote leaves draft it's fixed — a customer must never see a quote change after they've received it. To change a sent or declined quote, you create a **revision**." },
+      { "type": "h", "text": "Sending" },
+      { "type": "p", "text": "On the **Send** tab, check **Ready to send** and mark it sent. This fixes the version at the exact price the customer received. A quote needs at least one line first. To have it signed online, press **Continue to signing** — see **Getting a quote signed online**." },
+      { "type": "h", "text": "Recording the customer's answer" },
+      { "type": "list", "items": [
+        "**Accepted** — records the sale and marks the lead won. Anything set to happen on a win runs, and a referral reward becomes due if the deal came through a referral. A quote out for signing must have its signing request voided first.",
+        "**Declined** — the customer said no.",
+        "**Back to draft** — reopens this version for editing."
+      ] },
+      { "type": "callout", "tone": "info", "text": "If you move a quote out of accepted and its lead has no other accepted quote, the lead reopens, so it no longer counts as a sale." },
+      { "type": "h", "text": "Creating a revision" },
+      { "type": "steps", "items": [
+        "Open the sent or declined quote.",
+        "Press **Create revision**. Everything is copied into a new draft with a new Q-number, and the editor switches to it.",
+        "The original is marked superseded and kept, read-only, for the record."
+      ] },
+      { "type": "h", "text": "Cancelling or copying" },
+      { "type": "p", "text": "**Cancel quote** works on any quote, even a signed one, and asks for a reason. It leaves Deliveries, any signing request still with the customer is withdrawn, and stock set aside for it is released. Nothing is deleted — the signed copy and the history stay. **Duplicate** copies a quote into a new, unsigned draft — handy for starting again from a signed or cancelled quote." },
+      { "type": "callout", "tone": "warning", "text": "A quote can't be edited while a signing link is out, once it's signed, once it's superseded, or once it has left draft. Withdraw the signing request or create a revision to change it." },
+      { "type": "h", "text": "Versions and change requests" },
+      { "type": "p", "text": "Every version shown to a customer stays on record. The **Versions** tab lists them. If a customer asks for changes online, a banner on the quote shows their note, with a shortcut to create a revision." }
+    ]
+  },
+  {
+    "slug": "quotes-documents-and-fulfilment",
+    "title": "Quote documents, printing and handover",
+    "summary": "Print a quote, produce the invoice and sales agreement, and follow an accepted quote through to delivery.",
+    "category": "sales",
+    "audience": "everyone",
+    "keywords": ["print", "pdf", "invoice", "sales agreement", "delivery photos", "fulfilment"],
+    "body": [
+      { "type": "h", "text": "Printing and documents" },
+      { "type": "list", "items": [
+        "**Print / PDF** — on any quote.",
+        "**Invoice** and **Sales agreement** — once the quote is accepted.",
+        "**Generate** — owners can create any of your document templates for this quote and file it with the customer's documents."
+      ] },
+      { "type": "h", "text": "Following the sale through" },
+      { "type": "p", "text": "An accepted quote shows a **Fulfilment** strip: **Invoiced**, **Deposit paid**, **Delivery scheduled** and **Delivered**. Each turns green when done. A link takes you to the Deliveries board." },
+      { "type": "h", "text": "Delivery photos" },
+      { "type": "steps", "items": [
+        "Open the accepted quote.",
+        "In **Delivery photos**, choose one or more pictures — your phone's camera works.",
+        "Press **Upload**. The photos are filed on the customer and the quote."
+      ] },
+      { "type": "h", "text": "Related guides" },
+      { "type": "list", "items": ["Managing deliveries and handovers", "Documents and templates: where everything lives"] }
+    ]
+  },
+  {
+    "slug": "deliveries-board",
+    "title": "Managing deliveries and handovers",
+    "summary": "Get paid, book the delivery and hand over each sale on the Deliveries board.",
+    "category": "sales",
+    "audience": "everyone",
+    "keywords": ["deliveries", "handover", "invoice", "deposit", "schedule", "delivery note", "xero"],
+    "body": [
+      { "type": "p", "text": "The **Deliveries** board follows every sale from acceptance to handover. A quote appears the moment it's accepted and sits in the column for the step it hasn't done yet. After handover it stays in **Delivered this month** until the month ends." },
+      { "type": "table", "headers": ["Column", "What's next"], "rows": [
+        ["Awaiting payment", "Invoice it, then take the deposit"],
+        ["Ready to schedule", "Paid — choose the delivery date"],
+        ["Scheduled", "Hand it over on the day"],
+        ["Delivered this month", "Handed over — kept here until the month ends"]
+      ] },
+      { "type": "h", "text": "Working a card" },
+      { "type": "p", "text": "Each card shows where things stand and **one** next step. Everything else — print links, corrections, Xero, transport bookings — is under **Details**." },
+      { "type": "steps", "items": [
+        "**Awaiting payment — the invoice.** With Xero connected, press **Send invoice to Xero**; Xero's PDF is filed as the invoice. Without Xero, attach the invoice and press **Mark invoiced**.",
+        "**Awaiting payment — the deposit.** With Xero, press **Refresh** once the customer has paid and the deposit is picked up from Xero, or **Record the deposit by hand** with the proof of payment. Without Xero, attach the proof of payment and press **Deposit paid**.",
+        "**Ready to schedule.** Pick the date (and attach a file if you like) and press **Schedule delivery**.",
+        "**Scheduled.** Press **Open handover**, then **Complete delivery** (or **Review, sign & complete** where a guided handover is set up) to record who handed over and the handover checklist. Then press **Customer signs on this device**: the customer reads the delivery note and signs on screen, and the signed note is filed with the quote. Add delivery photos from the same card."
+      ] },
+      { "type": "p", "text": "**Print delivery note** is under **Details** once a delivery is scheduled. If stock has been set aside for the sale, the card shows the unit's readiness (allocated, in pre-delivery inspection, or ready) and links to it." },
+      { "type": "callout", "tone": "info", "text": "Totals, what's been paid and what's still owed are on the **Invoices** page, where each row's **Payments** button records payments and opens the customer's statement." },
+      { "type": "callout", "tone": "warning", "text": "The buttons on each card need the **Manage delivery milestones, files and handover** permission. Without it you can see the board but not change it." },
+      { "type": "h", "text": "Related guides" },
+      { "type": "list", "items": ["Xero: sending invoices to your books", "Reserving and allocating units", "Quote documents, printing and handover"] }
+    ]
+  },
+  {
+    "slug": "targets-monthly-goals",
+    "title": "Monthly targets and progress",
+    "summary": "This month's goals for new leads, sales, deliveries and services, and how close the team is.",
+    "category": "sales",
+    "audience": "everyone",
+    "keywords": ["targets", "goals", "progress", "monthly", "kpi"],
+    "body": [
+      { "type": "p", "text": "The **Targets** page shows this month's goals and how the team is doing. Each has a progress bar that turns green when the target is reached." },
+      { "type": "table", "headers": ["Measure", "What's counted"], "rows": [
+        ["New leads", "Leads created this month"],
+        ["Sales value (won)", "The value of leads won this month"],
+        ["Deliveries", "Sales handed over this month"],
+        ["Services completed", "Service records this month"]
+      ] },
+      { "type": "p", "text": "Each card shows the actual figure and, where a target is set, the target and the percentage reached. If no target is set, the card says so." },
+      { "type": "callout", "tone": "info", "text": "Everyone can see progress. Owners set the targets — see **Setting this month's targets**." }
+    ]
+  },
+  {
+    "slug": "targets-setting-goals",
+    "title": "Setting this month's targets",
+    "summary": "Owners set the month's goals for new leads, sales value, deliveries and services.",
+    "category": "sales",
+    "audience": "admins",
+    "keywords": ["set targets", "goals", "monthly targets", "owner"],
+    "body": [
+      { "type": "steps", "items": [
+        "Open the **Targets** page.",
+        "Under **Set this month's targets**, enter a figure for each — New leads, Sales value, Deliveries and Services completed.",
+        "Press **Save targets**."
+      ] },
+      { "type": "callout", "tone": "tip", "text": "Leave one blank to have no target for it this month; its card then shows just the running figure." },
+      { "type": "callout", "tone": "info", "text": "Targets are set month by month, so set next month's at the start of the month." }
+    ]
+  },
+  {
+    "slug": "forecast-sales-pipeline",
+    "title": "Reading the sales forecast",
+    "summary": "How much is likely to close this month, filtered by pipeline, team and person.",
+    "category": "sales",
+    "audience": "everyone",
+    "keywords": ["forecast", "pipeline", "weighted", "commit", "best case", "probability"],
+    "body": [
+      { "type": "p", "text": "The **Sales forecast** shows the open deals expected to close in a month and how much they're likely to be worth. You need the **View sales forecasts** permission, and you see only the leads, teams and people you're allowed to." },
+      { "type": "h", "text": "Filtering" },
+      { "type": "p", "text": "Choose the **Period** (month), **Pipeline**, **Team** and **Owner**, then press **Apply**." },
+      { "type": "h", "text": "The figures" },
+      { "type": "table", "headers": ["Card", "Meaning"], "rows": [
+        ["Open", "The total value of open deals"],
+        ["Weighted", "Each deal's value times its chance of winning, added up — the realistic figure"],
+        ["Commit", "Deals the team is confident will close"],
+        ["Best case", "Deals that could close if things go well"],
+        ["Pipeline", "Everything in the pipeline"],
+        ["Deals", "How many deals there are"]
+      ] },
+      { "type": "p", "text": "The table lists each open lead with its pipeline and stage, owner and team, expected close date, forecast category, chance of winning, value and weighted value." },
+      { "type": "h", "text": "Related guides" },
+      { "type": "list", "items": ["Adjusting forecast deals and capturing snapshots", "Sales pipelines and stages"] }
+    ]
+  },
+  {
+    "slug": "forecast-managing-deals",
+    "title": "Adjusting forecast deals and capturing snapshots",
+    "summary": "Managers set each deal's chance of winning, category and close date, and save the forecast for the record.",
+    "category": "sales",
+    "audience": "managers",
+    "keywords": ["forecast", "probability", "forecast category", "snapshot", "commit", "close date"],
+    "body": [
+      { "type": "p", "text": "With the **Update forecast categories, probabilities and close dates** permission you can fine-tune each deal and save snapshots of the forecast." },
+      { "type": "h", "text": "Editing a deal" },
+      { "type": "steps", "items": [
+        "In the forecast table, press **Edit** on a lead's row.",
+        "Set the **probability** (0–100).",
+        "Choose a **forecast category**: Pipeline, Best case, Commit or Omitted.",
+        "Set the **expected close date** and, if you like, an **estimated cost**.",
+        "If you can assign leads, set the **team**. Save."
+      ] },
+      { "type": "callout", "tone": "info", "text": "The category decides which figure a deal counts towards — **Commit** deals count in the Commit total, and **Omitted** deals are left out." },
+      { "type": "h", "text": "Capturing a snapshot" },
+      { "type": "p", "text": "Press **Capture snapshot** to save the forecast as it is now, for the chosen period, pipeline, team and person. Recent snapshots are listed at the bottom with their open value, weighted value, number of deals and when they were taken — useful for comparing how the month went against what was expected." }
+    ]
+  },
+  {
+    "slug": "referrals-overview",
+    "title": "Tracking and rewarding referrals",
+    "summary": "Follow customers' introductions from referral code to won deal, and record the reward when it's given.",
+    "category": "sales",
+    "audience": "everyone",
+    "keywords": ["referrals", "referral code", "reward", "redeem", "introduction"],
+    "body": [
+      { "type": "p", "text": "The **Referrals** page follows customer introductions from a referral code to a won deal and the reward. Every customer has one permanent **referral code** on their profile — three letters from your business name and four characters, for example ACM-K7PQ." },
+      { "type": "h", "text": "How a referral moves along" },
+      { "type": "table", "headers": ["Status", "Meaning"], "rows": [
+        ["Pending", "Someone was introduced; no deal won yet"],
+        ["Fee due", "The referred deal was won — the reward is owed"],
+        ["Redeemed", "The reward has been given"]
+      ] },
+      { "type": "p", "text": "When a new lead comes in with a customer's code, it's linked to that customer. When the deal is won, the referral becomes **fee due** by itself. Someone using their own code, or a code that doesn't exist, is simply ignored — a typo never stops a lead coming in." },
+      { "type": "h", "text": "Recording the reward" },
+      { "type": "steps", "items": [
+        "Find the referral marked **fee due**.",
+        "In **Reward provided**, note what was given — for example a voucher.",
+        "Press **Mark reward redeemed**."
+      ] },
+      { "type": "callout", "tone": "info", "text": "The cards at the top count rewards due, introductions in progress and rewards given. Recording a reward needs the **Create, earn and redeem referrals** permission." }
+    ]
+  }
+]

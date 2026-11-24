@@ -294,7 +294,7 @@ export const administrationArticles: HelpArticle[] = [
       ] },
       { type: "h", text: "Using your fields in stage rules and journeys" },
       { type: "list", items: [
-        "**Stage rules** (Settings → Pipelines, a stage's *Rules for entering* or *Rules for leaving*) list your lead fields under **Your fields** — e.g. block a lead from entering *Contract* until **Finance house** is not empty.",
+        "**Stage rules** (Settings → Pipeline, a stage's *Rules for entering* or *Rules for leaving*) list your lead fields under **Your fields** — e.g. block a lead from entering *Contract* until **Finance house** is not empty.",
         "**Journey conditions** list your lead and customer fields under **Your fields**, so a journey can branch on them.",
         "The journey step **Set a field** fills in one of your lead or customer fields. It is checked the same way as the form, so it cannot store an answer a person couldn't have chosen; if it can't (the field was switched off, say) the step is skipped and the run log says why.",
       ] },
