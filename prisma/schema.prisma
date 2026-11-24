@@ -3832,6 +3832,9 @@ model Tenant {
   brandDisplayName String?
   /// Replaces "Authorized Denago EV Dealer" and the login page's tagline copy.
   brandTagline     String?
+  /// The sign-in screen's wording and layout (lib/loginLook.ts parses it; null = the standard page). Edited by the
+  /// workspace owner in Settings → Company profile or by a platform admin in the console.
+  loginJson        Json?
 
   /// PLAN (prisma/billing.prisma, lib/usageMeters.ts). Set by a platform admin; null = no plan, nothing billed.
   /// `planIncluded` and `planOverage` are { meter: number } in each meter's billing unit (US$ of AI, 1,000
