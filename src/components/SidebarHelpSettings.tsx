@@ -13,6 +13,7 @@ import {
   Rocket,
   Settings,
   Settings2,
+  Sparkles,
   type LucideIcon,
 } from "lucide-react";
 import { SETTINGS_GROUP_ICONS } from "@/components/settingsIcons";
@@ -27,12 +28,13 @@ import { openCommandMenu } from "@/components/CommandMenu";
 import { APP_VERSION } from "@/lib/version";
 import { settingsHref, visibleSettingsGroups } from "@/lib/settings-navigation";
 import { useSettingsViewer } from "@/components/SettingsViewer";
+import WhatsNewDot from "@/components/help/WhatsNewDot";
 
 const ROW =
-  "group flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-[13px] text-muted-foreground transition-all hover:bg-sidebar-accent hover:text-sidebar-accent-foreground data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground";
+  "group relative flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-[13px] text-muted-foreground transition-all hover:bg-sidebar-accent hover:text-sidebar-accent-foreground data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground";
 
 const ICON_TRIGGER =
-  "group grid size-8 place-items-center rounded-lg text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground data-[state=open]:bg-sidebar-accent data-[state=open]:text-primary";
+  "group relative grid size-8 place-items-center rounded-lg text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground data-[state=open]:bg-sidebar-accent data-[state=open]:text-primary";
 
 const PANEL =
   "overflow-hidden rounded-2xl border-sidebar-border/80 bg-popover/98 p-0 shadow-[0_24px_80px_rgba(0,0,0,.38)] backdrop-blur-xl";
@@ -75,6 +77,8 @@ export default function SidebarHelpSettings({
             <span className={compact ? "contents" : "grid size-7 place-items-center rounded-md border border-sidebar-border bg-sidebar-accent/50 text-muted-foreground transition-colors group-hover:text-primary group-data-[state=open]:text-primary"}>
               <LifeBuoy className="size-3.5" />
             </span>
+            {/* Something new in the help centre this person hasn't opened (components/help/WhatsNewDot.tsx). */}
+            <WhatsNewDot className={compact ? "right-1 top-1" : "left-6 top-1"} />
             {!compact && <span className="flex-1 text-left">Help</span>}
             {!compact && <ChevronRight className="size-3.5 text-muted-foreground/50 transition-transform group-data-[state=open]:translate-x-0.5 group-data-[state=open]:text-primary" />}
           </button>
@@ -112,6 +116,13 @@ export default function SidebarHelpSettings({
             </DropdownMenuItem>
 
             <div className="mt-2 grid gap-1">
+              <DropdownMenuItem asChild className="group h-auto rounded-lg p-2.5">
+                <Link href="/help/whats-new" className="items-start">
+                  <Sparkles className="mt-0.5 size-4 text-primary" />
+                  <span className="min-w-0 flex-1"><span className="block text-[13px] font-medium text-foreground">What&apos;s new</span><span className="block text-[11px] text-muted-foreground">Changes you would notice, newest first</span></span>
+                  <ChevronRight className="mt-1 size-3.5 opacity-40 transition group-focus:translate-x-0.5 group-focus:opacity-100" />
+                </Link>
+              </DropdownMenuItem>
               <DropdownMenuItem asChild className="group h-auto rounded-lg p-2.5">
                 <Link href="/help" className="items-start">
                   <BookOpen className="mt-0.5 size-4 text-primary" />
