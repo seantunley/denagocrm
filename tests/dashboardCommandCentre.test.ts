@@ -198,7 +198,13 @@ test("a template is offered by permission; it confers nothing", () => {
   // The sidebar link, the template and its own page answer to one set of keys.
   assert.deepEqual([...cc.permissions], ["reports.view", "reports.view_all", "reports.view_team"]);
   assert.match(shipped("src/components/nav-config.ts"), /if \(can\("reports\.view", "reports\.view_all", "reports\.view_team"\)\) \{\s*insightLinks\.push\(\{ href: "\/d\/command-centre"/);
-  assert.match(shipped("src/app/(app)/d/command-centre/page.tsx"), /await requireAnyPermission\(\.\.\.templateBySlug\(SLUG\)!\.permissions\);/);
+  const page = shipped("src/app/(app)/d/command-centre/page.tsx");
+  assert.match(page, /await requireAnyPermission\(\.\.\.templateBySlug\(SLUG\)!\.permissions\);/);
+  // The guard comes before ANY read: someone without Reports who has a stored or shared
+  // copy at this slug (takeControl lets anyone materialise one) is still turned away.
+  const guard = page.indexOf("await requireAnyPermission(");
+  assert.ok(guard > 0 && guard < page.indexOf("dashboardBySlug(SLUG)"), "permission checked before the stored dashboard is looked up");
+  assert.equal(page.match(/return /g)?.length, 1, "no early return around the guard");
 });
 
 test("a template is generated until edited, then materialised at its own address", () => {

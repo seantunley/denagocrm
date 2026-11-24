@@ -13,11 +13,12 @@ const SLUG = "command-centre";
  * generated template (lib/dashboard/templates.ts).
  */
 export default async function CommandCentrePage({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
-  const { tab } = await searchParams;
-  // Their own (or a workspace-shared) dashboard at this address: reachable like any other of theirs.
-  const stored = await dashboardBySlug(SLUG);
-  if (stored) return <DashboardScreen dashboard={stored} tab={tab} />;
-  // The template is offered on the same permissions as the sidebar link.
+  // The address is guarded on the sidebar link's permissions BEFORE anything is
+  // read — a stored, shared or just-customised copy at this slug does not get round
+  // it (review of #1229).
   await requireAnyPermission(...templateBySlug(SLUG)!.permissions);
-  return <DashboardScreen dashboard={templateDashboard(SLUG)!} tab={tab} />;
+  const { tab } = await searchParams;
+  // Their own (or a workspace-shared) customised copy, else the generated template.
+  const stored = await dashboardBySlug(SLUG);
+  return <DashboardScreen dashboard={stored ?? templateDashboard(SLUG)!} tab={tab} />;
 }
