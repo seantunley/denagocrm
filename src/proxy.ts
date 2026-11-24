@@ -72,6 +72,9 @@ const PUBLIC_PATHS = [
   // stored in Tenant.brandLogoRef — see its header comment for why that is not a
   // public file reader.
   "/api/brand/logo",
+  // A workspace's sign-in pictures (background, card). Pre-auth like the logo; the route serves only the two files the
+  // workspace's current sign-in settings name (lib/loginLook.ts isCurrentLoginImage).
+  "/api/brand/login-image",
   // Domain reachability check. Public BY NECESSITY and that is the point: it is
   // fetched over the open internet, at the hostname being verified, to find out
   // whether that hostname reaches this deployment at all. Behind auth it could
