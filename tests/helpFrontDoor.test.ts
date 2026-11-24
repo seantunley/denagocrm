@@ -11,6 +11,17 @@ import { rankHelp } from "../src/lib/help/quickSearch";
 const code = (path: string) => readFileSync(path, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 const ALL = new Set(HELP_ARTICLES.map((article) => article.slug));
 
+test("the owner path is for the WORKSPACE owner, decided by isTenantOwner — not the platform role", () => {
+  // A workspace's owner is Tenant.ownerUserId and is often role "member"; `user.role === "owner"` is the platform owner.
+  const page = code("src/app/(app)/help/page.tsx");
+  assert.match(page, /const admin = await isTenantOwner\(\);/);
+  assert.doesNotMatch(page, /role === "owner"/);
+  const keys = (reader: { manager: boolean; admin: boolean }) => pathsFor(ALL, reader).map((path) => path.key);
+  assert.ok(keys({ manager: false, admin: true }).includes("admin"), "a workspace owner gets the set-up path");
+  assert.ok(!keys({ manager: false, admin: false }).includes("admin"), "an ordinary member doesn't");
+  assert.ok(!keys({ manager: true, admin: false }).includes("admin"), "nor does a manager who isn't the owner");
+});
+
 test("every help area has its own colour, and no two share one", () => {
   for (const category of HELP_CATEGORIES) assert.ok(HELP_AREA_STYLE[category.key], category.key);
   const tiles = HELP_CATEGORIES.map((category) => HELP_AREA_STYLE[category.key].tile);

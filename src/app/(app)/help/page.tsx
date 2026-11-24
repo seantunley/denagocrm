@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { ArrowRight, BookOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { requireUser } from "@/lib/auth";
+import { isTenantOwner, requireUser } from "@/lib/auth";
 import { hasAnyPermission } from "@/lib/permissions";
 import { categoriesWithArticles, getArticle } from "@/lib/help/content";
 import { CATEGORY_LABEL } from "@/lib/help/categories";
@@ -29,7 +29,9 @@ export default async function HelpHomePage() {
   const visible = new Set(articles.map((article) => article.slug));
 
   // Who is reading decides which paths are offered: everyone gets the everyday ones, a manager the team one, the owner all.
-  const admin = user.role === "owner";
+  // The WORKSPACE owner (Tenant.ownerUserId, via isTenantOwner) — not `user.role === "owner"`, which is the platform
+  // owner only: a workspace's real owner is often role "member" (review of #1200).
+  const admin = await isTenantOwner();
   const manager = admin || (await hasAnyPermission(user, "forecast.view", "pipelines.manage"));
   const paths = pathsFor(visible, { manager, admin }).map((path) => ({
     key: path.key,
