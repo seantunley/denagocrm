@@ -2,114 +2,381 @@
   {
     "slug": "campaigns-overview",
     "title": "Campaigns: governed workflow and statuses",
-    "summary": "Create persistent drafts, pass review and approval, schedule safely, and understand every campaign status.",
+    "summary": "How a campaign goes from draft through review and approval to sending, who may do each step, and what every status means.",
     "category": "marketing",
     "audience": "everyone",
-    "keywords": ["campaign", "draft", "review", "approval", "schedule", "status"],
+    "keywords": ["campaign", "draft", "review", "approval", "schedule", "status", "email campaign", "sms campaign"],
     "body": [
-      {"type": "p", "text": "Campaigns are managed from **Marketing → Campaigns**. Creating a campaign immediately saves a draft; nothing is delivered until the campaign passes review, is approved, and is queued or scheduled."},
-      {"type": "table", "headers": ["Status", "Meaning"], "rows": [["Draft / changes requested", "Editable working content"], ["In review", "Locked while a reviewer checks content and audience"], ["Approved", "Ready to schedule or queue"], ["Scheduled", "Waiting for its launch time"], ["Queued / sending", "Recipients are being atomically claimed by the background worker"], ["Paused", "No new recipients are sent"], ["Completed / completed with errors", "Delivery is finished; issues remain visible"], ["Cancelled / archived", "No remaining delivery work"]]},
-      {"type": "callout", "tone": "warning", "text": "The legacy direct-send button is retired. It cannot bypass review, approval, delivery-time consent or the durable queue."}
+      { "type": "p", "text": "Campaigns are bulk emails or text messages to a group of your customers. They live under **Marketing → Campaigns**. Creating a campaign saves a draft straight away; nothing is sent until the campaign has been reviewed, approved and then queued or scheduled." },
+      { "type": "h", "text": "The campaigns page" },
+      { "type": "p", "text": "The figures at the top count **Drafts**, **Awaiting review**, **Scheduled** and **Live delivery**. Filter the list with **Search campaign or objective**, **All statuses** and **All channels**, then **Apply filters**. Each row shows the campaign's status, audience, how many were sent, delivery, opens, clicks and conversions. **Audiences**, **Templates** and **Create campaign** are at the top." },
+      { "type": "h", "text": "Who may do what" },
+      { "type": "p", "text": "Each step has its own permission, in the **Marketing** group under **Settings → Team & roles**, so the person who writes a campaign need not be the one who approves or sends it:" },
+      {
+        "type": "table",
+        "headers": ["Step", "Permission described as"],
+        "rows": [
+          ["See campaigns", "View campaigns and audiences"],
+          ["Create a draft", "Create campaign drafts"],
+          ["Edit and submit for review", "Edit campaign drafts and requested changes"],
+          ["Request changes", "Review campaigns and request changes"],
+          ["Approve", "Approve campaigns for launch"],
+          ["Schedule", "Schedule approved campaigns"],
+          ["Send now", "Launch approved campaigns"],
+          ["Pause, cancel, retry, archive", "Pause queued or sending campaigns, Cancel scheduled or in-flight campaigns, Retry eligible campaign delivery failures, Archive completed or cancelled campaigns"]
+        ]
+      },
+      { "type": "callout", "tone": "info", "text": "The person who submitted a campaign can't approve it. A second person always checks it." },
+      { "type": "h", "text": "Campaign statuses" },
+      {
+        "type": "table",
+        "headers": ["Status", "What it means"],
+        "rows": [
+          ["**draft**", "Being written. Can be edited."],
+          ["**in review**", "Submitted. Waiting for a reviewer to approve it or ask for changes."],
+          ["**changes requested**", "Sent back with a note. Edit it and submit again."],
+          ["**approved**", "Ready to send now or schedule."],
+          ["**scheduled**", "Waiting for its send time."],
+          ["**queued** / **sending**", "Being sent, in batches, in the background."],
+          ["**paused**", "Nothing more is sent until someone resumes it."],
+          ["**completed** / **completed with errors**", "Finished. Any messages that couldn't be delivered stay listed with the reason."],
+          ["**failed**", "Sending stopped because of a problem."],
+          ["**cancelled** / **archived**", "Nothing more will be sent."]
+        ]
+      },
+      { "type": "callout", "tone": "info", "text": "There is no way to send a campaign without review and approval. Customers who have opted out or withdrawn consent are left out when each message is sent, not just when the campaign was planned." },
+      { "type": "h", "text": "Related guides" },
+      { "type": "list", "items": ["Campaigns: create, review, approve and launch", "Campaigns: versioned audiences and consent", "Campaigns: delivery, UTMs and attribution", "Marketing overview and calendar"] }
     ]
   },
   {
     "slug": "campaigns-build-and-send",
     "title": "Campaigns: create, review, approve and launch",
-    "summary": "Build a persisted campaign, run QA, approve it, and send now or schedule it without delivering inside the web request.",
+    "summary": "Write a campaign, pass its checks, have it approved, then send it now or schedule it — and pause, cancel or retry while it sends.",
     "category": "marketing",
     "audience": "managers",
-    "keywords": ["create campaign", "autosave", "test send", "approve", "schedule"],
+    "keywords": ["create campaign", "autosave", "approve", "schedule", "send now", "pause campaign", "cancel campaign", "retry"],
     "body": [
-      {"type": "steps", "items": ["Open Marketing → Campaigns and create a campaign. A safe draft record is created immediately.", "Complete the brief, objective, offer, audience, content, CTA, UTM and attribution settings. Draft changes autosave, and Save draft is also available.", "Use a test send for the current operator only; test delivery does not launch the audience.", "Submit for review. Server-side QA checks required content, URLs, merge variables and audience readiness.", "A different authorised reviewer approves the campaign or requests changes with a note.", "From the approved state, choose Send now or a future schedule. The exact content version and resolved audience are frozen before recipient rows are created."]},
-      {"type": "p", "text": "Send now changes the campaign to **queued**. Scheduling changes it to **scheduled**. Provider delivery happens later in bounded background batches, never inside the button request."}
+      { "type": "h", "text": "1. Create the draft" },
+      {
+        "type": "steps",
+        "items": [
+          "On **Marketing → Campaigns**, click **Create campaign**.",
+          "Type the **Campaign name**, choose the **Channel** (**Email** or **SMS**) and type the **Objective**.",
+          "Click **Create and open editor**. The draft is saved; nothing is sent from this screen."
+        ]
+      },
+      { "type": "h", "text": "2. Fill in the campaign" },
+      { "type": "p", "text": "The editor saves your changes by itself a moment after you stop typing; the top shows **Saving…**, **Saved** or **Unsaved changes**, and **Save draft** saves straight away." },
+      {
+        "type": "table",
+        "headers": ["Section", "What goes in it"],
+        "rows": [
+          ["**1. Brief**", "**Campaign name**, **Objective**, **Offer**, **Landing page**, **CTA label** and **CTA URL** (the button), **Budget**, **Target leads**, **Target revenue**, **Success metric** and **Internal notes**. Budget and target revenue are typed in cents."],
+          ["**2. Tracking and attribution**", "The tracking tags added to your links (**UTM source**, **medium**, **campaign**, **content**, **term**) and the **Attribution window (days)**. Missing tags are filled in for you when someone clicks."],
+          ["**3. Audience**", "The **Audience label**. The exact list of recipients is worked out and fixed when the approved campaign is scheduled or queued."],
+          ["**4. Content**", "For email: **Subject**, **Preheader**, the email itself and a **Plain-text fallback**. For SMS: the **Message**."]
+        ]
+      },
+      { "type": "h", "text": "3. Review" },
+      {
+        "type": "steps",
+        "items": [
+          "Click **Review** on the campaign. The **QA checklist** lists anything wrong as **Error** (must be fixed) or **Warning** (worth checking).",
+          "When there are no errors, click **Submit for review**.",
+          "A reviewer opens the same page and either types the **Required changes** and clicks **Request changes**, or adds an **Approval note** and clicks **Approve campaign**."
+        ]
+      },
+      { "type": "h", "text": "4. Send or schedule" },
+      {
+        "type": "list",
+        "items": [
+          "**Send now** → **Queue campaign**: fixes the recipient list and starts sending in the background.",
+          "Set the **Schedule date and time** and click **Schedule campaign** to send later."
+        ]
+      },
+      { "type": "callout", "tone": "warning", "text": "Check the audience and the content preview before you queue or schedule. Once messages have gone out they can't be called back." },
+      { "type": "h", "text": "While it sends" },
+      { "type": "p", "text": "The campaign's page shows **Recipients**, **Delivery**, **Engagement** and **Conversions**, the **Recipient status**, **Failure and suppression reasons**, the **Version history** and the **Event timeline**. Under **Campaign controls**:" },
+      {
+        "type": "list",
+        "items": [
+          "**Pause** and **Resume** stop and restart sending.",
+          "**Retry temporary failures** tries again for messages that failed for a passing reason.",
+          "**Cancel campaign** asks for a **Cancellation reason**. Messages not yet sent will not go out; messages already sent are not affected.",
+          "**Archive** puts away a finished or cancelled campaign."
+        ]
+      },
+      { "type": "h", "text": "If something goes wrong" },
+      {
+        "type": "table",
+        "headers": ["Message", "What to do"],
+        "rows": [
+          ["A message starting **Fix these first:**", "The QA checklist has errors, such as a missing objective, subject or content, an invalid link, or an unsupported merge field. Fix each and try again."],
+          ["The person who submitted a campaign cannot approve it", "Ask another reviewer to approve it."],
+          ["Explain the changes you need.", "Type the required changes before sending it back."],
+          ["Scheduled time must be in the future", "Pick a later date and time."],
+          ["No eligible recipients match this audience", "Nobody in the audience can receive this channel (for example no one has opted in or has an email address). Check the audience."],
+          ["No temporary failures are eligible for retry", "There is nothing to retry."]
+        ]
+      },
+      { "type": "h", "text": "Related guides" },
+      { "type": "list", "items": ["Campaigns: governed workflow and statuses", "Campaigns: versioned audiences and consent", "Campaigns: delivery, UTMs and attribution"] }
     ]
   },
   {
     "slug": "campaigns-audiences-and-subscribers",
     "title": "Campaigns: versioned audiences and consent",
-    "summary": "Build reusable AND/OR audiences with exclusions and understand delivery-time suppression.",
+    "summary": "Build reusable customer groups with include and exclude rules, preview who is in them, and understand how opt-outs are always respected.",
     "category": "marketing",
     "audience": "managers",
-    "keywords": ["audience", "segment", "and or", "exclusion", "consent", "suppression"],
+    "keywords": ["audience", "segment", "and or", "exclusion", "consent", "suppression", "opt out", "customer group"],
     "body": [
-      {"type": "p", "text": "Audiences support nested **AND / OR** groups and explicit exclusions. Rules can use source, province, tags, vehicle ownership/model, lead and quote status, product interest, service due and customer value."},
-      {"type": "list", "items": ["Preview the live count and explanation before saving.", "Each saved change creates an audience version.", "The campaign resolves the audience again at launch and stores the exact criteria snapshot.", "Recipient eligibility is checked again immediately before delivery."]},
-      {"type": "callout", "tone": "info", "text": "Opt-outs, withdrawn consent, deleted contacts, missing channel details, frequency caps and duplicate delivery are recorded as suppressions rather than provider failures."}
+      { "type": "p", "text": "**Marketing → Audiences** is where you build reusable groups of customers. You need permission to create and manage campaign audiences." },
+      { "type": "h", "text": "Building an audience" },
+      {
+        "type": "steps",
+        "items": [
+          "Click **New audience** and type the **Audience name**.",
+          "Under **Include contacts**, add conditions with **Add condition**, or a nested set with **Add group**. Choose **ALL** to match every condition or **ANY** to match at least one.",
+          "Under **Exclude contacts**, add anyone to leave out with **Add exclusion** or **Add exclusion group**. Anyone matching any exclusion is removed.",
+          "Click **Preview audience** to see how many match and a few **Sample matches**.",
+          "Click **Save audience** (or **Save new version** when editing)."
+        ]
+      },
+      { "type": "p", "text": "Conditions can use: **Province**, **Lead source**, **Customer tag**, **Owns a vehicle**, **Vehicle model**, **Bought before**, **Service due**, **Lead status**, **Product interest**, **Customer created date**, **Has email address**, **Has phone / WhatsApp**, **Quote status** and **Customer value**." },
+      { "type": "callout", "tone": "info", "text": "**Marketing consent enforced**: deleted contacts and customers who opted out of marketing are always left out, whatever the rules say." },
+      { "type": "h", "text": "Versions and saved audiences" },
+      {
+        "type": "list",
+        "items": [
+          "Every save creates a new version; **Saved audiences** shows each with its last calculated size.",
+          "**Edit**, **Duplicate** and **Archive** are on each saved audience. An archived audience can't be chosen for new campaigns; campaigns that already fixed their recipients keep them.",
+          "The preview uses today's data. When a campaign is queued or scheduled, the audience is worked out again and the recipient list is fixed."
+        ]
+      },
+      { "type": "h", "text": "Checked again at sending" },
+      { "type": "p", "text": "Just before each message goes, the customer is checked again. Opt-outs, withdrawn consent, deleted contacts, missing email or phone details, sending limits and duplicates are recorded as **suppressed**, with the reason, rather than as delivery failures. They are listed under **Failure and suppression reasons** on the campaign." },
+      { "type": "h", "text": "If something goes wrong" },
+      {
+        "type": "list",
+        "items": [
+          "**Give this audience a name before saving it.**: type the **Audience name**.",
+          "**No contacts currently match.**: loosen the conditions or check the exclusions.",
+          "**Historical audience criteria**: this audience was made with the old rules. Click **Replace** to rebuild it in the builder before changing it."
+        ]
+      },
+      { "type": "h", "text": "Related guides" },
+      { "type": "list", "items": ["Campaigns: create, review, approve and launch", "Campaigns: delivery, UTMs and attribution"] }
     ]
   },
   {
     "slug": "campaigns-tracking-and-analytics",
     "title": "Campaigns: delivery, UTMs and attribution",
-    "summary": "Read delivery and engagement metrics, configure UTMs, and understand last-click lead, quote and sale attribution.",
+    "summary": "Read delivery, opens and clicks, set up link tracking, and understand how leads, quotes and sales are credited to a campaign.",
     "category": "marketing",
     "audience": "everyone",
-    "keywords": ["open", "click", "utm", "attribution", "conversion", "roas", "cost per lead"],
+    "keywords": ["open", "click", "utm", "attribution", "conversion", "roas", "cost per lead", "tracking"],
     "body": [
-      {"type": "p", "text": "Tracked links append configured UTM values without replacing parameters already present on the destination. Opens and clicks create tenant-scoped marketing touches."},
-      {"type": "p", "text": "Conversion attribution is explicit **last click** inside the campaign's configured lookback window. The ledger records lead creation, quote sent/accepted and won sales. Revenue is counted only when a real value exists."},
-      {"type": "list", "items": ["ROAS = attributed won-sale revenue ÷ entered campaign budget.", "Cost per lead = entered campaign budget ÷ attributed leads.", "Clicks are the conversion touch; opens are engagement only.", "Activity outside the attribution window remains unattributed."]},
-      {"type": "callout", "tone": "warning", "text": "Open tracking is approximate because mail clients may pre-load or block images. Use clicks and downstream conversions for stronger evidence."}
+      { "type": "h", "text": "Link tracking" },
+      { "type": "p", "text": "Links in a campaign get the tracking tags you set under **2. Tracking and attribution** (**UTM source**, **medium**, **campaign**, **content** and **term**), so your website's analytics can tell where visitors came from. Tags already on a link are kept." },
+      { "type": "h", "text": "How credit is given" },
+      { "type": "p", "text": "A campaign is credited with what happens after someone **clicks** a link in it: a new lead, a quote sent or accepted, or a won sale. It is **last click**: the most recent campaign clicked gets the credit, and only within the campaign's **Attribution window (days)**. Revenue counts only when there is a real value on the sale." },
+      {
+        "type": "list",
+        "items": [
+          "**ROAS** (return on ad spend) = revenue from credited won sales ÷ the campaign's budget.",
+          "**Cost per lead** = the campaign's budget ÷ credited leads.",
+          "Opens show interest only; they never earn credit.",
+          "Anything that happens outside the window isn't credited to the campaign."
+        ]
+      },
+      { "type": "callout", "tone": "warning", "text": "Open counts are approximate: some email apps open every image automatically and others block them. Clicks, leads and sales are the more reliable measures." },
+      { "type": "h", "text": "Where to read the numbers" },
+      { "type": "p", "text": "Each campaign's page shows its recipients, delivery, engagement and conversions. **Marketing → Overview** adds them up across campaigns for a period." },
+      { "type": "h", "text": "Related guides" },
+      { "type": "list", "items": ["Marketing overview and calendar", "Campaigns: create, review, approve and launch"] }
     ]
   },
   {
     "slug": "surveys-overview",
     "title": "Surveys: lifecycle, versions and governance",
-    "summary": "Create inactive survey drafts, review and approve them, and publish immutable customer-facing versions.",
+    "summary": "How a survey goes from draft through review to a published version customers answer, and why a published survey can't be edited in place.",
     "category": "marketing",
     "audience": "managers",
-    "keywords": ["survey", "draft", "review", "approve", "publish", "version"],
+    "keywords": ["survey", "draft", "review", "approve", "publish", "version", "nps", "csat"],
     "body": [
-      {"type": "p", "text": "New surveys are always inactive drafts. The lifecycle is **draft → in review → approved → published**. Reviewers can request changes; published surveys can be deactivated or archived."},
-      {"type": "list", "items": ["The submitter cannot approve their own survey.", "Publishing creates an immutable SurveyVersion snapshot.", "A published form cannot be edited in place; create a revision draft instead.", "Only one active survey may own a given automatic trigger for a tenant.", "Replacing a trigger owner is explicit and transactional."]}
+      { "type": "p", "text": "**Marketing → Surveys** holds your customer feedback forms. The figures at the top count **Drafts**, **In review**, **Approved** and **Published**. Working on surveys needs permission to create, send and manage surveys; viewing them and their responses needs permission to view surveys and responses." },
+      { "type": "h", "text": "Survey types" },
+      { "type": "p", "text": "Each survey is a **CSAT** (satisfaction), **Post-sale**, **NPS** (would you recommend us) or **Ad hoc** survey. The type decides how its scores are counted in Survey insights." },
+      { "type": "h", "text": "The stages" },
+      {
+        "type": "table",
+        "headers": ["Stage", "What happens"],
+        "rows": [
+          ["Draft", "New surveys always start here, switched off. Edit the questions."],
+          ["In review", "Submitted. A reviewer approves it or requests changes with a note."],
+          ["Approved", "Ready to publish."],
+          ["Published", "Customers can answer this version. It can be deactivated or archived."]
+        ]
+      },
+      {
+        "type": "list",
+        "items": [
+          "The person who submitted a survey can't approve it.",
+          "Publishing freezes that version. To change a published survey, click **Create editable revision** and take the revision through review again.",
+          "Only one active survey can be sent automatically for each moment (job card completed, delivery completed, lead won)."
+        ]
+      },
+      { "type": "h", "text": "Related guides" },
+      { "type": "list", "items": ["Surveys: build, validate and publish", "Surveys: distributions, reminders and responses", "Survey insights and closed-loop recovery"] }
     ]
   },
   {
     "slug": "surveys-build-and-configure",
     "title": "Surveys: build, validate and publish",
-    "summary": "Configure questions and messages, pass review validation, and publish a frozen version.",
+    "summary": "Create a survey draft, set its questions and messages, take it through review, publish it and choose whether it is sent automatically.",
     "category": "marketing",
     "audience": "managers",
-    "keywords": ["survey builder", "questions", "required", "publish", "trigger"],
+    "keywords": ["survey builder", "questions", "required", "publish", "trigger", "automatic survey"],
     "body": [
-      {"type": "steps", "items": ["Create an inactive draft from Marketing → Surveys.", "Edit the title, introduction, thank-you message, delay and supported questions.", "Submit for review. Required labels, unique IDs, supported question types and answer options are validated.", "A separate authorised operator approves the survey.", "Publish an immutable version and optionally assign an automatic trigger. Choose Replace existing only when intentionally moving a trigger from another active survey."]},
-      {"type": "callout", "tone": "info", "text": "Existing invitation links render and validate against the version frozen on that response, even after a later survey revision is published."}
+      {
+        "type": "steps",
+        "items": [
+          "On **Marketing → Surveys**, type a **New survey name**, choose its type and click **Create inactive draft**.",
+          "Open the survey and click **Edit questions** to set the introduction, thank-you message and questions.",
+          "Under **Lifecycle controls**, click **Submit for review**. Missing labels and answer options are refused at this point.",
+          "Another person clicks **Approve**, or types a **Required change note** and clicks **Request changes**.",
+          "Choose how it is sent: **Manual distribution**, or automatically when a **Job card completed**, **Delivery completed** or **Lead won**.",
+          "Add a **Version label (optional)** and click **Publish immutable version**."
+        ]
+      },
+      { "type": "p", "text": "If another active survey already uses that automatic moment, tick **Replace another active survey using this trigger** to take it over on purpose." },
+      { "type": "callout", "tone": "info", "text": "Invitations already sent keep showing the version they were sent with, even after you publish a newer one." },
+      { "type": "h", "text": "After publishing" },
+      {
+        "type": "list",
+        "items": [
+          "**Deactivate** stops the survey being sent.",
+          "**Create editable revision** starts a new draft from it.",
+          "**Archive** puts it away. **Published versions** lists every version."
+        ]
+      },
+      { "type": "h", "text": "If something goes wrong" },
+      {
+        "type": "list",
+        "items": [
+          "**The person who submitted a survey cannot approve it**: ask someone else to approve.",
+          "**Changes requested:** at the top of the survey: read the note, make the changes and submit again."
+        ]
+      },
+      { "type": "h", "text": "Related guides" },
+      { "type": "list", "items": ["Surveys: lifecycle, versions and governance", "Surveys: distributions, reminders and responses"] }
     ]
   },
   {
     "slug": "surveys-send-and-responses",
     "title": "Surveys: distributions, reminders and responses",
-    "summary": "Create a durable distribution, schedule delivery, manage reminders and review separate failure and suppression states.",
+    "summary": "Send a published survey to a group of customers with reminders, follow its progress, and handle failed and suppressed invitations.",
     "category": "marketing",
     "audience": "managers",
-    "keywords": ["survey distribution", "queue", "reminder", "pause", "retry", "response"],
+    "keywords": ["survey distribution", "queue", "reminder", "pause", "retry", "response", "send survey"],
     "body": [
-      {"type": "steps", "items": ["Open Marketing → Surveys → Distributions.", "Choose an active published survey, audience, communication purpose and channel.", "Send immediately or schedule a future date, then choose the reminder delay and maximum reminders.", "Use the distribution detail page to pause, resume, cancel remaining work or manually retry permanent failures."]},
-      {"type": "p", "text": "The queue atomically claims recipients, rechecks contact policy at delivery time, recovers stale claims and separates **suppressed** recipients from temporary and permanent provider failures."},
-      {"type": "callout", "tone": "warning", "text": "The legacy bulk Send now action is retired. Only a single operator test invitation can still be sent directly."}
+      { "type": "p", "text": "A distribution sends one published survey to a group of customers. Open **Survey distributions** with **Distribution queue** on **Marketing → Survey insights**, or **Create survey distribution** on the marketing calendar." },
+      { "type": "h", "text": "Creating a distribution" },
+      {
+        "type": "steps",
+        "items": [
+          "Under **Create a distribution**, type the **Distribution name**.",
+          "Choose the **Published survey** and the **Audience**: **All reachable contacts**, **Vehicle owners** or **Won customers**.",
+          "Choose the **Purpose**: **Transactional feedback** or **Marketing research**, and the **Channel**: **Best available**, **Email only** or **SMS only**.",
+          "Set the **Schedule**, **Reminder after hours** and **Maximum reminders**.",
+          "Click **Create queued distribution**."
+        ]
+      },
+      { "type": "p", "text": "Invitations go out in the background. Each customer is checked again just before sending: anyone who opted out or can't be reached is recorded as suppressed rather than failed." },
+      { "type": "h", "text": "Managing a distribution" },
+      {
+        "type": "list",
+        "items": [
+          "**Pause** and **Resume** stop and restart sending.",
+          "**Retry permanent failures** tries again for invitations that failed.",
+          "**Cancel remaining** asks you to confirm: invites not yet sent will not go out; invites already delivered are not affected.",
+          "**Failures and suppressions** lists each problem with its reason and attempts, keeping consent blocks separate from delivery failures."
+        ]
+      },
+      { "type": "h", "text": "If something goes wrong" },
+      {
+        "type": "list",
+        "items": [
+          "**Publish a survey first.**: there is no published survey to send.",
+          "**Many suppressed invitations**: these customers opted out or have no email or mobile number. Check their contact details."
+        ]
+      },
+      { "type": "h", "text": "Related guides" },
+      { "type": "list", "items": ["Survey insights and closed-loop recovery", "Surveys: build, validate and publish"] }
     ]
   },
   {
     "slug": "survey-insights-and-recovery",
     "title": "Survey insights and closed-loop recovery",
-    "summary": "Interpret response rate, NPS and CSAT correctly and resolve negative feedback through an owned recovery queue.",
+    "summary": "Read response rate, NPS and CSAT correctly, and follow up unhappy customers through the recovery queue.",
     "category": "marketing",
     "audience": "managers",
-    "keywords": ["nps", "csat", "response rate", "detractor", "follow-up", "support case"],
+    "keywords": ["nps", "csat", "response rate", "detractor", "follow-up", "support case", "survey insights"],
     "body": [
-      {"type": "list", "items": ["Response rate uses only successfully sent or completed invitations as the denominator.", "NPS is promoter percentage minus detractor percentage.", "CSAT is the percentage of scored CSAT/post-sale responses rated 4 or 5.", "Average response time starts at actual invite delivery."]},
-      {"type": "p", "text": "Low NPS and CSAT responses automatically create one closed-loop follow-up. Assign it to an active team member, record the resolution, or escalate it into a support case containing the customer, score and comment context."}
+      { "type": "p", "text": "**Marketing → Survey insights** shows how your surveys are doing. Narrow it by survey, distribution, type and channel, then click **Apply**." },
+      { "type": "h", "text": "The figures" },
+      {
+        "type": "table",
+        "headers": ["Figure", "How it is worked out"],
+        "rows": [
+          ["**Response rate**", "Completed responses as a share of invitations actually delivered. Invitations that failed or were suppressed don't count."],
+          ["**Net promoter score**", "The percentage of promoters (9–10) minus the percentage of detractors (0–6). **NPS composition** shows the promoters, passives (7–8) and detractors."],
+          ["**Customer satisfaction**", "The percentage of CSAT and post-sale scores rated 4 or 5."],
+          ["**Average response**", "How long customers took to answer, from when the invitation was delivered."]
+        ]
+      },
+      { "type": "p", "text": "**Daily response trend** shows delivered, completed, response rate and average score per day. **Recent responses** lists each answer with its score and comment." },
+      { "type": "h", "text": "Following up unhappy customers" },
+      { "type": "p", "text": "A low NPS or CSAT score creates a follow-up in the **Closed-loop recovery queue** automatically. For each one:" },
+      {
+        "type": "list",
+        "items": [
+          "Choose a team member and click **Assign**.",
+          "Type **How was this resolved?** and click **Resolve follow-up**, or",
+          "Click **Create support case** to open a case with the customer, the score and their comment."
+        ]
+      },
+      { "type": "p", "text": "Working the queue needs permission to create, send and manage surveys." },
+      { "type": "h", "text": "Related guides" },
+      { "type": "list", "items": ["Surveys: distributions, reminders and responses", "Customer cases help desk overview", "Marketing overview and calendar"] }
     ]
   },
   {
     "slug": "marketing-overview-and-calendar",
     "title": "Marketing overview and calendar",
-    "summary": "Use the unified overview, work queues and calendar to operate campaigns and survey distributions together.",
+    "summary": "See campaign results, attributed revenue and survey health for a period, and every scheduled campaign and survey send on one calendar.",
     "category": "marketing",
     "audience": "everyone",
-    "keywords": ["marketing overview", "calendar", "work queue", "roas", "survey health"],
+    "keywords": ["marketing overview", "calendar", "work queue", "roas", "survey health", "performance"],
     "body": [
-      {"type": "p", "text": "Marketing → Overview combines campaign delivery, clicks, attributable leads/quotes/sales, revenue, budget efficiency, survey health and unresolved recovery work."},
-      {"type": "p", "text": "Marketing → Calendar shows scheduled campaign launches and survey distributions in one monthly view. Opening an event takes you to its governed detail record."}
+      { "type": "h", "text": "Performance overview" },
+      { "type": "p", "text": "**Marketing → Overview** totals your marketing for a period. Set the **Reporting window** (**From** and to) and click **Apply period**; every figure on the page uses it." },
+      {
+        "type": "list",
+        "items": [
+          "**Campaign activity**: campaigns and messages delivered.",
+          "**Attributed outcomes**: leads, quotes and sales credited to campaigns.",
+          "**Attributed revenue**: revenue from credited sales, with ROAS when a budget is set.",
+          "**Engagement**: clicks, with cost per lead when a budget is set.",
+          "**Top attributable campaigns**: each campaign's status, clicks, conversions, revenue and ROAS."
+        ]
+      },
+      { "type": "h", "text": "Marketing calendar" },
+      { "type": "p", "text": "**Marketing → Calendar** shows scheduled campaign launches and survey distributions on one monthly calendar. Use **Month** and **Type** (**Campaigns and surveys**, **Campaigns** or **Surveys**) to focus it, and **Previous** / **Next** to move between months. Click an item to open it." },
+      { "type": "h", "text": "Related guides" },
+      { "type": "list", "items": ["Campaigns: delivery, UTMs and attribution", "Survey insights and closed-loop recovery", "Campaigns: governed workflow and statuses"] }
     ]
   }
 ]
