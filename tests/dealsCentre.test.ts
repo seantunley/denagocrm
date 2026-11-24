@@ -78,6 +78,7 @@ test("the loader reads the quote list's own scope and the canonical money rules"
   assert.match(loader, /AND: \[scope, viewWhere\(view, pendingFinance\)\]/);
   assert.match(loader, /Math\.round\(payableTotalCents\(quote\)\)/);
   assert.match(loader, /receivedCents\(quote, payments\)/);
+  assert.match(loader, /stockReservations: \{ where: \{ status: "active" \}/, "a released reservation allocates nothing");
   // Only an accepted quote is an invoice: a sent one owes nothing.
   assert.match(loader, /balanceCents: quote\.status === "accepted" \? total - received : 0/);
   const page = readFileSync("src/app/(app)/deals/page.tsx", "utf8");

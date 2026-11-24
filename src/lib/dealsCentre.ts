@@ -41,7 +41,8 @@ const SELECT = {
   items: { select: { qty: true, unitPriceCents: true, discountPct: true, taxRatePct: true, optional: true, selected: true, kind: true } },
   fees: { select: { amountCents: true, taxRatePct: true } },
   soldStock: { select: { id: true, pdiStatus: true } },
-  stockReservations: { select: { stockUnit: { select: { id: true, pdiStatus: true } } } },
+  // Live reservations only — the deal page's rule; a released one allocates nothing.
+  stockReservations: { where: { status: "active" }, select: { stockUnit: { select: { id: true, pdiStatus: true } } } },
 } satisfies Prisma.QuoteSelect;
 
 type Row = Prisma.QuoteGetPayload<{ select: typeof SELECT }>;
