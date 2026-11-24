@@ -13,6 +13,7 @@ import {
   FileText,
   Mail,
   MessageSquareText,
+  Minus,
   PackageCheck,
   Phone,
   ReceiptText,
@@ -28,6 +29,8 @@ import { dealFinanceHouses, loadDealFinance } from "@/lib/dealFinance";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { financeBlocksDelivery, financeStatusShort, quoteInPlay } from "@/lib/dealFinanceRules";
 import DealFinancePanel from "@/components/deals/DealFinancePanel";
+import DealNextActions, { type BlockerActions } from "@/components/deals/DealNextActions";
+import { currentMilestone, dealBlockers, dealMilestones, dealProgress, pdiReady as dealPdiReady } from "@/lib/dealMilestones";
 import { formatDate, formatDateTime, formatZAR } from "@/lib/format";
 import { loadBillToFleet, quoteBillTo } from "@/lib/quoteBillTo";
 import { payableTotalCents } from "@/lib/pricing";
@@ -86,13 +89,13 @@ function ReadinessRow({ done, label, detail, action }: { done: boolean; label: s
   );
 }
 
-function JourneyStep({ label, done, current }: { label: string; done: boolean; current?: boolean }) {
+function JourneyStep({ label, done, current, skipped }: { label: string; done: boolean; current?: boolean; skipped?: boolean }) {
   return (
-    <div className="relative flex min-w-0 flex-1 items-center gap-2">
-      <span className={`relative z-10 grid size-7 shrink-0 place-items-center rounded-full border ${done ? "border-emerald-400/50 bg-emerald-400/15 text-emerald-300" : current ? "border-primary/60 bg-primary/15 text-primary" : "border-border bg-background text-muted-foreground"}`}>
-        {done ? <Check className="size-3.5" /> : <span className="size-1.5 rounded-full bg-current" />}
+    <div className="relative flex min-w-0 flex-1 items-center gap-2" title={skipped ? `${label}: not needed on this deal` : undefined}>
+      <span className={`relative z-10 grid size-7 shrink-0 place-items-center rounded-full border ${done ? "border-emerald-400/50 bg-emerald-400/15 text-emerald-300" : current ? "border-primary/60 bg-primary/15 text-primary" : skipped ? "border-dashed border-border bg-background text-muted-foreground/60" : "border-border bg-background text-muted-foreground"}`}>
+        {done ? <Check className="size-3.5" /> : skipped ? <Minus className="size-3.5" /> : <span className="size-1.5 rounded-full bg-current" />}
       </span>
-      <span className={`truncate text-xs font-medium ${done ? "text-foreground" : current ? "text-primary" : "text-muted-foreground"}`}>{label}</span>
+      <span className={`truncate text-xs font-medium ${done ? "text-foreground" : current ? "text-primary" : "text-muted-foreground"}`}>{label}{skipped ? " · not needed" : ""}</span>
       <span className="absolute left-7 right-0 top-3.5 h-px bg-border last:hidden" />
     </div>
   );
@@ -266,19 +269,37 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
   const nextActivity = lead?.activities.find((item) => item.status === "planned") ?? null;
   const accepted = quote.status === "accepted" || Boolean(quote.signedAt);
   const stockReady = stock.length > 0;
-  const pdiReady = stockReady && stock.every((item) => item.pdiStatus === "ready_for_delivery" || item.pdiStatus === "passed");
   const deliveryBooked = Boolean(quote.deliveryScheduledFor);
   const delivered = Boolean(quote.deliveredAt);
 
-  const journey = [
-    { label: "Quote", done: true },
-    { label: "Accepted", done: accepted },
-    { label: "Deposit", done: Boolean(quote.depositPaidAt) },
-    { label: "Stock", done: stockReady },
-    { label: "PDI", done: pdiReady },
-    { label: "Delivery", done: delivered },
-  ];
-  const currentIndex = Math.min(journey.findIndex((step) => !step.done), journey.length - 1);
+  // Where the deal stands, by the shared rules (dealMilestones.ts) the Deals Centre uses too.
+  const facts = {
+    accepted,
+    depositCents: depositAmount,
+    depositPaid: Boolean(quote.depositPaidAt),
+    stock,
+    deliveryBooked,
+    delivered,
+    financeHolds: finance ? financeBlocksDelivery(finance.status) : false,
+  };
+  const pdiReady = dealPdiReady(stock);
+  const journey = dealMilestones(facts);
+  const current = currentMilestone(journey);
+  const progress = dealProgress(journey);
+  const blockers = dealBlockers(facts);
+  // Each blocker's button goes where it is fixed — only for someone allowed to fix it there.
+  const [canManageDeliveries, canSeeStock] = await Promise.all([
+    hasAnyPermission(user, "deliveries.manage"),
+    hasAnyPermission(user, "stock.view", "stock.manage"),
+  ]);
+  const blockerActions: BlockerActions = {
+    accept: { label: "Open quote", href: `/quotes/${quote.id}` },
+    deposit: canManageDeliveries ? { label: "Record deposit", href: "/deliveries" } : null,
+    finance: finance ? { label: "Finance", href: "#finance" } : null,
+    stock: canSeeStock ? { label: "Allocate", href: "/stock" } : null,
+    pdi: canSeeStock && unit ? { label: "Open unit", href: `/stock/${unit.id}` } : null,
+    delivery: canManageDeliveries ? { label: "Book delivery", href: "/deliveries" } : null,
+  };
 
   const commercialLines = quote.items
     .filter((item) => item.selected !== false)
@@ -384,9 +405,13 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
           </div>
 
           <div className="border-t border-border bg-muted/15 px-5 py-4 sm:px-6">
+            <p className="mb-3 text-xs text-muted-foreground">
+              {delivered ? "Delivered" : <>Current step: <span className="font-medium text-foreground">{current.label}</span></>}
+              <span title="Steps done out of the steps that apply to this deal — a step that does not apply counts in neither."> · {progress.done} of {progress.of} steps done</span>
+            </p>
             <div className="flex gap-3 overflow-x-auto pb-1">
-              {journey.map((step, index) => (
-                <JourneyStep key={step.label} label={step.label} done={step.done} current={index === currentIndex && !step.done} />
+              {journey.map((step) => (
+                <JourneyStep key={step.key} label={step.label} done={step.done} skipped={step.skipped} current={step.key === current.key && !step.done} />
               ))}
             </div>
           </div>
@@ -432,7 +457,9 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
             </Surface>
 
             {lead && (finance || financeHouses.length > 0) && (
-              <DealFinancePanel quote={{ id: quote.id, number: quote.number, inPlay: quoteInPlay(quote) }} finance={finance} financeHouses={financeHouses} canEdit={canEditFinance} now={requestNow} />
+              <div id="finance" className="scroll-mt-20">
+                <DealFinancePanel quote={{ id: quote.id, number: quote.number, inPlay: quoteInPlay(quote) }} finance={finance} financeHouses={financeHouses} canEdit={canEditFinance} now={requestNow} />
+              </div>
             )}
 
             {invoice && (
@@ -572,6 +599,12 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
           </div>
 
           <aside className="space-y-4">
+            <DealNextActions
+              blockers={blockers}
+              actions={blockerActions}
+              noNextStep={!delivered && Boolean(lead) && !nextActivity}
+              scheduleHref={lead ? `/leads/${lead.id}?tab=activities&schedule=1` : null}
+            />
             <Surface className="p-5">
               <div className="flex items-center gap-2">
                 <ShieldCheck className="size-5 text-primary" />
