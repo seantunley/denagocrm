@@ -40,7 +40,7 @@ test("numbers mean the list the owner read; one outside it is named back, never 
 test("the brief's section: numbered, what each says, how to answer — and nothing when nothing waits", () => {
   assert.equal(reviewSection([], 0), "");
   const text = reviewSection([item("a"), item("b", { kind: "playbook", name: "hot-lead", description: "a lead ready to buy" })], 7);
-  assert.match(text, /🧠 To review — what DAX learned \(7\)/);
+  assert.match(text, /🧠 To review — what the assistant learned \(7\)/);
   assert.match(text, /\n1\. About the business: fact a\n2\. Playbook: “hot-lead” — a lead ready to buy\n/);
   assert.match(text, /…and 5 more in Settings → Assistant\./);
   assert.match(text, /reply “keep 1”, “drop 2”, “keep all” or “drop all”/);

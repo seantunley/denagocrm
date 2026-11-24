@@ -141,7 +141,7 @@ export async function runOutcomeLearning(tenantId: string, opts: { force?: boole
     summary = filed
       ? `suggested a playbook from ${won} won and ${deals.length - won} lost deals — it's below, waiting for you`
       : "found habits, but the playbook couldn't be filed (this month's is already approved, or the playbook list is full)";
-    if (filed) await logAudit({ action: "assistant.outcomes_learned", summary: "DAX suggested a playbook from won and lost deals", userName: "Assistant (learning from outcomes)" });
+    if (filed) await logAudit({ action: "assistant.outcomes_learned", summary: "The assistant suggested a playbook from won and lost deals", userName: "Assistant (learning from outcomes)" });
   }
   await putWorkspaceSetting(tenantId, OUTCOME_LEARNING_SUMMARY_KEY, summary);
   return summary;

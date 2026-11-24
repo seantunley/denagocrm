@@ -21,7 +21,7 @@ export default async function AssistantGoalsCard({ userId, name }: { userId: str
       <p className="text-muted-foreground">
         Ask {name} to keep an eye on a delivery until it&apos;s done: deposit, invoice, vehicle prep, booking, handover. It tells you the next
         blocker, says when it stalls, and stops its own reminders once the vehicle is delivered. It never contacts the customer. Updates come the
-        way proactive DAX&apos;s do, so switch that on for yourself first.
+        way {name}&apos;s proactive updates do, so switch those on for yourself first.
       </p>
       {automotive && (
         <SaveForm action={startDeliveryGoalAction} className="flex gap-2">
@@ -36,7 +36,7 @@ export default async function AssistantGoalsCard({ userId, name }: { userId: str
               <div className="min-w-0">
                 <p className="font-medium">{g.title}</p>
                 <p className="text-muted-foreground">
-                  {g.paused ? "Off — not checking" : g.proactiveOff ? "Paused — proactive DAX is off for you; switch it on and it picks up where the delivery is now" : g.nextAction}
+                  {g.paused ? "Off — not checking" : g.proactiveOff ? `Paused — ${name}'s proactive updates are off for you; switch them on and it picks up where the delivery is now` : g.nextAction}
                 </p>
                 {g.quoteId && <Link href={`/deals/${g.quoteId}`} className="text-xs text-primary underline">Open the deal</Link>}
               </div>

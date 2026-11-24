@@ -903,12 +903,16 @@ test("nothing logged or audited carries the message, the answer or the number", 
 test("the code is six digits, parsed strictly, and stored only as a workspace-and-person-bound hash", () => {
   assert.equal(formatLinkCode(42), "000042");
   assert.equal(formatLinkCode(999999), "999999");
+  assert.equal(parseLinkCode("LINK 012345"), "012345");
+  assert.equal(parseLinkCode("  link   123456\n"), "123456");
+  // The old form, issued until 2026-11-24, is still read.
   assert.equal(parseLinkCode("DAX 012345"), "012345");
   assert.equal(parseLinkCode("  dax   123456\n"), "123456");
-  for (const bad of ["DAX 12345", "DAX 1234567", "DAX123456", "please DAX 123456", "DAX 123456 thanks", "123456", "", null]) {
+  for (const bad of ["LINK 12345", "LINK 1234567", "LINK123456", "please LINK 123456", "LINK 123456 thanks", "DAX 12345", "DAX123456", "123456", "", null]) {
     assert.equal(parseLinkCode(bad), null, String(bad));
   }
-  assert.equal(linkCodeText("123456"), "DAX 123456");
+  // What is issued never carries an assistant's name.
+  assert.equal(linkCodeText("123456"), "LINK 123456");
   const h = hashLinkCode("t1", "u1", "123456");
   assert.equal(h, sha256(linkCodeHashInput("t1", "u1", "123456")));
   assert.notEqual(h, hashLinkCode("t2", "u1", "123456"), "another workspace");
@@ -936,8 +940,8 @@ test("masking, the business number and the wa.me link", () => {
   for (const label of ["Denago Branch 2 021 123 4567", "Denago Shop 24 021 123 4567", "Denago 2026 021 123 4567"]) {
     assert.equal(businessNumberFromLabel(label), null, label);
   }
-  assert.equal(waMeLink("27211234567", "123456"), "https://wa.me/27211234567?text=DAX%20123456");
-  assert.equal(waMeLink(null, "123456"), "https://wa.me/?text=DAX%20123456");
+  assert.equal(waMeLink("27211234567", "123456"), "https://wa.me/27211234567?text=LINK%20123456");
+  assert.equal(waMeLink(null, "123456"), "https://wa.me/?text=LINK%20123456");
   assert.equal(whatsappSwitchOn("on"), true);
   assert.equal(whatsappSwitchOn(null), false);
 });

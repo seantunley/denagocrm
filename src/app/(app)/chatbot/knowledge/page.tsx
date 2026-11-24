@@ -67,7 +67,7 @@ export default async function BotKnowledgePage({ searchParams }: Props) {
         <div>
           <h2 className="text-sm font-semibold">Questions the chatbot couldn&apos;t answer <span className="font-normal text-muted-foreground">({gaps.filter((g) => g.status === "open").length})</span></h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            Customer questions it handed to your team because no approved knowledge covered them, most asked first. Draft an answer and DAX writes a knowledge entry from your business details and what your team replied at the time — it stays a draft below until you check and approve it.
+            Customer questions it handed to your team because no approved knowledge covered them, most asked first. Draft an answer and the assistant writes a knowledge entry from your business details and what your team replied at the time — it stays a draft below until you check and approve it.
           </p>
         </div>
         {gaps.length === 0 ? (
@@ -88,10 +88,10 @@ export default async function BotKnowledgePage({ searchParams }: Props) {
                   {gap.status === "drafted" ? (
                     <Link href="/chatbot/knowledge?status=draft" className="text-xs font-medium text-primary hover:underline">Draft ready — review it below</Link>
                   ) : gap.status === "drafting" ? (
-                    <span className="text-xs text-muted-foreground">DAX is drafting this — refresh in a minute</span>
+                    <span className="text-xs text-muted-foreground">The assistant is drafting this — refresh in a minute</span>
                   ) : (
                     <span className="flex gap-2">
-                      <SaveForm action={draftKnowledgeFromGap.bind(null, gap.id)} resetOnSuccess={false}><SaveButton className="btn-primary btn-sm" pendingLabel="DAX is drafting…">Draft an answer</SaveButton></SaveForm>
+                      <SaveForm action={draftKnowledgeFromGap.bind(null, gap.id)} resetOnSuccess={false}><SaveButton className="btn-primary btn-sm" pendingLabel="Drafting…">Draft an answer</SaveButton></SaveForm>
                       <SaveForm action={dismissKnowledgeGap.bind(null, gap.id)} resetOnSuccess={false}><SaveButton className="btn-secondary btn-sm" pendingLabel="…">Dismiss</SaveButton></SaveForm>
                     </span>
                   )}

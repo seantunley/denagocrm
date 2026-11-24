@@ -255,7 +255,7 @@ export async function POST(req: NextRequest) {
             after(() =>
               withChannelTenantScope("whatsapp", phoneNumberId, async () => {
                 for (const answer of answersLater) {
-                  await answer().catch((error) => logError("whatsapp-webhook", error, "A DAX answer failed after Meta was acknowledged; ask again").catch(() => {}));
+                  await answer().catch((error) => logError("whatsapp-webhook", error, "An assistant answer failed after Meta was acknowledged; ask again").catch(() => {}));
                 }
               }, () => undefined, only),
             );

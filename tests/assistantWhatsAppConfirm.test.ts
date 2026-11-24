@@ -378,10 +378,10 @@ test("nothing runs: switch off, expired, someone else's, another workspace's, an
 
 test("after a claim: 'nothing changed' can be tried again; 'don't know how far it got' cannot — and neither is ever reported as done", async () => {
   // PROVEN unchanged — turned away before anything that writes was called: released, and Confirm works again.
-  state.outcome = { ok: false, error: "This changed since DAX suggested it — ask again to see where it stands now.", unchanged: true };
+  state.outcome = { ok: false, error: "This changed since the assistant suggested it — ask again to see where it stands now.", unchanged: true };
   const retry = pendingRow();
   await confirmFromWhatsApp("t1", me, PHONE, retry.id);
-  assert.match(state.sent.at(-1)?.text ?? "", /^Not done: This changed since DAX suggested it[\s\S]*\n\nNothing was changed\. You can tap Confirm again \(or reply yes\) until it expires\./);
+  assert.match(state.sent.at(-1)?.text ?? "", /^Not done: This changed since the assistant suggested it[\s\S]*\n\nNothing was changed\. You can tap Confirm again \(or reply yes\) until it expires\./);
   assert.equal(retry.confirmedAt, null, "released");
   assert.equal(retry.completedAt, null);
   assert.equal(retry.failedAt, null);
@@ -550,7 +550,7 @@ test("A PINNED NOTE WHOSE PIN FAILS IS NOT WRITTEN TWICE: the note was saved, so
   const logCall = run.slice(run.indexOf('case "log_call": {'), run.indexOf('case "note": {'));
   assert.ok(logCall.indexOf("return untouched(STALE_CARD)") < logCall.indexOf("await logVoiceDebrief("));
   const buildCase = run.slice(run.indexOf('case "quote_build": {'), run.indexOf('case "quote_pdf": {'));
-  assert.ok(buildCase.indexOf("The catalogue changed since DAX suggested this") < buildCase.indexOf("convertLeadToContact("), "every check before the customer record is made");
+  assert.ok(buildCase.indexOf("The catalogue changed since the assistant suggested this") < buildCase.indexOf("convertLeadToContact("), "every check before the customer record is made");
   const quotePdfCase = run.slice(run.indexOf('case "quote_pdf": {'), run.indexOf('case "quote_change": {'));
   // (And four are quote_change's: no key, nothing to change, quote gone or not theirs, no longer a draft — each before the save.)
   const quoteChange = run.slice(run.indexOf('case "quote_change": {'), run.indexOf('case "quote_add": {'));

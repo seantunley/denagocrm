@@ -350,7 +350,7 @@ export default async function AssistantSettingsPage() {
               When a customer opens a quote, comes back to it a third time, signs it, books a service, or writes and has
               waited 15 minutes with no answer — or a signed deal is booked for delivery tomorrow (a check: deposit, invoice,
               vehicle and PDI) — {profile.name} tells the person responsible for them — the deal&apos;s owner, else the
-              customer&apos;s — in Ask DAX, as a phone notification that names nobody, and on the WhatsApp they
+              customer&apos;s — in Ask {profile.name}, as a phone notification that names nobody, and on the WhatsApp they
               linked. Each person must also switch it on for themselves on the Ask page. Nothing between 20:00 and 08:00
               (held until morning), at most 12 a day each, only about records that person may open. It never contacts the
               customer, and uses no AI credit.
@@ -554,7 +554,7 @@ export default async function AssistantSettingsPage() {
                     Once a week it compares the deals won and lost in the last {OUTCOME_WINDOW_DAYS} days — how fast the
                     first contact was, follow-ups after a quote, calls, and when messages got answered — and suggests a
                     playbook with the numbers behind each point. Counts only, never a customer or a message. It waits
-                    below for you to approve, edit or remove; nobody&apos;s DAX uses it until you approve it.
+                    below for you to approve, edit or remove; {profile.name} uses it for nobody until you approve it.
                   </span>
                 </span>
               </label>

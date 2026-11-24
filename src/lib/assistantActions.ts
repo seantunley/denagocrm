@@ -894,7 +894,7 @@ export function quoteAddText(lines: readonly QuoteBuildLine[], fees: readonly Qu
   ].join("\n");
 }
 
-export const STALE_CARD ="This changed since DAX suggested it — ask again to see where it stands now.";
+export const STALE_CARD ="This changed since the assistant suggested it — ask again to see where it stands now.";
 
 export type NewCustomer = { firstName: string; lastName: string | null; company: string | null; phone: string | null; email: string | null };
 /** The ONE record a file is filed on — the documents form's own four (a deal's file goes on its customer). */

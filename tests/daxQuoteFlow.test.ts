@@ -129,7 +129,7 @@ test("DAX sees every value a quote it proposes needs, and proposes nothing the s
   // before the customer record: the product on sale, the colour configured for it.
   assert.match(quotes, /return \{ ok: false, error: "A product on this quote is no longer available\." \}/);
   assert.match(quotes, /is not configured for this product\.` \}/);
-  assert.ok(run.indexOf("The catalogue changed since DAX suggested this") < run.indexOf("convertLeadToContact("));
+  assert.ok(run.indexOf("The catalogue changed since the assistant suggested this") < run.indexOf("convertLeadToContact("));
   assert.ok(run.indexOf("if (lines.some(notOffered)) return untouched(") < run.indexOf("convertLeadToContact("));
 });
 

@@ -278,10 +278,10 @@ export default async function platformIntegrationRows({ xAccountId }: { xAccount
       <>
         <p className="text-xs text-muted-foreground mb-4">
           The customer chatbot, invoice reading, the ✨ message check, voice-note replies, spam screening and 🔎 research
-          run on the model chosen here. A ChatGPT model runs on your subscription, with no per-use cost, and is DAX&apos;s
+          run on the model chosen here. A ChatGPT model runs on your subscription, with no per-use cost, and is the assistant&apos;s
           model too. A Claude model is paid per use from Anthropic credit. Either way, quick and automatic jobs (chatbot
           replies, spam screening, the automatic lead research) stay on a quick, low-cost model ({CODEX_QUICK_MODEL} or
-          Claude Haiku); the model chosen here runs the jobs someone asks for. DAX always uses ChatGPT. If ChatGPT
+          Claude Haiku); the model chosen here runs the jobs someone asks for. The assistant always uses ChatGPT. If ChatGPT
           isn&apos;t connected the AI is off — it never moves to paid Claude credit by itself.
         </p>
         <SaveForm resetOnSuccess={false} action={saveAiModel} className="flex gap-2 items-end">
@@ -367,7 +367,7 @@ export default async function platformIntegrationRows({ xAccountId }: { xAccount
       body: (
       <>
         <p className="text-xs text-muted-foreground mb-4">
-          DAX, the customer chatbot and the other AI helpers run on your ChatGPT Plus or Pro plan instead of paying per
+          The assistant, the customer chatbot and the other AI helpers run on your ChatGPT Plus or Pro plan instead of paying per
           token (unless &quot;Which AI the CRM uses&quot; is set to a Claude model). Sign in once with your ChatGPT account.
         </p>
         <div className="space-y-3">
@@ -377,7 +377,7 @@ export default async function platformIntegrationRows({ xAccountId }: { xAccount
             <SaveForm resetOnSuccess={false} action={saveSetting} className="flex gap-2 items-end">
               <input type="hidden" name="key" value="CODEX_MODEL" />
               <div className="flex-1">
-                <label className="label" htmlFor="codex-model">DAX and research model</label>
+                <label className="label" htmlFor="codex-model">Assistant and research model</label>
                 <select id="codex-model" name="value" className="input font-mono" defaultValue={chatGpt.model}>
                   {catalog.chatgpt.map((choice) => (
                     <option key={choice.id} value={choice.id}>{choice.label}</option>
@@ -390,7 +390,7 @@ export default async function platformIntegrationRows({ xAccountId }: { xAccount
           {chatGpt.state === "connected" && chatGpt.switched && (
             <p className="text-xs text-amber-300" role="status">
               ChatGPT refused <span className="font-mono">{chatGpt.switched.from}</span> on{" "}
-              {new Date(chatGpt.switched.at).toLocaleDateString("en-ZA", { day: "numeric", month: "short", year: "numeric" })}, so DAX switched
+              {new Date(chatGpt.switched.at).toLocaleDateString("en-ZA", { day: "numeric", month: "short", year: "numeric" })}, so the assistant switched
               to <span className="font-mono">{chatGpt.switched.to}</span> to keep working. Choose another model{aiChosen === "claude" ? " above" : " under “Which AI the CRM uses”"} if you prefer.
             </p>
           )}
@@ -457,7 +457,7 @@ export default async function platformIntegrationRows({ xAccountId }: { xAccount
             <input type="hidden" name="key" value={PRONUNCIATIONS_KEY} />
             <label className="label">How to say names (one per line: word = how to say it)</label>
             <textarea name="value" rows={4} className="input font-mono text-xs" defaultValue={setting(PRONUNCIATIONS_KEY)} placeholder={"Nguyen = Win\nTokai = Toh-KAI"} />
-            <p className="text-xs text-muted-foreground">Used whenever DAX or the chatbot speaks, and to help transcribe voice notes with these words spelt right.</p>
+            <p className="text-xs text-muted-foreground">Used whenever the assistant or the chatbot speaks, and to help transcribe voice notes with these words spelt right.</p>
             <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
           </SaveForm>
           <SaveForm resetOnSuccess={false} action={saveSetting} className="flex items-start gap-2">

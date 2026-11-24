@@ -165,7 +165,7 @@ export function listedBlock(slots: ListedSlot[], question: string): string {
   if (!slots.length) return "";
   const ref = resolveReference(question, slots);
   return [
-    `The records DAX's earlier answer listed, in the order the person saw them. "The fourth one", "her other quote", "same for the next one" point here:`,
+    `The records your earlier answer listed, in the order the person saw them. "The fourth one", "her other quote", "same for the next one" point here:`,
     ...slots.map((slot, i) => line({ place: i + 1, slot })),
     ref ? referenceLine(ref, slots.length) : "",
     "Before using one, look it up again (lead_brief with its id; a quote by its number with find_quotes) — this list is from earlier, and only a fresh lookup shows what is true now. Keep what the person already said (colour, date, wording). If two records genuinely fit what they said, ask one specific question naming both instead of guessing.",

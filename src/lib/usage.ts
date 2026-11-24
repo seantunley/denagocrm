@@ -24,7 +24,10 @@ export async function recordChatGptUsage(job: string, tokens: number, tenantId?:
 /** This month's ChatGPT tokens by job, most first. */
 export async function chatGptUsageByJob(tenantId: string, month: string): Promise<{ job: string; tokens: number }[]> {
   const rows = await basePrisma.usageCounter.findMany({ where: { tenantId, month, meter: { startsWith: CHATGPT_JOB_PREFIX } } });
-  return rows.map((row) => ({ job: row.meter.slice(CHATGPT_JOB_PREFIX.length), tokens: Number(row.count) })).sort((a, b) => b.tokens - a.tokens);
+  // The stored key keeps its old job name ("DAX…") so a month's counts never split; only what is SHOWN says "Assistant".
+  return rows
+    .map((row) => ({ job: row.meter.slice(CHATGPT_JOB_PREFIX.length).replace(/^DAX\b/, "Assistant"), tokens: Number(row.count) }))
+    .sort((a, b) => b.tokens - a.tokens);
 }
 
 async function addCounts(rows: ReadonlyArray<readonly [string, number]>, tenantId?: string | null): Promise<void> {

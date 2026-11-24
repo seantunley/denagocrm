@@ -13,7 +13,7 @@ export function safeCodexError(error: string): string {
  * (Sean, 2026-10-18: "do not use ChatGPT wording, it could change the model in the future"). All in one place, so
  * a different model changes nothing a person reads.
  */
-export const AI_NOT_CONNECTED = "DAX isn't connected to an AI service yet — set it up in Settings → Integrations.";
+export const AI_NOT_CONNECTED = "The assistant isn't connected to an AI service yet — set it up in Settings → Integrations.";
 export const AI_BUSY = "I couldn't answer just now — the AI service is busy or over its usage limit. Try again in a few minutes.";
 export const AI_FAILED = "I couldn't answer just now — the AI service didn't respond. Try again in a few minutes.";
 

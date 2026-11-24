@@ -83,7 +83,7 @@ export const MODULE_REGISTRY: AppModule[] = [
   {
     id: "warranty",
     label: "Warranty",
-    description: "Warranty cover on each vehicle, claims, recalls and warranty certificates. Off: everything warranty is hidden from the CRM, the portal and DAX; the records are kept.",
+    description: "Warranty cover on each vehicle, claims, recalls and warranty certificates. Off: everything warranty is hidden from the CRM, the portal and the assistant; the records are kept.",
     // Sean, 2026-11-21: "Warranty must be a completely separate module". Built on vehicles.
     requires: "automotive",
     routePrefixes: ["/warranty"],

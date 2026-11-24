@@ -35,8 +35,8 @@ export default function TriageBoard({ run }: { run: Run | null }) {
   if (!run) {
     return (
       <div className="card space-y-3 p-5">
-        <p className="text-sm text-muted-foreground">DAX reads the deals that need you — the same list as the Attention Centre — and prepares what to do about each. It takes a minute.</p>
-        <button type="button" className="btn-primary" disabled={pending} onClick={prepare}>{pending ? "DAX is going through them…" : "Prepare"}</button>
+        <p className="text-sm text-muted-foreground">The assistant reads the deals that need you — the same list as the Attention Centre — and prepares what to do about each. It takes a minute.</p>
+        <button type="button" className="btn-primary" disabled={pending} onClick={prepare}>{pending ? "Going through them…" : "Prepare"}</button>
       </div>
     );
   }
@@ -73,7 +73,7 @@ export default function TriageBoard({ run }: { run: Run | null }) {
               {run.repliedSince.includes(item.leadId) && <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] text-emerald-400">Replied since</span>}
             </div>
             <ul className="list-disc pl-5 text-xs text-muted-foreground">{item.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>
-            {item.why && <p className="text-sm"><span className="font-medium">DAX: </span>{item.why}</p>}
+            {item.why && <p className="text-sm"><span className="font-medium">Why: </span>{item.why}</p>}
             {item.cards.length === 0 && <p className="text-xs text-muted-foreground">Nothing proposed — open the deal to decide.</p>}
             {item.cards.map(({ card, status, result }) => (
               <div key={card.id} className="rounded-xl border border-border p-3">
