@@ -25,6 +25,7 @@ import { parseModuleCsv } from "@/lib/modules/entitlement";
 import { brandFromRow, brandLogoUrl } from "@/lib/tenantBrand";
 import { parseLoginLook } from "@/lib/loginLook";
 import LoginLookEditor from "@/components/branding/LoginLookEditor";
+import { signInLinkFor } from "@/lib/signInWorkspace";
 import { savePlatformLoginLookAction } from "@/app/actions/loginLook";
 import {
   setTenantBrandAction,
@@ -143,6 +144,7 @@ export default async function TenantProfilePage({
     },
   });
   if (!tenant) notFound();
+  const signInLink = await signInLinkFor(tenant);
 
   // What the login page will actually render for this tenant — resolved through
   // the same brandFromRow the page itself uses, so the preview cannot drift from
@@ -644,7 +646,11 @@ export default async function TenantProfilePage({
                 <div className="card p-5 lg:col-span-2">
                   <h2 className="font-semibold">Sign-in screen</h2>
                   <p className="mb-4 mt-0.5 text-xs text-muted-foreground">
-                    How this workspace&apos;s sign-in page greets staff on a verified hostname. Its owner can also edit this.
+                    How this workspace&apos;s sign-in page greets staff. Its owner can also edit this.
+                  </p>
+                  <p className="mb-4 text-xs">
+                    Sign-in link:{" "}
+                    <a href={signInLink} className="font-mono text-primary hover:underline" target="_blank" rel="noreferrer">{signInLink}</a>
                   </p>
                   <LoginLookEditor
                     action={savePlatformLoginLookAction.bind(null, tenant.id)}
