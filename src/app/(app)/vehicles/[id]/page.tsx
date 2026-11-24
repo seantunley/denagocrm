@@ -66,7 +66,9 @@ export default async function VehicleDetailPage({
   });
   if (!vehicle) notFound();
   const currentUser = await requireUser();
-  const canManageChecklists = await hasPermission(currentUser, "vehicles.manage");
+  // Edit, delete, service, mileage and battery forms all need vehicles.manage; read-only viewers see the history only.
+  const canManage = await hasPermission(currentUser, "vehicles.manage");
+  const canOpenJobCard = await hasPermission(currentUser, "jobcards.manage");
   // The Warranty module on, and the warranty grant (lib/warrantyAccess.ts): its cover, claims and battery hint.
   const canSeeWarranty = await hasAnyPermission(currentUser, ...WARRANTY_READ);
   // Its warranty part by part, and who may change it (lib/warrantyParts.ts).
@@ -77,7 +79,7 @@ export default async function VehicleDetailPage({
   // The filed certificate; Send only while it is current (lib/warrantyCertificateState.ts).
   const filedCertificate = vehicle.documents.find((d) => d.tag === CERTIFICATE_TAG && !d.replacedById) ?? null;
   const checklistTenantId = vehicle.tenantId ?? "";
-  const [conditionTemplates, conditionRuns] = canManageChecklists && checklistTenantId
+  const [conditionTemplates, conditionRuns] = canManage && checklistTenantId
     ? await Promise.all([
         templatesForHostRecord("vehicle.condition", vehicle.id),
         runsForHost("vehicle.condition", vehicle.id),
@@ -107,20 +109,26 @@ export default async function VehicleDetailPage({
         { label: "Job cards", value: vehicle.jobCards.length },
       ]}
       actions={<>
-          <Link
-            href={`/jobcards/new?vehicleId=${vehicle.id}`}
-            className="btn-primary"
-          >
-            + Job card
-          </Link>
-          <Link href={`/vehicles/${vehicle.id}/edit`} className="btn-secondary">
-            Edit
-          </Link>
-          <ConfirmDelete
-            action={deleteVehicle.bind(null, vehicle.id)}
-            title={`Delete vehicle ${vehicle.model}?`}
-            description="The vehicle (with its service history and job cards) moves to the Trash and can be restored for 60 days."
-          />
+          {canOpenJobCard && (
+            <Link
+              href={`/jobcards/new?vehicleId=${vehicle.id}`}
+              className="btn-primary"
+            >
+              + Job card
+            </Link>
+          )}
+          {canManage && (
+            <>
+              <Link href={`/vehicles/${vehicle.id}/edit`} className="btn-secondary">
+                Edit
+              </Link>
+              <ConfirmDelete
+                action={deleteVehicle.bind(null, vehicle.id)}
+                title={`Delete vehicle ${vehicle.model}?`}
+                description="The vehicle (with its service history and job cards) moves to the Trash and can be restored for 60 days."
+              />
+            </>
+          )}
         </>}
     >
 
@@ -176,16 +184,16 @@ export default async function VehicleDetailPage({
           hostId={vehicle.id}
           templates={conditionTemplates}
           runs={conditionRuns}
-          canCapture={canManageChecklists}
+          canCapture={canManage}
         />
       )}
 
       <div className="grid lg:grid-cols-2 gap-6 items-start">
         <div className="space-y-6">
-          <CustomFieldsCard entity="vehicle" recordId={vehicle.id} readOnly={!canManageChecklists} />
+          <CustomFieldsCard entity="vehicle" recordId={vehicle.id} readOnly={!canManage} />
           <div className="card">
             <h2 className="font-semibold mb-4">Service history</h2>
-            <form
+            {canManage && <form
               action={addServiceRecord.bind(null, vehicle.id)}
               className="mb-4 space-y-3 rounded-lg bg-slate-800/40 p-4 border border-slate-800"
             >
@@ -216,7 +224,7 @@ export default async function VehicleDetailPage({
                 </div>
               </div>
               <button className="btn-primary btn-sm">Add service record</button>
-            </form>
+            </form>}
 
             {vehicle.serviceRecords.length === 0 ? (
               <p className="text-sm text-slate-400">No services recorded.</p>
@@ -241,7 +249,7 @@ export default async function VehicleDetailPage({
                       {s.nextDueKm != null ? ` at ${s.nextDueKm.toLocaleString()} km` : ""}
                       {s.jobCard ? ` · Job card #${s.jobCard.number}` : ""}
                     </p>
-                    <div className="absolute right-0 top-0 opacity-0 group-hover:opacity-100">
+                    {canManage && <div className="absolute right-0 top-0 opacity-0 group-hover:opacity-100">
                       <ConfirmDelete
                         action={deleteServiceRecord.bind(null, s.id, vehicle.id)}
                         title={`Delete service record “${s.summary}”?`}
@@ -249,7 +257,7 @@ export default async function VehicleDetailPage({
                         trigger="✕"
                         triggerClass="text-xs text-slate-600 hover:text-red-500 cursor-pointer"
                       />
-                    </div>
+                    </div>}
                   </li>
                 ))}
               </ol>
@@ -297,7 +305,7 @@ export default async function VehicleDetailPage({
           <VehicleOwnershipSection user={currentUser} vehicle={vehicle} openTransfer={transfer === "1"} />
           <div className="card">
             <h2 className="font-semibold mb-4">Mileage log</h2>
-            <form action={addMileage.bind(null, vehicle.id)} className="flex gap-2 mb-4">
+            {canManage && <form action={addMileage.bind(null, vehicle.id)} className="flex gap-2 mb-4">
               <input
                 type="number"
                 name="km"
@@ -307,7 +315,7 @@ export default async function VehicleDetailPage({
               />
               <input name="note" className="input flex-1" placeholder="Note (optional)" />
               <button className="btn-primary btn-sm">Log</button>
-            </form>
+            </form>}
             {vehicle.mileageLogs.length === 0 ? (
               <p className="text-sm text-slate-400">No readings yet.</p>
             ) : (
@@ -370,7 +378,7 @@ export default async function VehicleDetailPage({
                     </div>
                   </div>
                 )}
-                <form
+                {canManage && <form
                   action={addBatteryCheck.bind(null, vehicle.id)}
                   className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4"
                 >
@@ -380,7 +388,7 @@ export default async function VehicleDetailPage({
                   <input name="packSerial" className="input" placeholder="Pack serial" />
                   <input name="notes" className="input col-span-2 sm:col-span-3" placeholder="Notes (optional)" />
                   <button className="btn-primary btn-sm">Log check</button>
-                </form>
+                </form>}
                 {checks.length === 0 ? (
                   <p className="text-sm text-slate-400">
                     No battery checks yet — log state-of-health at each service to build a trend.
@@ -415,13 +423,13 @@ export default async function VehicleDetailPage({
                               .join(" · ")}
                           </span>
                           <span className="text-xs text-slate-400">{formatDate(b.checkedAt)}</span>
-                          <ConfirmDelete
+                          {canManage && <ConfirmDelete
                             action={deleteBatteryCheck.bind(null, b.id)}
                             title={`Delete the battery check from ${formatDate(b.checkedAt)}?`}
                             description="This reading is permanently removed — it does not go to Trash."
                             trigger="✕"
                             triggerClass="text-xs text-red-400 hover:text-red-300"
-                          />
+                          />}
                         </li>
                       );
                     })}
@@ -463,7 +471,7 @@ export default async function VehicleDetailPage({
                     — see Ownership.
                   </p>
                 )}
-                <form action={addWarrantyClaim.bind(null, vehicle.id)} className="flex gap-2 mb-4">
+                {canManageWarranty && <form action={addWarrantyClaim.bind(null, vehicle.id)} className="flex gap-2 mb-4">
                   <input
                     name="description"
                     className="input flex-1"
@@ -471,7 +479,7 @@ export default async function VehicleDetailPage({
                     required
                   />
                   <button className="btn-primary btn-sm">Log claim</button>
-                </form>
+                </form>}
                 {claims.length === 0 ? (
                   <p className="text-sm text-slate-400">No warranty claims.</p>
                 ) : (
@@ -490,7 +498,7 @@ export default async function VehicleDetailPage({
                         {c.resolution && (
                           <p className="text-xs text-slate-500 mt-1">Resolution: {c.resolution}</p>
                         )}
-                        <div className="flex gap-2 mt-1.5 items-center">
+                        {canManageWarranty && <div className="flex gap-2 mt-1.5 items-center">
                           <SaveForm
                             action={setWarrantyClaimStatus.bind(null, c.id)}
                             resetOnSuccess={false}
@@ -522,7 +530,7 @@ export default async function VehicleDetailPage({
                             trigger="✕"
                             triggerClass="text-xs text-red-400 hover:text-red-300"
                           />
-                        </div>
+                        </div>}
                       </li>
                     ))}
                   </ul>

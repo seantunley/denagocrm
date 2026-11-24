@@ -6,7 +6,7 @@ import { sendToAudience, type SendResult } from "@/app/actions/surveys";
 const SEGMENTS = [
   { id: "test", label: "Send a test to myself" },
   { id: "customers", label: "All customers (reachable, not opted out)" },
-  { id: "vehicle_owners", label: "Cart owners (have a vehicle on file)" },
+  { id: "vehicle_owners", label: "Vehicle owners (have a vehicle on file)" },
   { id: "won_leads", label: "Customers who bought (won deals)" },
 ];
 

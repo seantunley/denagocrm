@@ -19,8 +19,8 @@ export default async function AssistantGoalsCard({ userId, name }: { userId: str
     <section className="card space-y-3 p-4 text-sm">
       <h2 className="font-medium">🚚 Following</h2>
       <p className="text-muted-foreground">
-        Ask {name} to keep an eye on a delivery until it&apos;s done: deposit, invoice, cart prep, booking, handover. It tells you the next
-        blocker, says when it stalls, and stops its own reminders once the cart is delivered. It never contacts the customer. Updates come the
+        Ask {name} to keep an eye on a delivery until it&apos;s done: deposit, invoice, vehicle prep, booking, handover. It tells you the next
+        blocker, says when it stalls, and stops its own reminders once the vehicle is delivered. It never contacts the customer. Updates come the
         way proactive DAX&apos;s do, so switch that on for yourself first.
       </p>
       {automotive && (

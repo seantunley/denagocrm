@@ -100,13 +100,13 @@ function definitions(tags: Option[], products: Option[]): FieldDefinition[] {
   return [
     { value: "province", label: "Province", kind: "select", options: PROVINCES.map((value) => ({ value, label: value })), help: "Customer province" },
     { value: "source", label: "Lead source", kind: "select", options: SOURCES.map((value) => ({ value, label: title(value) })), help: "Where the customer originally came from" },
-    { value: "tag", label: "Customer tag", kind: "select", options: tags.map((tag) => ({ value: tag.id, label: tag.name })), help: "Only tags owned by this tenant are offered" },
+    { value: "tag", label: "Customer tag", kind: "select", options: tags.map((tag) => ({ value: tag.id, label: tag.name })), help: "Your workspace's customer tags" },
     { value: "has_vehicle", label: "Owns a vehicle", kind: "boolean", help: "Has at least one active vehicle record" },
     { value: "vehicle_model", label: "Vehicle model", kind: "text", options: products.map((product) => ({ value: product.name, label: product.name })), help: "Vehicle model recorded against the customer" },
     { value: "bought_before", label: "Bought before", kind: "boolean", help: "Has a won opportunity" },
     { value: "service_due", label: "Service due", kind: "boolean", help: "Has a vehicle due soon or overdue for service" },
     { value: "lead_status", label: "Lead status", kind: "select", options: LEAD_STATUSES.map((value) => ({ value, label: title(value) })), help: "Status of any linked opportunity" },
-    { value: "product_interest", label: "Product interest", kind: "select", options: products.map((product) => ({ value: product.id, label: product.name })), help: "Only products owned by this tenant are offered" },
+    { value: "product_interest", label: "Product interest", kind: "select", options: products.map((product) => ({ value: product.id, label: product.name })), help: "Your workspace's active products" },
     { value: "created_date", label: "Customer created date", kind: "date", help: "When the customer record was created" },
     { value: "email_available", label: "Has email address", kind: "boolean", help: "An email address is available" },
     { value: "phone_available", label: "Has phone / WhatsApp", kind: "boolean", help: "A phone or WhatsApp number is available" },
@@ -267,7 +267,7 @@ export default function AudienceWorkspace({ audiences, tags, products }: { audie
             <span className="grid size-10 place-items-center rounded-xl border border-primary/20 bg-primary/10 text-primary"><UsersRound className="size-4" /></span>
             <div>
               <h2 className="font-semibold">Audience builder</h2>
-              <p className="text-xs text-muted-foreground">Build reusable customer groups without writing rule JSON.</p>
+              <p className="text-xs text-muted-foreground">Pick the rules; the group updates as your customers change.</p>
             </div>
           </div>
           {!editor && <button type="button" className="btn-primary" onClick={openNew}><Plus className="size-4" /> New audience</button>}
@@ -373,7 +373,7 @@ export default function AudienceWorkspace({ audiences, tags, products }: { audie
 
       <details className="card group">
         <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-sm font-medium"><span className="flex items-center gap-2"><Braces className="size-4 text-muted-foreground" /> About audience rules</span><ChevronDown className="size-4 transition-transform group-open:rotate-180" /></summary>
-        <p className="mt-3 text-xs leading-5 text-muted-foreground">The visual builder stores the same versioned rule-tree format used by the campaign engine. Server validation remains authoritative for permissions, tenant ownership, referenced tag/product IDs and marketing consent.</p>
+        <p className="mt-3 text-xs leading-5 text-muted-foreground">Every save keeps a new version of the audience. When a campaign is scheduled, its audience is worked out again on the server: only your workspace&apos;s customers, tags and products count, and anyone who has opted out of marketing is always left out.</p>
       </details>
     </div>
   );

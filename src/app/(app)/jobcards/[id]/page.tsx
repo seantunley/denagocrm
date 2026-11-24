@@ -375,7 +375,7 @@ export default async function JobCardDetailPage({
               <label className="label">Labour estimate</label>
               <div className="grid grid-cols-2 gap-2">
                 <input name="estimatedHours" inputMode="decimal" className="input tabular-nums" placeholder="Hours" defaultValue={jobCard.estimatedHours ?? ""} />
-                <input name="labourRate" inputMode="decimal" className="input tabular-nums" placeholder={`R${(defaultRateCents / 100).toFixed(0)}/h`} defaultValue={jobCard.labourRateCents != null ? (jobCard.labourRateCents / 100).toFixed(2) : ""} />
+                <input name="labourRate" inputMode="decimal" className="input tabular-nums" placeholder={`${currencySymbol(moneyFmt)}${(defaultRateCents / 100).toFixed(0)}/h`} defaultValue={jobCard.labourRateCents != null ? (jobCard.labourRateCents / 100).toFixed(2) : ""} />
               </div>
               <SaveButton className="btn-secondary btn-sm">Save estimate</SaveButton>
             </SaveForm>

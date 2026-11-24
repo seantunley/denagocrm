@@ -55,7 +55,7 @@ async function audienceLabel(criteria: SegmentCriteria, tenantId: string): Promi
     parts.push(`tag: ${tag?.name ?? "?"}`);
   }
   if (criteria.province) parts.push(criteria.province);
-  if (criteria.hasVehicle) parts.push("cart owners");
+  if (criteria.hasVehicle) parts.push("vehicle owners");
   if (criteria.serviceDue) parts.push("service due");
   if (criteria.wonOnly) parts.push("customers");
   return parts.length ? parts.join(" · ") : "All customers";

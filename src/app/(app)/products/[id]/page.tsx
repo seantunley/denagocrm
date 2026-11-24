@@ -35,7 +35,7 @@ export default async function ProductDetailPage({
   const { id } = await params;
   const product = await prisma.product.findUnique({
     where: { id },
-    include: { colors: true, _count: { select: { leads: true, vehicles: true } } },
+    include: { colors: true, _count: { select: { leads: { where: { status: "open" } }, vehicles: true } } },
   });
   if (!product) notFound();
 
@@ -53,7 +53,7 @@ export default async function ProductDetailPage({
       backLabel="Products"
       eyebrow="Product catalogue"
       title={product.name}
-      status={<StatusPill tone={product.active ? "success" : "neutral"}>{product.active ? "Active" : "Inactive"}</StatusPill>}
+      status={<StatusPill tone={product.active ? "success" : "neutral"}>{product.active ? "Active" : "Archived"}</StatusPill>}
       description={product.sku ? `SKU ${product.sku}` : "No SKU recorded"}
       facts={[
         { label: "Base price", value: formatZAR(product.basePriceCents, moneyFmt) },

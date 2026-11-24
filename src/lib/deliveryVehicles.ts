@@ -98,7 +98,7 @@ export function notReadyMessage(
       return `${name} (${NOT_READY_REASON[unit.status] ?? unit.status.replaceAll("_", " ")})`;
     })
     .join(", ");
-  return `Q-${quoteNumber} can't be delivered yet — ${units.length === 1 ? "this cart is" : "these carts are"} not ready: ${list}. Complete PDI (or resolve the hold) on the stock page first. Nothing was changed.`;
+  return `Q-${quoteNumber} can't be delivered yet — ${units.length === 1 ? "this unit is" : "these units are"} not ready: ${list}. Complete PDI (or resolve the hold) on the stock page first. Nothing was changed.`;
 }
 
 /**

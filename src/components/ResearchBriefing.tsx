@@ -60,7 +60,7 @@ export const __parseBriefingForTests = parseBriefing;
 const ROWS = [
   { key: "company" as const, label: "Company", icon: Building2 },
   { key: "role" as const, label: "Role", icon: UserRound },
-  { key: "fit" as const, label: "Why an electric cart", icon: Sparkles },
+  { key: "fit" as const, label: "Why they'd buy", icon: Sparkles },
 ];
 
 /**

@@ -61,7 +61,7 @@ export function surveyTypeLabel(type: string): string {
 export const TRIGGERS: { id: string; label: string }[] = [
   { id: "", label: "Manual only — I'll send it myself" },
   { id: "job_complete", label: "Automatically when a job card is completed" },
-  { id: "delivery", label: "Automatically when a cart is delivered" },
+  { id: "delivery", label: "Automatically when a vehicle is delivered" },
   { id: "won", label: "Automatically when a deal is won" },
 ];
 

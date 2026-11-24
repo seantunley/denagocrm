@@ -20,7 +20,7 @@ export type GoalStep = (typeof GOAL_STEPS)[number];
 export const STEP_DONE: Record<GoalStep, string> = {
   deposit: "Deposit paid",
   documents: "Invoice issued",
-  prep: "Cart allocated and PDI passed",
+  prep: "Vehicle allocated and PDI passed",
   booking: "Delivery booked",
   delivered: "Delivered",
 };
@@ -100,7 +100,7 @@ export function blockerText(step: GoalStep, f: GoalFacts): string {
   switch (step) {
     case "deposit": return "the deposit";
     case "documents": return "the invoice";
-    case "prep": return f.stock.length ? "the PDI on the cart" : "a cart to be allocated";
+    case "prep": return f.stock.length ? "the PDI on the vehicle" : "a vehicle to be allocated";
     case "booking": return "a delivery date";
     case "delivered": return f.deliveryScheduledFor ? `the handover (booked for ${saDay(f.deliveryScheduledFor)})` : "the handover";
   }
@@ -111,7 +111,7 @@ export function whatToDo(step: GoalStep): string {
   switch (step) {
     case "deposit": return "If the customer needs a nudge, message them from the deal — I won't contact them. Mark it paid on the Deliveries board once it's in.";
     case "documents": return "Issue the invoice on the Deliveries board.";
-    case "prep": return "Allocate the cart and complete its PDI on the Stock page.";
+    case "prep": return "Allocate the vehicle and complete its PDI on the Stock page.";
     case "booking": return "Book the delivery on the Deliveries board.";
     case "delivered": return "Mark it delivered on the Deliveries board once it's handed over, or rebook it.";
   }

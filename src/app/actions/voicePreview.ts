@@ -9,9 +9,9 @@ import { ASSISTANT_PROFILE_KEY, parseProfile } from "@/lib/assistantSoul";
 
 /** What the sample says — written as DAX would write it, so the preview also shows what the spoken clean-up does. */
 const SAMPLE = (name: string) =>
-  `Hi, it's ${name}. Q-1030 for the Rover XL is ready: R 185 000,00, valid until Fri 6 Nov. Shall I send you the PDF?`;
+  `Hi, it's ${name}. Q-1030 for the Model 300 is ready: R 185 000,00, valid until Fri 6 Nov. Shall I send you the PDF?`;
 const SAMPLE_AF = (name: string) =>
-  `Hallo, dis ${name}. Die kwotasie vir die Rover XL is gereed. Moet ek vir jou die PDF stuur?`;
+  `Hallo, dis ${name}. Die kwotasie vir die Model 300 is gereed. Moet ek vir jou die PDF stuur?`;
 
 /**
  * ▶ Play a sample, in Settings → Integrations → ElevenLabs (Sean, 2026-11-02: choose a voice by ear). The OWNER

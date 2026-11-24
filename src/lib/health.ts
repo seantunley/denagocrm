@@ -26,10 +26,10 @@ export function computeHealth(input: HealthInput, now = new Date()): HealthResul
 
   if (input.cartCount >= 2) {
     score += 20;
-    reasons.push(`Owns ${input.cartCount} carts`);
+    reasons.push(`Owns ${input.cartCount} vehicles`);
   } else if (input.cartCount === 1) {
     score += 12;
-    reasons.push("Cart owner");
+    reasons.push("Vehicle owner");
   }
 
   if (input.lastServiceAt) {

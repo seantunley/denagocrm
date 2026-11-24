@@ -431,7 +431,8 @@ export async function inspectReceivedUnit(id: string, formData: FormData) {
           serial,
           stockNumber,
           location: str(formData.get("location")) || null,
-          notes: conditionNote,
+          // Added under the unit's own notes, never in place of them (a blank condition note used to wipe them).
+          notes: conditionNote ? [current.notes, `On arrival: ${conditionNote}`].filter(Boolean).join("\n\n") : current.notes,
           condition: accepted ? "new" : "damaged",
           landedCostCents: current.landedCostCents === 0 ? current.costCents : current.landedCostCents,
         },
