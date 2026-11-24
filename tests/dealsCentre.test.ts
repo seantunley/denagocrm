@@ -82,7 +82,8 @@ test("the loader reads the quote list's own scope and the canonical money rules"
   // RBAC + search + current revisions only (supersededAt: null) — the quotes list's own filter.
   assert.match(loader, /const \{ where: scope \} = await quoteListFilter\(user, \{ q \}\)/);
   // Every in-play view, count and card is a cut of ONE read, under the quote list's scope.
-  assert.match(loader, /const inPlay = await readRows\(\{ AND: \[scope, IN_PLAY\] \}, financeOn\)/);
+  assert.match(loader, /const inPlay = await readRows\(\{ AND: \[scope, IN_PLAY\] \}, ctx\)/);
+  assert.match(loader, /const ctx: RowContext = \{ financeOn, lifecycle: await getDealLifecycle\(\) \}/);
   // Finance and payments are read only for the quotes this person may see, in the acting workspace —
   // never a platform-wide read (review of #1228: enforcement may be off).
   assert.match(loader, /prisma\.dealFinance\.findMany\(\{\s*where: \{ tenantId, quoteId: \{ in: ids \} \}/);

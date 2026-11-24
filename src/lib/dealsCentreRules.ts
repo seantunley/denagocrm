@@ -1,5 +1,5 @@
 /** The Deals Centre's views and totals (brief §3). Pure — dealsCentre.ts loads, this decides. */
-import type { Blocker, BlockerKey } from "./dealMilestones";
+import { AUTOMOTIVE_LIFECYCLE, type Blocker, type BlockerKey, type Lifecycle } from "./dealMilestones";
 
 export const DEALS_VIEWS = [
   { key: "active", label: "Active", hint: "Quotes out with the customer and accepted deals not delivered yet." },
@@ -18,15 +18,19 @@ export function dealsView(show: string | undefined, financeOn: boolean): DealsVi
   return found?.key ?? "active";
 }
 
-/** The blockers panel: each kind, what it means, and where it is fixed. */
-export const BLOCKER_INFO: Record<BlockerKey, { title: string; detail: string; action?: { label: string; href: string } }> = {
-  accept: { title: "Not accepted yet", detail: "Quotes with the customer, waiting for a signature." },
-  deposit: { title: "Deposit not received", detail: "The deposit the quote asks for has not come in.", action: { label: "Delivery board", href: "/deliveries" } },
-  finance: { title: "Finance approval pending", detail: "The finance house has not approved — delivery is held.", action: { label: "Finance", href: "/finance" } },
-  stock: { title: "Stock not allocated", detail: "No unit sold or reserved against the deal.", action: { label: "Stock", href: "/stock" } },
-  pdi: { title: "PDI incomplete", detail: "An allocated unit has not passed pre-delivery inspection.", action: { label: "Stock", href: "/stock" } },
-  delivery: { title: "Delivery not booked", detail: "No delivery date set with the customer.", action: { label: "Delivery board", href: "/deliveries" } },
-};
+/** The blockers panel: each kind, in the workspace's own words, what it means, and where it is fixed. */
+export function blockerInfo(lifecycle: Lifecycle = AUTOMOTIVE_LIFECYCLE): Record<BlockerKey, { title: string; detail: string; action?: { label: string; href: string } }> {
+  const l = lifecycle.labels;
+  const lower = (s: string) => s.toLowerCase();
+  return {
+    accept: { title: `Not ${lower(l.accepted)} yet`, detail: `${l.quote}s with the customer, waiting for a signature.` },
+    deposit: { title: `${l.deposit} not received`, detail: `The ${lower(l.deposit)} the ${lower(l.quote)} asks for has not come in.`, action: { label: "Delivery board", href: "/deliveries" } },
+    finance: { title: "Finance approval pending", detail: `The finance house has not approved — ${lower(l.delivery)} is held.`, action: { label: "Finance", href: "/finance" } },
+    stock: { title: `${l.stock} not allocated`, detail: "No unit sold or reserved against the deal.", action: { label: "Stock", href: "/stock" } },
+    pdi: { title: `${l.pdi} incomplete`, detail: "An allocated unit has not passed pre-delivery inspection.", action: { label: "Stock", href: "/stock" } },
+    delivery: { title: `${l.delivery} not booked`, detail: `No ${lower(l.delivery)} date set with the customer.`, action: { label: "Delivery board", href: "/deliveries" } },
+  };
+}
 
 export type DealRow = {
   id: string;

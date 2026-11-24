@@ -39,6 +39,19 @@ export const dealsCentreArticles: HelpArticle[] = [
       { type: "callout", tone: "info", text: "Amounts in different currencies are never added together: each currency gets its own totals card." },
       { type: "h", text: "In the way" },
       { type: "p", text: "The last column says what is stopping the deal, in order: not accepted yet, deposit not received, finance not approved (which holds delivery), no unit allocated, PDI not passed, delivery not booked. A step that does not apply — a deal that asks for no deposit — is not listed as missing." },
+      { type: "h", text: "Deal steps for your kind of business" },
+      { type: "p", text: "A workspace owner chooses the steps under **Settings → Company → Deal steps**. The choice renames the steps on the deal page and here, and leaves off the steps your business does not have. Nothing on any deal changes, so switching back restores the old view." },
+      {
+        type: "table",
+        headers: ["Choice", "Steps"],
+        rows: [
+          ["Automotive (the default)", "Quote → Accepted → Deposit → Stock → PDI → Delivery"],
+          ["Professional services", "Proposal → Engagement → Retainer → Completion"],
+          ["Wholesale", "Quote → Order confirmed → Payment → Stock → Dispatch"],
+          ["Property", "Offer → Offer accepted → Deposit → Handover"],
+        ],
+      },
+      { type: "callout", tone: "info", text: "Stock only counts when the Stock & inventory module is on, and PDI only when Automotive is on. A switched-off module never asks for a step nobody can do." },
     ],
   },
 ];

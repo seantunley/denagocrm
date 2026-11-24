@@ -2,8 +2,8 @@ import Link from "next/link";
 import { AlertTriangle, Briefcase, CalendarDays, Filter, Layers, Plus, Truck, Wallet, Zap } from "lucide-react";
 import { requireRoute } from "@/lib/permissions";
 import { loadDealsCentre } from "@/lib/dealsCentre";
-import { BLOCKER_INFO, DEALS_VIEWS, dealTotals, dealsView } from "@/lib/dealsCentreRules";
-import { BLOCKER_KEYS, DEFAULT_MILESTONE_LABELS, MILESTONE_KEYS, type BlockerKey } from "@/lib/dealMilestones";
+import { DEALS_VIEWS, blockerInfo, dealTotals, dealsView } from "@/lib/dealsCentreRules";
+import { BLOCKER_KEYS, type BlockerKey } from "@/lib/dealMilestones";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { financeStatusShort, financeTone } from "@/lib/dealFinanceRules";
 import { johannesburgStartOfDay } from "@/lib/activityDay";
@@ -34,7 +34,8 @@ export default async function DealsPage({ searchParams }: { searchParams: Promis
   const view = dealsView(params.show, await isModuleEnabled("finance"));
   const q = params.q?.trim() || undefined;
   const blocker = BLOCKER_KEYS.find((key) => key === params.blocker) as BlockerKey | undefined;
-  const [{ rows, inPlay, counts, blockers, financeOn }, regional] = await Promise.all([loadDealsCentre(user, view, { q, blocker }), getRegionalSettings()]);
+  const [{ rows, inPlay, counts, blockers, financeOn, lifecycle }, regional] = await Promise.all([loadDealsCentre(user, view, { q, blocker }), getRegionalSettings()]);
+  const BLOCKER_INFO = blockerInfo(lifecycle);
   const { page, skip, take } = pageWindow(parsePage(params.page), rows.length);
   const shown = rows.slice(skip, skip + take);
   const money = (cents: number, currency: string | null) => formatZAR(cents, withCurrency(regional, currency));
@@ -51,8 +52,9 @@ export default async function DealsPage({ searchParams }: { searchParams: Promis
   const thisWeek = inPlay
     .filter((row) => row.deliveryScheduledFor && row.deliveryScheduledFor >= johannesburgStartOfDay(now) && row.deliveryScheduledFor < weekEnd)
     .sort((a, b) => a.deliveryScheduledFor!.getTime() - b.deliveryScheduledFor!.getTime());
-  const byStep = MILESTONE_KEYS.slice(1).map((key) => {
-    const label = DEFAULT_MILESTONE_LABELS[key];
+  // The workspace's own steps (its lifecycle), after the first — a deal is never "at" the quote once it is in play.
+  const byStep = lifecycle.steps.slice(1).map((key) => {
+    const label = lifecycle.labels[key];
     const at = inPlay.filter((row) => row.milestone === label);
     return { label, count: at.length, cents: at.filter((r) => (r.currency ?? regional.currency) === regional.currency).reduce((s, r) => s + r.totalCents, 0) };
   });

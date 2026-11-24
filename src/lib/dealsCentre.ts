@@ -4,7 +4,8 @@ import { prisma } from "@/lib/db";
 import { actingTenantId } from "@/lib/actingTenant";
 import { receivedCents } from "@/lib/accountStatement";
 import { financeBlocksDelivery, financeIsClosed } from "@/lib/dealFinanceRules";
-import { currentMilestone, dealBlockers, dealMilestones, dealProgress, readyForDelivery, type BlockerKey, type DealFacts } from "@/lib/dealMilestones";
+import { currentMilestone, dealBlockers, dealMilestones, dealProgress, readyForDelivery, type BlockerKey, type DealFacts, type Lifecycle } from "@/lib/dealMilestones";
+import { getDealLifecycle } from "@/lib/dealLifecycleServer";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import type { PermissionUser } from "@/lib/permissions";
 import { payableTotalCents } from "@/lib/pricing";
@@ -59,7 +60,9 @@ const IN_PLAY: Prisma.QuoteWhereInput = { status: { in: ["sent", "accepted"] }, 
 export async function loadDealsCentre(user: PermissionUser, view: DealsView, { q, blocker }: { q?: string; blocker?: BlockerKey }) {
   const financeOn = await isModuleEnabled("finance");
   const { where: scope } = await quoteListFilter(user, { q });
-  const inPlay = await readRows({ AND: [scope, IN_PLAY] }, financeOn);
+  // The workspace's lifecycle (brief §5): its step names, and which steps its deals have.
+  const ctx: RowContext = { financeOn, lifecycle: await getDealLifecycle() };
+  const inPlay = await readRows({ AND: [scope, IN_PLAY] }, ctx);
   const [completedCount, allCount] = await Promise.all([
     prisma.quote.count({ where: { AND: [scope, { deliveredAt: { not: null } }] } }),
     prisma.quote.count({ where: scope }),
@@ -69,9 +72,9 @@ export async function loadDealsCentre(user: PermissionUser, view: DealsView, { q
   // thousands; past that, store a priced total on the quote instead.
   let rows =
     view === "completed"
-      ? await readRows({ AND: [scope, { deliveredAt: { not: null } }] }, financeOn)
+      ? await readRows({ AND: [scope, { deliveredAt: { not: null } }] }, ctx)
       : view === "all"
-        ? await readRows(scope, financeOn)
+        ? await readRows(scope, ctx)
         : inPlay.filter((row) => inView(row, view));
   if (blocker) rows = rows.filter((row) => row.blockers.some((b) => b.key === blocker));
 
@@ -80,10 +83,12 @@ export async function loadDealsCentre(user: PermissionUser, view: DealsView, { q
   counts.all = allCount;
 
   // The page pages these (listPaging), so the totals above it always cover the whole view.
-  return { rows, inPlay, counts, totals: dealTotals(rows), blockers: blockerCounts(inPlay), financeOn };
+  return { rows, inPlay, counts, totals: dealTotals(rows), blockers: blockerCounts(inPlay), financeOn, lifecycle: ctx.lifecycle };
 }
 
-async function readRows(where: Prisma.QuoteWhereInput, financeOn: boolean): Promise<DealRow[]> {
+type RowContext = { financeOn: boolean; lifecycle: Lifecycle };
+
+async function readRows(where: Prisma.QuoteWhereInput, { financeOn, lifecycle }: RowContext): Promise<DealRow[]> {
   const quotes = await prisma.quote.findMany({ where, select: SELECT, orderBy: [{ createdAt: "desc" }, { id: "desc" }] });
   const ids = quotes.map((quote) => quote.id);
   // Payments and finance only for the quotes this person may see, in this workspace —
@@ -106,10 +111,10 @@ async function readRows(where: Prisma.QuoteWhereInput, financeOn: boolean): Prom
   for (const row of finances) if (row.quoteId && !financeByQuote.has(row.quoteId)) financeByQuote.set(row.quoteId, row.status);
   const paymentsOf = new Map<string, { amountCents: number; voidedAt: Date | null }[]>();
   for (const payment of payments) paymentsOf.set(payment.quoteId, [...(paymentsOf.get(payment.quoteId) ?? []), payment]);
-  return quotes.map((quote) => toRow(quote, paymentsOf.get(quote.id) ?? [], financeByQuote.get(quote.id) ?? null));
+  return quotes.map((quote) => toRow(quote, paymentsOf.get(quote.id) ?? [], financeByQuote.get(quote.id) ?? null, lifecycle));
 }
 
-function toRow(quote: Row, payments: { amountCents: number; voidedAt: Date | null }[], financeStatus: string | null): DealRow {
+function toRow(quote: Row, payments: { amountCents: number; voidedAt: Date | null }[], financeStatus: string | null, lifecycle: Lifecycle): DealRow {
   const total = Math.round(payableTotalCents(quote));
   const accepted = quote.status === "accepted" || Boolean(quote.signedAt);
   const depositCents =
@@ -132,7 +137,7 @@ function toRow(quote: Row, payments: { amountCents: number; voidedAt: Date | nul
     financeHolds: financeStatus ? financeBlocksDelivery(financeStatus) : false,
   };
   const received = quote.status === "accepted" ? receivedCents(quote, payments) : 0;
-  const milestones = dealMilestones(facts);
+  const milestones = dealMilestones(facts, lifecycle);
   return {
     id: quote.id,
     number: quote.number,
@@ -145,11 +150,11 @@ function toRow(quote: Row, payments: { amountCents: number; voidedAt: Date | nul
     balanceCents: quote.status === "accepted" ? total - received : 0,
     financeStatus,
     financePending: Boolean(financeStatus) && !financeIsClosed(financeStatus!),
-    depositOutstanding: accepted && depositCents > 0 && !facts.depositPaid && !facts.delivered,
+    depositOutstanding: lifecycle.steps.includes("deposit") && accepted && depositCents > 0 && !facts.depositPaid && !facts.delivered,
     deliveryScheduledFor: quote.deliveryScheduledFor,
     deliveredAt: quote.deliveredAt,
-    blockers: dealBlockers(facts),
-    ready: readyForDelivery(facts),
+    blockers: dealBlockers(facts, lifecycle),
+    ready: readyForDelivery(facts, lifecycle),
     milestone: currentMilestone(milestones).label,
     progress: dealProgress(milestones),
   };

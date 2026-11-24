@@ -11,8 +11,9 @@ const page = readFileSync("src/app/(app)/deals/[id]/page.tsx", "utf8");
 const panel = readFileSync("src/components/deals/DealNextActions.tsx", "utf8");
 
 test("the journey, the step it is on and its blockers come from the shared rules, not a second copy", () => {
-  assert.match(page, /const journey = dealMilestones\(facts\)/);
-  assert.match(page, /const blockers = dealBlockers\(facts\)/);
+  // With the workspace's lifecycle (Phase 4).
+  assert.match(page, /const journey = dealMilestones\(facts, lifecycle\)/);
+  assert.match(page, /const blockers = dealBlockers\(facts, lifecycle\)/);
   assert.match(page, /financeHolds: finance \? financeBlocksDelivery\(finance\.status\) : false/);
   // The old inline journey is gone.
   assert.doesNotMatch(page, /\{ label: "Deposit", done: Boolean\(quote\.depositPaidAt\) \}/);
@@ -20,8 +21,9 @@ test("the journey, the step it is on and its blockers come from the shared rules
   assert.match(page, /skipped=\{step\.skipped\}/);
   // The readiness card reads the SAME deposit step: no deposit asked = "not needed", not a failed row
   // (review of #1230), and no "No deposit receipt recorded" for a deal that never asked for one.
-  assert.match(page, /const depositStep = journey\.find\(\(step\) => step\.key === "deposit"\)!/);
-  assert.match(page, /skipped=\{depositStep\.skipped\} label="Deposit received"/);
+  // #1231: the row's words are the lifecycle's own, and a lifecycle without a deposit step has no row.
+  assert.match(page, /const depositStep = journey\.find\(\(step\) => step\.key === "deposit"\);/);
+  assert.match(page, /skipped=\{depositStep\.skipped\} label=\{ready\.deposit\}/);
   assert.doesNotMatch(page, /No deposit receipt recorded/);
   const noDeposit = dealMilestones({ accepted: true, depositCents: 0, depositPaid: false, stock: [], deliveryBooked: false, delivered: false });
   assert.equal(noDeposit.find((s) => s.key === "deposit")?.skipped, true);
