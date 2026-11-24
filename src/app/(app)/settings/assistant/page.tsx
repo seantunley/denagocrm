@@ -13,7 +13,8 @@ import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { basePrisma, prisma } from "@/lib/db";
 import { listActingTenantStaff } from "@/lib/tenantActor";
-import AssistantLearnedReview, { type LearnedNote } from "@/components/AssistantLearnedReview";
+import AssistantLearnedReview, { needsAttention, type LearnedNote } from "@/components/AssistantLearnedReview";
+import SectionTabs from "@/components/SectionTabs";
 import { TIDY_LAST_KEY, TIDY_SUMMARY_KEY } from "@/lib/assistantTidy";
 import { isExpired } from "@/lib/assistantMemory";
 import { formatDate, formatDateTime } from "@/lib/format";
@@ -183,394 +184,408 @@ export default async function AssistantSettingsPage() {
       description="Give the CRM's assistant a name and a personality. It answers your team's questions from your own records, in this voice."
       groups={SETTINGS_NAV_GROUPS}
     >
-      {/* FIRST on the page (Sean, 2026-11-20: "ours gets buried") — it was folded at the bottom under Advanced. */}
-      <div id="learned" className="card mb-6 max-w-3xl p-5">
-        <AssistantLearnedReview notes={learned} />
-      </div>
-      <SaveForm action={saveAssistantProfile} resetOnSuccess={false} className="card max-w-2xl space-y-5 p-5">
-        <label className="block space-y-1">
-          <span className="text-xs font-medium text-muted-foreground">Name</span>
-          <input name="name" defaultValue={profile.name} maxLength={40} className="input" placeholder="e.g. Ava" />
-        </label>
-        <fieldset className="space-y-2">
-          <legend className="text-xs font-medium text-muted-foreground">Tone</legend>
-          <div className="grid gap-2 sm:grid-cols-2">
-            {(Object.keys(TONES) as Tone[]).map((tone) => (
-              <label key={tone} className="flex cursor-pointer items-start gap-2 rounded-lg border border-border p-3 text-sm has-[:checked]:border-primary">
-                <input type="radio" name="tone" value={tone} defaultChecked={profile.tone === tone} className="mt-1 accent-primary" />
-                <span>
-                  <span className="block font-medium">{TONE_LABELS[tone]}</span>
-                  <span className="block text-xs text-muted-foreground">{TONES[tone]}</span>
-                </span>
+      {/* One section at a time instead of seven stacked down the page (components/SectionTabs.tsx). Every panel
+          stays in the page, hidden, so each form still saves and a half-typed one survives a look at another tab. */}
+      <SectionTabs
+        label="Assistant settings"
+        tabs={[
+          { id: "learned", label: "What it has learned", count: learned.filter(needsAttention).length },
+          { id: "personality", label: "Personality" },
+          { id: "reach", label: "Reaching people" },
+          { id: "results", label: "How it's doing" },
+          { id: "advanced", label: "Advanced" },
+        ]}
+        panels={{
+          // FIRST, and the tab the page opens on (Sean, 2026-11-20: "ours gets buried") — it was once folded at the
+          // bottom under Advanced. `#learned` in a link still lands here.
+          learned: <AssistantLearnedReview notes={learned} />,
+          personality: (
+            <SaveForm action={saveAssistantProfile} resetOnSuccess={false} className="card space-y-5 p-5">
+              <label className="block space-y-1">
+                <span className="text-xs font-medium text-muted-foreground">Name</span>
+                <input name="name" defaultValue={profile.name} maxLength={40} className="input" placeholder="e.g. Ava" />
               </label>
-            ))}
-          </div>
-        </fieldset>
-        <label className="block space-y-1">
-          <span className="text-xs font-medium text-muted-foreground">Workspace instructions</span>
-          <span className="block text-[11px] text-muted-foreground">
-            Your standing orders for this workspace — like an AGENTS.md: how you work, what it must always or never do.
-          </span>
-          <textarea
-            name="rules"
-            defaultValue={profile.rules}
-            maxLength={WORKSPACE_INSTRUCTIONS_CHARS}
-            rows={8}
-            className="input"
-            placeholder={"In your words. e.g.\n- Always mention the 5-year battery warranty when price comes up.\n- Never suggest a discount above 5%.\n- Donovan handles fleet and golf-estate deals; Sean handles everything else.\n- We reply to every new lead within 2 hours."}
-          />
-        </label>
-        <input type="hidden" name="webSearchShown" value="1" />
-        <label className="flex items-start gap-3 rounded-lg border border-border/60 p-3 text-sm">
-          <input type="checkbox" name="webSearch" defaultChecked={profile.webSearch} className="mt-1 accent-primary" />
-          <span>
-            <span className="block font-medium">Let {profile.name} search the internet when it helps</span>
-            <span className="block text-xs text-muted-foreground">
-              For things your CRM can&apos;t know — prime rate, a model&apos;s specs, news. The search only ever sees the
-              question that was asked, never your customers or records, and {profile.name} names its sources. Not used for
-              scheduled questions.
-            </span>
-          </span>
-        </label>
-        <div className="flex justify-end border-t border-border/60 pt-4">
-          <SaveButton>Save</SaveButton>
-        </div>
-      </SaveForm>
-
-      <section className="card mt-6 max-w-2xl space-y-2 p-5">
-        <h2 className="text-base font-semibold">How {profile.name} is doing</h2>
-        <p className="text-xs text-muted-foreground">
-          What your team marked under {profile.name}&apos;s answers in the last {PERIOD_DAYS} days. Only the totals — each person&apos;s
-          conversations stay private to them.
-        </p>
-        {rated("up") + rated("down") === 0 ? (
-          <p className="text-sm text-muted-foreground">No answers rated yet.</p>
-        ) : (
-          <>
-            <p className="text-sm">👍 {rated("up")} useful · 👎 {rated("down")} wrong</p>
-            {wrongBecause.length > 0 && (
-              <ul className="flex flex-wrap gap-1.5 text-xs">
-                {wrongBecause.map((r) => (
-                  <li key={r.feedbackReason} className="rounded-md border border-border/60 px-2 py-0.5">
-                    {FEEDBACK_REASON_LABELS[r.feedbackReason ?? ""] ?? r.feedbackReason}: {r._count._all}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </>
-        )}
-        {/* Speed: the median of the last week's answers, per phase — so the slow part is found, not guessed. */}
-        <div className="border-t border-border/60 pt-3">
-          <p className="text-xs font-medium text-muted-foreground">Speed, last 7 days ({speed.runs} answers)</p>
-          {speed.runs === 0 ? (
-            <p className="text-sm text-muted-foreground">No answers timed yet.</p>
-          ) : (
-            <ul className="mt-1 grid grid-cols-2 gap-x-4 gap-y-0.5 text-sm sm:grid-cols-3">
-              {SPEED_PHASES.filter(([key]) => speed.medians[key] !== undefined).map(([key, label]) => (
-                <li key={key} className="flex justify-between gap-2">
-                  <span className="text-muted-foreground">{label}</span>
-                  <span className="tabular-nums">{(speed.medians[key] / 1000).toFixed(1)} s</span>
-                </li>
-              ))}
-            </ul>
-          )}
-          {/* Adaptive thinking: quick questions and investigations timed apart, so a slower quick answer shows. */}
-          {(["quick", "investigate"] as const).some((d) => speed.byDepth[d].total !== undefined) && (
-            <p className="mt-1 text-xs text-muted-foreground">
-              Whole answer — quick questions:{" "}
-              <span className="tabular-nums">{speed.byDepth.quick.total !== undefined ? `${(speed.byDepth.quick.total / 1000).toFixed(1)} s` : "—"}</span>
-              {" · "}investigations:{" "}
-              <span className="tabular-nums">{speed.byDepth.investigate.total !== undefined ? `${(speed.byDepth.investigate.total / 1000).toFixed(1)} s` : "—"}</span>
-            </p>
-          )}
-        </div>
-      </section>
-
-      {/* What DAX suggested, what was confirmed, and what happened after — numbers only (assistantOutcomes). */}
-      <section className="card mt-6 max-w-3xl space-y-3 p-5">
-        <h2 className="text-base font-semibold">How {profile.name}&apos;s suggestions worked out</h2>
-        <p className="text-xs text-muted-foreground">
-          The cards {profile.name} offered your team
-          {outcomes && outcomes !== "failed" ? ` from ${formatDate(outcomes.since)} to today` : ` in the last ${PERIOD_DAYS} days`}, how many
-          were confirmed, and what happened after. Numbers only, from records you can open — no customer is named.{" "}
-          <span className="font-medium text-foreground">What happened after — not proof that {profile.name} caused it.</span>
-        </p>
-        {outcomes === "failed" ? (
-          <p className="text-sm text-muted-foreground">Couldn&apos;t work these out just now — try again later.</p>
-        ) : !outcomes || !outcomes.families.some((f) => f.suggested || f.confirmed) ? (
-          <p className="text-sm text-muted-foreground">Nothing to show yet — {profile.name} keeps count from this update on.</p>
-        ) : (
-          <>
-            <OutcomeTable
-              first="Suggestion"
-              last="What happened after"
-              rows={outcomes.families.filter((f) => f.suggested || f.confirmed).map((f) => ({
-                key: f.key,
-                label: f.label,
-                suggested: f.suggested,
-                confirmed: f.confirmed,
-                after: f.outcome ? (
-                  <>
-                    <span className="text-muted-foreground">{OUTCOME_LABELS[f.outcome]}:</span> {describeTally(f.after)}
-                  </>
-                ) : (
-                  <span className="text-muted-foreground">Counted only</span>
-                ),
-              }))}
-            />
-            {outcomes.people.length > 0 && (
-              <OutcomeTable
-                first="Person"
-                last={OUTCOME_LABELS.reply}
-                rows={outcomes.people.map((p) => ({
-                  key: p.userId ?? "former",
-                  label: p.userId ? nameOf.get(p.userId) ?? "" : "Former team members",
-                  suggested: p.suggested,
-                  confirmed: p.confirmed,
-                  after: describeTally(p.replied),
-                }))}
-              />
-            )}
-            <p className="text-[11px] text-muted-foreground">
-              A drafted message counts as confirmed when it was sent from its card. Replies are judged once 3 days have
-              passed, quotes and deal moves once 14 have — anything newer shows as too recent to tell. A plan of several
-              steps is one suggestion under Other; each step it runs counts as confirmed under its own kind.
-            </p>
-          </>
-        )}
-      </section>
-
-      <SaveForm action={saveAssistantProactive} resetOnSuccess={false} className="card mt-6 max-w-2xl space-y-3 p-5">
-        <h2 className="text-base font-semibold">{profile.name} comes to people</h2>
-        <label className="flex cursor-pointer items-start gap-2 text-sm">
-          <input type="checkbox" name="proactive" defaultChecked={proactiveWorkspace} className="mt-1 accent-primary" />
-          <span>
-            <span className="block font-medium">Let {profile.name} tell staff about customer activity as it happens</span>
-            <span className="block text-xs text-muted-foreground">
-              When a customer opens a quote, comes back to it a third time, signs it, books a service, or writes and has
-              waited 15 minutes with no answer — or a signed deal is booked for delivery tomorrow (a check: deposit, invoice,
-              vehicle and PDI) — {profile.name} tells the person responsible for them — the deal&apos;s owner, else the
-              customer&apos;s — in Ask {profile.name}, as a phone notification that names nobody, and on the WhatsApp they
-              linked. Each person must also switch it on for themselves on the Ask page. Nothing between 20:00 and 08:00
-              (held until morning), at most 12 a day each, only about records that person may open. It never contacts the
-              customer, and uses no AI credit.
-            </span>
-          </span>
-        </label>
-        <SaveButton className="btn-primary btn-sm">Save</SaveButton>
-      </SaveForm>
-
-      <SaveForm action={saveAssistantWhatsAppCard} resetOnSuccess={false} className="card mt-6 max-w-2xl space-y-3 p-5">
-        <h2 className="text-base font-semibold">{profile.name} on WhatsApp</h2>
-        <label className="flex cursor-pointer items-start gap-2 text-sm">
-          <input type="checkbox" name="enabled" defaultChecked={whatsappOn} className="mt-1 accent-primary" />
-          <span>
-            <span className="block font-medium">Let staff ask {profile.name} on WhatsApp</span>
-            <span className="block text-xs text-muted-foreground">
-              Each person can link their own WhatsApp on the Ask page — by sending a one-time code from that phone to
-              the business number — and then ask {profile.name} by messaging the business number. Answers can contain
-              customer details, and they go to that staff member&apos;s phone. On WhatsApp it only answers, unless you
-              also allow confirming below. Off: messages from staff phones are treated like any other, as today.
-            </span>
-          </span>
-        </label>
-        <label className="flex cursor-pointer items-start gap-2 text-sm">
-          <input
-            type="checkbox"
-            name="whatsappConfirm"
-            defaultChecked={confirmOn}
-            className="mt-1 accent-primary"
-          />
-          <span>
-            <span className="block font-medium">Let staff confirm {profile.name}&apos;s tasks on WhatsApp</span>
-            <span className="block text-xs text-muted-foreground">
-              When {profile.name} proposes a task on WhatsApp — a note, a follow-up, moving a lead to another stage,
-              giving a lead to someone, booking or moving a meeting — it comes with a Confirm button. Tapping it within
-              15 minutes does it, as that person, with their own permissions, and it is recorded in the audit trail.
-              Nothing happens without the tap. Messages to customers, test drives, marking a deal lost and starting a
-              quote are never done from WhatsApp. Turn this on only if a linked phone being unlocked in the wrong hands
-              is a risk you accept: with it off, a phone can read answers but change nothing.
-            </span>
-          </span>
-        </label>
-        <label className="flex cursor-pointer items-start gap-2 text-sm">
-          <input
-            type="checkbox"
-            name="voiceReplies"
-            defaultChecked={voiceOn}
-            className="mt-1 accent-primary"
-          />
-          <span>
-            <span className="block font-medium">Let {profile.name} reply with voice notes</span>
-            <span className="block text-xs text-muted-foreground">
-              A voice note to {profile.name} gets a short spoken answer back as well as the full text, and answers in
-              the CRM get a Listen button. English and Afrikaans only. Uses your ElevenLabs credit for every character
-              spoken.
-            </span>
-          </span>
-        </label>
-        <label className="flex cursor-pointer items-start gap-2 text-sm">
-          <input type="checkbox" name="whatsappHandoff" defaultChecked={handoffOn} className="mt-1 accent-primary" />
-          <span>
-            <span className="block font-medium">Hand a customer to a person on WhatsApp when the chatbot passes them on</span>
-            <span className="block text-xs text-muted-foreground">
-              When the chatbot on WhatsApp, Messenger, Instagram or Telegram has finished with an enquiry and passes it
-              to a person, that person gets it on the WhatsApp they linked: the customer&apos;s name and number, what
-              they want, the chat so far, a link that opens a WhatsApp chat with the customer from their own phone, and
-              a link to the record. Each handoff is logged on the customer&apos;s record with who it went to. Spam and
-              blocked senders never reach the chatbot, so they are never handed on.
-            </span>
-            <span className="mt-1 block text-xs text-muted-foreground">
-              Three things to know. It only goes to a phone that person linked themselves on the Ask page — to use a
-              second business number, link that number. WhatsApp&apos;s 24-hour rule applies, with the template below
-              standing in when they have not written recently. And the CRM logs the handoff, not the conversation after
-              it: a chat carried on from another number is not in the CRM unless that number is connected to it too.
-              What the customer is told at that moment is the wording of the chatbot&apos;s own handoff step.
-            </span>
-          </span>
-        </label>
-        <label className="block pl-6 text-xs text-muted-foreground">
-          Hand over to
-          <select name="whatsappHandoffTo" defaultValue={handoffTo ?? "all"} className="input mt-1 w-full max-w-sm">
-            <option value="all">Everyone with a linked phone who may open the inbox</option>
-            {phones.map((p) => (
-              <option key={p.userId} value={p.userId}>
-                {nameOf.get(p.userId) ?? "A former team member"} ({maskWaId(p.waId)})
-              </option>
-            ))}
-          </select>
-          <span className="mt-1 block">
-            Only people who have linked a phone are listed. If the person chosen unlinks, nobody is handed to until you
-            choose again — it never falls back to somebody else.
-          </span>
-        </label>
-        <div className="space-y-2 border-t border-border/60 pt-4 text-sm">
-          <span className="block font-medium">Scheduled briefings and alerts on WhatsApp</span>
-          <span className="block text-xs text-muted-foreground">
-            A scheduled briefing or a watch alert also goes to the person&apos;s linked phone (each person can switch that
-            off on the Ask page). WhatsApp only lets a business write freely to someone who messaged it in the last 24
-            hours. After that it accepts only a message template it has approved — so create one in WhatsApp Manager
-            (category Utility, no variables, one quick-reply button), for example: &ldquo;Your CRM assistant has an
-            update ready for you. Tap below to read it.&rdquo; with the button &ldquo;Show me&rdquo;. Enter its name
-            here once it is approved. {profile.name} sends it at most once a day, and not again until the person replies; their tap
-            delivers everything that was waiting. Left blank: updates reach a phone only inside the 24 hours, and are
-            always in the CRM.
-          </span>
-          <div className="flex flex-wrap gap-3">
-            <label className="min-w-0 flex-1 text-xs text-muted-foreground">
-              Template name
-              <input name="updateTemplate" defaultValue={updateTemplate?.name ?? ""} placeholder="assistant_update_ready" className="input mt-1 w-full font-mono" autoComplete="off" />
-            </label>
-            <label className="w-28 text-xs text-muted-foreground">
-              Language code
-              <input name="updateTemplateLanguage" defaultValue={updateTemplate?.language ?? "en"} placeholder="en" className="input mt-1 w-full font-mono" autoComplete="off" />
-            </label>
-          </div>
-          <span className="block pt-2 text-xs text-muted-foreground">
-            <span className="font-medium text-foreground">Content template (recommended).</span> So that a reminder,
-            an alert or a morning brief arrives readable without a tap, create a second template in WhatsApp Manager
-            with one variable for the update itself — category Utility, for example: &ldquo;Update from your CRM
-            assistant: {"{{1}}"} — reply to continue here.&rdquo; Once approved, enter its name here. Outside the 24
-            hours each update then goes inside it (as one paragraph, cut at about 900 characters — the whole of it is
-            always on the Ask page). Until it is approved, or if WhatsApp refuses it, the template above goes instead.
-          </span>
-          <div className="flex flex-wrap gap-3">
-            <label className="min-w-0 flex-1 text-xs text-muted-foreground">
-              Content template name
-              <input name="contentTemplate" defaultValue={contentTemplate?.name ?? ""} placeholder="assistant_update_text" className="input mt-1 w-full font-mono" autoComplete="off" />
-            </label>
-            <label className="w-28 text-xs text-muted-foreground">
-              Language code
-              <input name="contentTemplateLanguage" defaultValue={contentTemplate?.language ?? "en"} placeholder="en" className="input mt-1 w-full font-mono" autoComplete="off" />
-            </label>
-          </div>
-        </div>
-        <div className="flex justify-end border-t border-border/60 pt-4">
-          <SaveButton>Save</SaveButton>
-        </div>
-      </SaveForm>
-      {phones.length > 0 && (
-        <div className="card max-w-3xl space-y-2 p-4 text-sm">
-          <p className="font-medium">Phones linked to {profile.name}</p>
-          <p className="text-xs text-muted-foreground">
-            A link ends by itself when that person&apos;s password is reset or they&apos;re signed out everywhere. Unlink anything that shouldn&apos;t be here.
-          </p>
-          <ul className="divide-y divide-border/50">
-            {phones.map((p) => (
-              <li key={p.userId} className="flex items-center justify-between gap-3 py-2">
-                <span>
-                  {nameOf.get(p.userId) ?? "a former team member"} <span className="text-muted-foreground">({maskWaId(p.waId)})</span>
+              <fieldset className="space-y-2">
+                <legend className="text-xs font-medium text-muted-foreground">Tone</legend>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {(Object.keys(TONES) as Tone[]).map((tone) => (
+                    <label key={tone} className="flex cursor-pointer items-start gap-2 rounded-lg border border-border p-3 text-sm has-[:checked]:border-primary">
+                      <input type="radio" name="tone" value={tone} defaultChecked={profile.tone === tone} className="mt-1 accent-primary" />
+                      <span>
+                        <span className="block font-medium">{TONE_LABELS[tone]}</span>
+                        <span className="block text-xs text-muted-foreground">{TONES[tone]}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+              <label className="block space-y-1">
+                <span className="text-xs font-medium text-muted-foreground">Workspace instructions</span>
+                <span className="block text-[11px] text-muted-foreground">
+                  Your standing orders for this workspace — like an AGENTS.md: how you work, what it must always or never do.
                 </span>
-                <ConfirmActionDialog
-                  trigger={<button type="button" className="text-xs text-muted-foreground hover:text-destructive">Unlink</button>}
-                  title="Unlink this phone?"
-                  description="Messages from it will be treated like any other number's. They can link again from the Ask page."
-                  confirmLabel="Unlink"
-                  destructive
-                  onConfirm={unlinkWhatsAppFor.bind(null, p.userId)}
+                <textarea
+                  name="rules"
+                  defaultValue={profile.rules}
+                  maxLength={WORKSPACE_INSTRUCTIONS_CHARS}
+                  rows={8}
+                  className="input"
+                  placeholder={"In your words. e.g.\n- Always mention the 5-year battery warranty when price comes up.\n- Never suggest a discount above 5%.\n- Donovan handles fleet and golf-estate deals; Sean handles everything else.\n- We reply to every new lead within 2 hours."}
                 />
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {/* Advanced: its soul, and everything it has learned — all editable. Open
-          by default whenever there's something for the owner to look at. */}
-      <details className="card mt-6 max-w-3xl p-5" open={Boolean(profile.soul)}>
-        <summary className="cursor-pointer text-base font-semibold">
-          Advanced — its soul, and how it learns
-        </summary>
-        <div className="mt-5 space-y-8">
-          <SaveForm action={saveAssistantProfile} resetOnSuccess={false} className="space-y-2">
-            <h2 className="text-sm font-semibold">Its soul</h2>
-            <p className="text-xs text-muted-foreground">
-              The whole personality in your words — how it thinks, talks and decides what to say. Rewrite it however
-              you like. These are always added after it and can&apos;t be removed:
-            </p>
-            <pre className="whitespace-pre-wrap rounded-md bg-muted/40 p-2 text-[11px] text-muted-foreground">{LOCKED_RULES}</pre>
-            <textarea name="soul" defaultValue={profile.soul || DEFAULT_SOUL} maxLength={3000} rows={8} className="input font-mono text-xs" />
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-[11px] text-muted-foreground">Leave it as it is to keep the default — and get any improvements we make to it.</p>
-              <SaveButton className="btn-primary btn-sm">Save soul</SaveButton>
-            </div>
-          </SaveForm>
-          <p className="text-xs text-muted-foreground">
-            Every night it tidies what it has learned — merging duplicates, dropping what&apos;s stale, flagging
-            contradictions and improving playbooks from the day&apos;s corrections. Anything it changes shows up at the top of this page as
-            unreviewed — and in your morning brief, to keep or drop from WhatsApp; it never changes what you&apos;ve
-            approved. If something it learns in a conversation contradicts what you&apos;ve approved, it holds the new
-            entry back and asks you at the top of this page which to keep. A rule for a while
-            (&ldquo;for October…&rdquo;) stops being used after its last day and shows as expired.{" "}
-            {tidiedAt ? `Last tidy-up ${formatDateTime(new Date(tidiedAt))}: ${tidySummary ?? "in progress"}.` : "It hasn't tidied yet."}
-          </p>
-          <div className="space-y-2 rounded-md border border-border/60 p-3">
-            <SaveForm action={saveOutcomeLearning} resetOnSuccess={false} className="space-y-2">
-              <label className="flex items-start gap-2 text-sm">
-                <input type="checkbox" name="outcomeLearning" defaultChecked={learning.on} className="mt-1 accent-primary" />
+              </label>
+              <input type="hidden" name="webSearchShown" value="1" />
+              <label className="flex items-start gap-3 rounded-lg border border-border/60 p-3 text-sm">
+                <input type="checkbox" name="webSearch" defaultChecked={profile.webSearch} className="mt-1 accent-primary" />
                 <span>
-                  <span className="font-medium">Suggest playbook updates from won deals</span>
+                  <span className="block font-medium">Let {profile.name} search the internet when it helps</span>
                   <span className="block text-xs text-muted-foreground">
-                    Once a week it compares the deals won and lost in the last {OUTCOME_WINDOW_DAYS} days — how fast the
-                    first contact was, follow-ups after a quote, calls, and when messages got answered — and suggests a
-                    playbook with the numbers behind each point. Counts only, never a customer or a message. It waits
-                    below for you to approve, edit or remove; {profile.name} uses it for nobody until you approve it.
+                    For things your CRM can&apos;t know — prime rate, a model&apos;s specs, news. The search only ever sees the
+                    question that was asked, never your customers or records, and {profile.name} names its sources. Not used for
+                    scheduled questions.
                   </span>
                 </span>
               </label>
-              <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
+              <div className="flex justify-end border-t border-border/60 pt-4">
+                <SaveButton>Save</SaveButton>
+              </div>
             </SaveForm>
-            {learning.on && (
-              <SaveForm action={checkOutcomesNow} resetOnSuccess={false} className="flex flex-wrap items-center gap-3">
-                <SaveButton className="btn-secondary btn-sm">Check now</SaveButton>
-                <span className="text-xs text-muted-foreground">
-                  {learning.last ? `Last checked ${formatDateTime(new Date(learning.last))}: ${learning.summary ?? "in progress"}.` : "It hasn't checked yet."}
+          ),
+          reach: (
+            <>
+            <SaveForm action={saveAssistantProactive} resetOnSuccess={false} className="card space-y-3 p-5">
+              <h2 className="text-base font-semibold">{profile.name} comes to people</h2>
+              <label className="flex cursor-pointer items-start gap-2 text-sm">
+                <input type="checkbox" name="proactive" defaultChecked={proactiveWorkspace} className="mt-1 accent-primary" />
+                <span>
+                  <span className="block font-medium">Let {profile.name} tell staff about customer activity as it happens</span>
+                  <span className="block text-xs text-muted-foreground">
+                    When a customer opens a quote, comes back to it a third time, signs it, books a service, or writes and has
+                    waited 15 minutes with no answer — or a signed deal is booked for delivery tomorrow (a check: deposit, invoice,
+                    vehicle and PDI) — {profile.name} tells the person responsible for them — the deal&apos;s owner, else the
+                    customer&apos;s — in Ask {profile.name}, as a phone notification that names nobody, and on the WhatsApp they
+                    linked. Each person must also switch it on for themselves on the Ask page. Nothing between 20:00 and 08:00
+                    (held until morning), at most 12 a day each, only about records that person may open. It never contacts the
+                    customer, and uses no AI credit.
+                  </span>
                 </span>
-              </SaveForm>
+              </label>
+              <SaveButton className="btn-primary btn-sm">Save</SaveButton>
+            </SaveForm>
+            <SaveForm action={saveAssistantWhatsAppCard} resetOnSuccess={false} className="card space-y-3 p-5">
+              <h2 className="text-base font-semibold">{profile.name} on WhatsApp</h2>
+              <label className="flex cursor-pointer items-start gap-2 text-sm">
+                <input type="checkbox" name="enabled" defaultChecked={whatsappOn} className="mt-1 accent-primary" />
+                <span>
+                  <span className="block font-medium">Let staff ask {profile.name} on WhatsApp</span>
+                  <span className="block text-xs text-muted-foreground">
+                    Each person can link their own WhatsApp on the Ask page — by sending a one-time code from that phone to
+                    the business number — and then ask {profile.name} by messaging the business number. Answers can contain
+                    customer details, and they go to that staff member&apos;s phone. On WhatsApp it only answers, unless you
+                    also allow confirming below. Off: messages from staff phones are treated like any other, as today.
+                  </span>
+                </span>
+              </label>
+              <label className="flex cursor-pointer items-start gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  name="whatsappConfirm"
+                  defaultChecked={confirmOn}
+                  className="mt-1 accent-primary"
+                />
+                <span>
+                  <span className="block font-medium">Let staff confirm {profile.name}&apos;s tasks on WhatsApp</span>
+                  <span className="block text-xs text-muted-foreground">
+                    When {profile.name} proposes a task on WhatsApp — a note, a follow-up, moving a lead to another stage,
+                    giving a lead to someone, booking or moving a meeting — it comes with a Confirm button. Tapping it within
+                    15 minutes does it, as that person, with their own permissions, and it is recorded in the audit trail.
+                    Nothing happens without the tap. Messages to customers, test drives, marking a deal lost and starting a
+                    quote are never done from WhatsApp. Turn this on only if a linked phone being unlocked in the wrong hands
+                    is a risk you accept: with it off, a phone can read answers but change nothing.
+                  </span>
+                </span>
+              </label>
+              <label className="flex cursor-pointer items-start gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  name="voiceReplies"
+                  defaultChecked={voiceOn}
+                  className="mt-1 accent-primary"
+                />
+                <span>
+                  <span className="block font-medium">Let {profile.name} reply with voice notes</span>
+                  <span className="block text-xs text-muted-foreground">
+                    A voice note to {profile.name} gets a short spoken answer back as well as the full text, and answers in
+                    the CRM get a Listen button. English and Afrikaans only. Uses your ElevenLabs credit for every character
+                    spoken.
+                  </span>
+                </span>
+              </label>
+              <label className="flex cursor-pointer items-start gap-2 text-sm">
+                <input type="checkbox" name="whatsappHandoff" defaultChecked={handoffOn} className="mt-1 accent-primary" />
+                <span>
+                  <span className="block font-medium">Hand a customer to a person on WhatsApp when the chatbot passes them on</span>
+                  <span className="block text-xs text-muted-foreground">
+                    When the chatbot on WhatsApp, Messenger, Instagram or Telegram has finished with an enquiry and passes it
+                    to a person, that person gets it on the WhatsApp they linked: the customer&apos;s name and number, what
+                    they want, the chat so far, a link that opens a WhatsApp chat with the customer from their own phone, and
+                    a link to the record. Each handoff is logged on the customer&apos;s record with who it went to. Spam and
+                    blocked senders never reach the chatbot, so they are never handed on.
+                  </span>
+                  <span className="mt-1 block text-xs text-muted-foreground">
+                    Three things to know. It only goes to a phone that person linked themselves on the Ask page — to use a
+                    second business number, link that number. WhatsApp&apos;s 24-hour rule applies, with the template below
+                    standing in when they have not written recently. And the CRM logs the handoff, not the conversation after
+                    it: a chat carried on from another number is not in the CRM unless that number is connected to it too.
+                    What the customer is told at that moment is the wording of the chatbot&apos;s own handoff step.
+                  </span>
+                </span>
+              </label>
+              <label className="block pl-6 text-xs text-muted-foreground">
+                Hand over to
+                <select name="whatsappHandoffTo" defaultValue={handoffTo ?? "all"} className="input mt-1 w-full max-w-sm">
+                  <option value="all">Everyone with a linked phone who may open the inbox</option>
+                  {phones.map((p) => (
+                    <option key={p.userId} value={p.userId}>
+                      {nameOf.get(p.userId) ?? "A former team member"} ({maskWaId(p.waId)})
+                    </option>
+                  ))}
+                </select>
+                <span className="mt-1 block">
+                  Only people who have linked a phone are listed. If the person chosen unlinks, nobody is handed to until you
+                  choose again — it never falls back to somebody else.
+                </span>
+              </label>
+              <div className="space-y-2 border-t border-border/60 pt-4 text-sm">
+                <span className="block font-medium">Scheduled briefings and alerts on WhatsApp</span>
+                <span className="block text-xs text-muted-foreground">
+                  A scheduled briefing or a watch alert also goes to the person&apos;s linked phone (each person can switch that
+                  off on the Ask page). WhatsApp only lets a business write freely to someone who messaged it in the last 24
+                  hours. After that it accepts only a message template it has approved — so create one in WhatsApp Manager
+                  (category Utility, no variables, one quick-reply button), for example: &ldquo;Your CRM assistant has an
+                  update ready for you. Tap below to read it.&rdquo; with the button &ldquo;Show me&rdquo;. Enter its name
+                  here once it is approved. {profile.name} sends it at most once a day, and not again until the person replies; their tap
+                  delivers everything that was waiting. Left blank: updates reach a phone only inside the 24 hours, and are
+                  always in the CRM.
+                </span>
+                <div className="flex flex-wrap gap-3">
+                  <label className="min-w-0 flex-1 text-xs text-muted-foreground">
+                    Template name
+                    <input name="updateTemplate" defaultValue={updateTemplate?.name ?? ""} placeholder="assistant_update_ready" className="input mt-1 w-full font-mono" autoComplete="off" />
+                  </label>
+                  <label className="w-28 text-xs text-muted-foreground">
+                    Language code
+                    <input name="updateTemplateLanguage" defaultValue={updateTemplate?.language ?? "en"} placeholder="en" className="input mt-1 w-full font-mono" autoComplete="off" />
+                  </label>
+                </div>
+                <span className="block pt-2 text-xs text-muted-foreground">
+                  <span className="font-medium text-foreground">Content template (recommended).</span> So that a reminder,
+                  an alert or a morning brief arrives readable without a tap, create a second template in WhatsApp Manager
+                  with one variable for the update itself — category Utility, for example: &ldquo;Update from your CRM
+                  assistant: {"{{1}}"} — reply to continue here.&rdquo; Once approved, enter its name here. Outside the 24
+                  hours each update then goes inside it (as one paragraph, cut at about 900 characters — the whole of it is
+                  always on the Ask page). Until it is approved, or if WhatsApp refuses it, the template above goes instead.
+                </span>
+                <div className="flex flex-wrap gap-3">
+                  <label className="min-w-0 flex-1 text-xs text-muted-foreground">
+                    Content template name
+                    <input name="contentTemplate" defaultValue={contentTemplate?.name ?? ""} placeholder="assistant_update_text" className="input mt-1 w-full font-mono" autoComplete="off" />
+                  </label>
+                  <label className="w-28 text-xs text-muted-foreground">
+                    Language code
+                    <input name="contentTemplateLanguage" defaultValue={contentTemplate?.language ?? "en"} placeholder="en" className="input mt-1 w-full font-mono" autoComplete="off" />
+                  </label>
+                </div>
+              </div>
+              <div className="flex justify-end border-t border-border/60 pt-4">
+                <SaveButton>Save</SaveButton>
+              </div>
+            </SaveForm>
+            {phones.length > 0 && (
+              <div className="card space-y-2 p-4 text-sm">
+                <p className="font-medium">Phones linked to {profile.name}</p>
+                <p className="text-xs text-muted-foreground">
+                  A link ends by itself when that person&apos;s password is reset or they&apos;re signed out everywhere. Unlink anything that shouldn&apos;t be here.
+                </p>
+                <ul className="divide-y divide-border/50">
+                  {phones.map((p) => (
+                    <li key={p.userId} className="flex items-center justify-between gap-3 py-2">
+                      <span>
+                        {nameOf.get(p.userId) ?? "a former team member"} <span className="text-muted-foreground">({maskWaId(p.waId)})</span>
+                      </span>
+                      <ConfirmActionDialog
+                        trigger={<button type="button" className="text-xs text-muted-foreground hover:text-destructive">Unlink</button>}
+                        title="Unlink this phone?"
+                        description="Messages from it will be treated like any other number's. They can link again from the Ask page."
+                        confirmLabel="Unlink"
+                        destructive
+                        onConfirm={unlinkWhatsAppFor.bind(null, p.userId)}
+                      />
+                    </li>
+                  ))}
+                </ul>
+              </div>
             )}
-          </div>
-        </div>
-      </details>
+            </>
+          ),
+          results: (
+            <>
+            <section className="card space-y-2 p-5">
+              <h2 className="text-base font-semibold">How {profile.name} is doing</h2>
+              <p className="text-xs text-muted-foreground">
+                What your team marked under {profile.name}&apos;s answers in the last {PERIOD_DAYS} days. Only the totals — each person&apos;s
+                conversations stay private to them.
+              </p>
+              {rated("up") + rated("down") === 0 ? (
+                <p className="text-sm text-muted-foreground">No answers rated yet.</p>
+              ) : (
+                <>
+                  <p className="text-sm">👍 {rated("up")} useful · 👎 {rated("down")} wrong</p>
+                  {wrongBecause.length > 0 && (
+                    <ul className="flex flex-wrap gap-1.5 text-xs">
+                      {wrongBecause.map((r) => (
+                        <li key={r.feedbackReason} className="rounded-md border border-border/60 px-2 py-0.5">
+                          {FEEDBACK_REASON_LABELS[r.feedbackReason ?? ""] ?? r.feedbackReason}: {r._count._all}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </>
+              )}
+              {/* Speed: the median of the last week's answers, per phase — so the slow part is found, not guessed. */}
+              <div className="border-t border-border/60 pt-3">
+                <p className="text-xs font-medium text-muted-foreground">Speed, last 7 days ({speed.runs} answers)</p>
+                {speed.runs === 0 ? (
+                  <p className="text-sm text-muted-foreground">No answers timed yet.</p>
+                ) : (
+                  <ul className="mt-1 grid grid-cols-2 gap-x-4 gap-y-0.5 text-sm sm:grid-cols-3">
+                    {SPEED_PHASES.filter(([key]) => speed.medians[key] !== undefined).map(([key, label]) => (
+                      <li key={key} className="flex justify-between gap-2">
+                        <span className="text-muted-foreground">{label}</span>
+                        <span className="tabular-nums">{(speed.medians[key] / 1000).toFixed(1)} s</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {/* Adaptive thinking: quick questions and investigations timed apart, so a slower quick answer shows. */}
+                {(["quick", "investigate"] as const).some((d) => speed.byDepth[d].total !== undefined) && (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Whole answer — quick questions:{" "}
+                    <span className="tabular-nums">{speed.byDepth.quick.total !== undefined ? `${(speed.byDepth.quick.total / 1000).toFixed(1)} s` : "—"}</span>
+                    {" · "}investigations:{" "}
+                    <span className="tabular-nums">{speed.byDepth.investigate.total !== undefined ? `${(speed.byDepth.investigate.total / 1000).toFixed(1)} s` : "—"}</span>
+                  </p>
+                )}
+              </div>
+            </section>
+            {/* What DAX suggested, what was confirmed, and what happened after — numbers only (assistantOutcomes). */}
+            <section className="card space-y-3 p-5">
+              <h2 className="text-base font-semibold">How {profile.name}&apos;s suggestions worked out</h2>
+              <p className="text-xs text-muted-foreground">
+                The cards {profile.name} offered your team
+                {outcomes && outcomes !== "failed" ? ` from ${formatDate(outcomes.since)} to today` : ` in the last ${PERIOD_DAYS} days`}, how many
+                were confirmed, and what happened after. Numbers only, from records you can open — no customer is named.{" "}
+                <span className="font-medium text-foreground">What happened after — not proof that {profile.name} caused it.</span>
+              </p>
+              {outcomes === "failed" ? (
+                <p className="text-sm text-muted-foreground">Couldn&apos;t work these out just now — try again later.</p>
+              ) : !outcomes || !outcomes.families.some((f) => f.suggested || f.confirmed) ? (
+                <p className="text-sm text-muted-foreground">Nothing to show yet — {profile.name} keeps count from this update on.</p>
+              ) : (
+                <>
+                  <OutcomeTable
+                    first="Suggestion"
+                    last="What happened after"
+                    rows={outcomes.families.filter((f) => f.suggested || f.confirmed).map((f) => ({
+                      key: f.key,
+                      label: f.label,
+                      suggested: f.suggested,
+                      confirmed: f.confirmed,
+                      after: f.outcome ? (
+                        <>
+                          <span className="text-muted-foreground">{OUTCOME_LABELS[f.outcome]}:</span> {describeTally(f.after)}
+                        </>
+                      ) : (
+                        <span className="text-muted-foreground">Counted only</span>
+                      ),
+                    }))}
+                  />
+                  {outcomes.people.length > 0 && (
+                    <OutcomeTable
+                      first="Person"
+                      last={OUTCOME_LABELS.reply}
+                      rows={outcomes.people.map((p) => ({
+                        key: p.userId ?? "former",
+                        label: p.userId ? nameOf.get(p.userId) ?? "" : "Former team members",
+                        suggested: p.suggested,
+                        confirmed: p.confirmed,
+                        after: describeTally(p.replied),
+                      }))}
+                    />
+                  )}
+                  <p className="text-[11px] text-muted-foreground">
+                    A drafted message counts as confirmed when it was sent from its card. Replies are judged once 3 days have
+                    passed, quotes and deal moves once 14 have — anything newer shows as too recent to tell. A plan of several
+                    steps is one suggestion under Other; each step it runs counts as confirmed under its own kind.
+                  </p>
+                </>
+              )}
+            </section>
+            </>
+          ),
+          // Its soul, and how it learns. Its own tab now, so no longer folded behind a disclosure.
+          advanced: (
+            <div className="card space-y-8 p-5">
+            <SaveForm action={saveAssistantProfile} resetOnSuccess={false} className="space-y-2">
+              <h2 className="text-sm font-semibold">Its soul</h2>
+              <p className="text-xs text-muted-foreground">
+                The whole personality in your words — how it thinks, talks and decides what to say. Rewrite it however
+                you like. These are always added after it and can&apos;t be removed:
+              </p>
+              <pre className="whitespace-pre-wrap rounded-md bg-muted/40 p-2 text-[11px] text-muted-foreground">{LOCKED_RULES}</pre>
+              <textarea name="soul" defaultValue={profile.soul || DEFAULT_SOUL} maxLength={3000} rows={8} className="input font-mono text-xs" />
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-[11px] text-muted-foreground">Leave it as it is to keep the default — and get any improvements we make to it.</p>
+                <SaveButton className="btn-primary btn-sm">Save soul</SaveButton>
+              </div>
+            </SaveForm>
+            <p className="text-xs text-muted-foreground">
+              Every night it tidies what it has learned — merging duplicates, dropping what&apos;s stale, flagging
+              contradictions and improving playbooks from the day&apos;s corrections. Anything it changes shows up at the top of this page as
+              unreviewed — and in your morning brief, to keep or drop from WhatsApp; it never changes what you&apos;ve
+              approved. If something it learns in a conversation contradicts what you&apos;ve approved, it holds the new
+              entry back and asks you at the top of this page which to keep. A rule for a while
+              (&ldquo;for October…&rdquo;) stops being used after its last day and shows as expired.{" "}
+              {tidiedAt ? `Last tidy-up ${formatDateTime(new Date(tidiedAt))}: ${tidySummary ?? "in progress"}.` : "It hasn't tidied yet."}
+            </p>
+            <div className="space-y-2 rounded-md border border-border/60 p-3">
+              <SaveForm action={saveOutcomeLearning} resetOnSuccess={false} className="space-y-2">
+                <label className="flex items-start gap-2 text-sm">
+                  <input type="checkbox" name="outcomeLearning" defaultChecked={learning.on} className="mt-1 accent-primary" />
+                  <span>
+                    <span className="font-medium">Suggest playbook updates from won deals</span>
+                    <span className="block text-xs text-muted-foreground">
+                      Once a week it compares the deals won and lost in the last {OUTCOME_WINDOW_DAYS} days — how fast the
+                      first contact was, follow-ups after a quote, calls, and when messages got answered — and suggests a
+                      playbook with the numbers behind each point. Counts only, never a customer or a message. It waits
+                      below for you to approve, edit or remove; {profile.name} uses it for nobody until you approve it.
+                    </span>
+                  </span>
+                </label>
+                <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
+              </SaveForm>
+              {learning.on && (
+                <SaveForm action={checkOutcomesNow} resetOnSuccess={false} className="flex flex-wrap items-center gap-3">
+                  <SaveButton className="btn-secondary btn-sm">Check now</SaveButton>
+                  <span className="text-xs text-muted-foreground">
+                    {learning.last ? `Last checked ${formatDateTime(new Date(learning.last))}: ${learning.summary ?? "in progress"}.` : "It hasn't checked yet."}
+                  </span>
+                </SaveForm>
+              )}
+            </div>
+            </div>
+          ),
+        }}
+      />
     </SettingsWorkspace>
   );
 }
