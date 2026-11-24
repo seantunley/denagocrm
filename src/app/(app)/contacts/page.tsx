@@ -37,6 +37,12 @@ import {
 import { cn } from "@/lib/utils";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import RecordContextMenu, { type RecordContextAction } from "@/components/RecordContextMenu";
+import { DataGrid } from "@/components/grid/DataGrid";
+import { previewContactSelection } from "@/app/actions/grid";
+import { actingScopeClass } from "@/lib/actingScope";
+import { getWorkspaceSetting } from "@/lib/settings";
+import { gridOrderBy, gridPrefsKey, normalisePrefs, parseSort, type GridPrefs } from "@/lib/grid/grid";
+import { CONTACT_COLUMNS, CONTACT_DEFAULT_SORT, CONTACT_SORTS, CONTACTS_GRID_ID, contactListWhere } from "@/lib/grid/contactsGrid";
 
 function initials(name: string) {
   return name
@@ -51,38 +57,29 @@ function initials(name: string) {
 export default async function ContactsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; view?: string; page?: string }>;
+  searchParams: Promise<{ q?: string; view?: string; page?: string; sort?: string; dir?: string }>;
 }) {
   const user = await requireAnyPermission("contacts.view_all", "contacts.view_owned");
   const automotiveOn = await isModuleEnabled("automotive");
   const params = await searchParams;
   const { q, view } = params;
   const cards = view !== "list";
-  const [accessibleIds, canCreate, canMerge, canEdit, canCreateLead, canManageActivities] = await Promise.all([
+  const scope = await actingScopeClass();
+  const tenantId = scope.mode === "tenant" ? scope.tenantId : null;
+  const [accessibleIds, canCreate, canMerge, canEdit, canCreateLead, canManageActivities, savedPrefs] = await Promise.all([
     getAccessibleContactIds(user),
     hasPermission(user, "contacts.create"),
     hasPermission(user, "contacts.merge"),
     hasPermission(user, "contacts.edit"),
     hasPermission(user, "leads.create"),
     hasPermission(user, "activities.manage"),
+    tenantId ? getWorkspaceSetting(tenantId, gridPrefsKey(CONTACTS_GRID_ID, user.id)).catch(() => null) : null,
   ]);
-  const searchWhere = q
-    ? {
-        OR: [
-          { firstName: { contains: q, mode: "insensitive" as const } },
-          { lastName: { contains: q, mode: "insensitive" as const } },
-          { company: { contains: q, mode: "insensitive" as const } },
-          { email: { contains: q, mode: "insensitive" as const } },
-          { phone: { contains: q, mode: "insensitive" as const } },
-        ],
-      }
-    : {};
-  const where = {
-    AND: [
-      ...(accessibleIds === null ? [] : [{ id: { in: accessibleIds } }]),
-      searchWhere,
-    ],
-  };
+  // The grid's sort, columns and layout only order and present; the rows come from this `where` alone.
+  const columns = automotiveOn ? CONTACT_COLUMNS : CONTACT_COLUMNS.filter((c) => c.id !== "vehicles");
+  const prefs: GridPrefs = normalisePrefs(savedPrefs, columns);
+  const sort = parseSort(params.sort, params.dir, columns, CONTACT_DEFAULT_SORT);
+  const where = contactListWhere({ tenantId, accessibleIds, q });
   // Paged in the database: every matching contact is reachable, not just the
   // newest 200. The headline figures count the whole match, not the page.
   const total = await prisma.contact.count({ where });
@@ -92,7 +89,7 @@ export default async function ContactsPage({
   const [contacts, users, picker, vehicleCount, leadCount, regions] = await Promise.all([
     prisma.contact.findMany({
       where,
-      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      orderBy: gridOrderBy(sort, CONTACT_SORTS),
       skip,
       take,
       include: {
@@ -117,7 +114,7 @@ export default async function ContactsPage({
   ]);
 
   const queryString = (target: string) =>
-    `/contacts?${new URLSearchParams({ ...(q ? { q } : {}), view: target })}`;
+    `/contacts?${new URLSearchParams({ ...(q ? { q } : {}), view: target, ...(params.sort ? { sort: sort.column, dir: sort.dir } : {}) })}`;
 
   return (
     <div className="space-y-6">
@@ -172,6 +169,7 @@ export default async function ContactsPage({
       <section className="flex flex-col gap-3 rounded-2xl border border-border bg-card/70 p-3 shadow-sm sm:flex-row sm:items-center sm:justify-between">
         <form className="flex min-w-0 flex-1 items-center gap-2" role="search">
           {!cards && <input type="hidden" name="view" value="list" />}
+          {params.sort && <><input type="hidden" name="sort" value={sort.column} /><input type="hidden" name="dir" value={sort.dir} /></>}
           <div className="relative w-full max-w-xl">
             <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -211,12 +209,26 @@ export default async function ContactsPage({
           ))}
         </div>
       ) : (
-        <ContactTable
-          contacts={contacts}
-          automotiveOn={automotiveOn}
-          canEdit={canEdit}
-          canCreateLead={canCreateLead}
-          canManageActivities={canManageActivities}
+        <DataGrid
+          gridId={CONTACTS_GRID_ID}
+          path="/contacts"
+          params={params}
+          columns={columns}
+          cells={contactCells}
+          rows={contacts}
+          rowId={(contact) => contact.id}
+          rowHref={(contact) => `/contacts/${contact.id}`}
+          rowLabel={contactName}
+          wrapRow={(contact, tr) => (
+            <RecordContextMenu label={contactName(contact)} href={`/contacts/${contact.id}`} actions={contactActions(contact, { canEdit, canCreateLead, canManageActivities })}>
+              {tr}
+            </RecordContextMenu>
+          )}
+          prefs={prefs}
+          sort={sort}
+          total={total}
+          noun={{ one: "contact", many: "contacts" }}
+          preview={previewContactSelection}
         />
       )}
       <ListPager path="/contacts" page={page} total={total} className="px-0" />
@@ -322,54 +334,20 @@ function MiniMetric({ icon: Icon, value, label, active = false }: { icon: typeof
   return <div className="rounded-lg border border-border/70 bg-background/35 px-2.5 py-1.5"><div className="flex items-center gap-1.5"><Icon className={cn("size-3.5", active ? "text-orange-400" : "text-muted-foreground")} /><span className="text-sm font-semibold tabular-nums">{value}</span></div><p className="mt-0.5 text-[10px] text-muted-foreground">{label}</p></div>;
 }
 
-function ContactTable({
-  contacts,
-  automotiveOn,
-  canEdit,
-  canCreateLead,
-  canManageActivities,
-}: {
-  contacts: ContactWithRelations[];
-  automotiveOn: boolean;
-  canEdit: boolean;
-  canCreateLead: boolean;
-  canManageActivities: boolean;
-}) {
-  return (
-    <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="bg-muted/25 text-left text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-            <tr><th className="px-5 py-3">Customer</th><th className="px-4 py-3">Contact</th><th className="px-4 py-3">Relationship</th>{automotiveOn && <th className="px-4 py-3 text-center">Vehicles</th>}<th className="px-4 py-3 text-center">Leads</th><th className="px-4 py-3">Added</th><th className="w-10" /></tr>
-          </thead>
-          <tbody className="divide-y divide-border/70">
-            {contacts.map((contact) => {
-              const name = contactName(contact);
-              return (
-                <RecordContextMenu
-                  key={contact.id}
-                  label={name}
-                  href={`/contacts/${contact.id}`}
-                  actions={contactActions(contact, { canEdit, canCreateLead, canManageActivities })}
-                >
-                <tr tabIndex={0} data-nav-row="" data-nav-href={`/contacts/${contact.id}`} className="group transition-colors hover:bg-white/[0.025] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary">
-                  <td className="px-5 py-3.5"><Link href={`/contacts/${contact.id}`} className="flex items-center gap-3"><span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-orange-500/10 text-[10px] font-semibold text-orange-300">{contact.isCompany ? <Building2 className="size-4" /> : initials(name)}</span><span><span className="block font-medium text-foreground group-hover:text-orange-300">{name}</span><span className="block text-xs text-muted-foreground">{contact.company || contact.city || (contact.isCompany ? "Company" : "Customer")}</span></span></Link></td>
-                  <td className="px-4 py-3.5"><p className="max-w-60 truncate text-xs text-foreground/85">{contact.email || contact.phone || "No details"}</p>{contact.email && contact.phone && <p className="mt-0.5 text-[11px] text-muted-foreground">{contact.phone}</p>}</td>
-                  <td className="px-4 py-3.5"><div className="flex flex-wrap gap-1">{contact.tags.slice(0, 2).map((tag) => <Badge key={tag.id} variant="outline" className="text-[10px] text-muted-foreground"><span className="size-1.5 rounded-full" style={{ backgroundColor: tag.color }} />{tag.name}</Badge>)}{contact.owner && <span className="text-[11px] text-muted-foreground">{contact.tags.length ? "· " : ""}{contact.owner.name}</span>}</div></td>
-                  {automotiveOn && <td className="px-4 py-3.5 text-center font-medium tabular-nums">{contact._count.vehicles}</td>}
-                  <td className="px-4 py-3.5 text-center"><span className={cn("inline-flex min-w-6 justify-center rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums", contact._count.leads ? "bg-orange-400/10 text-orange-300" : "text-muted-foreground")}>{contact._count.leads}</span></td>
-                  <td className="whitespace-nowrap px-4 py-3.5 text-xs text-muted-foreground">{formatDate(contact.createdAt)}</td>
-                  <td className="pr-4"><Link href={`/contacts/${contact.id}`} aria-label={`Open ${name}`} title={`Open ${name}`} className="flex size-7 items-center justify-center rounded-md text-muted-foreground opacity-0 transition hover:bg-accent hover:text-foreground group-hover:opacity-100 focus:opacity-100"><ArrowRight className="size-3.5" /></Link></td>
-                </tr>
-                </RecordContextMenu>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
+/** One renderer per declared column (lib/grid/contactsGrid.ts); the grid picks, orders and sizes them. */
+const contactCells: Record<string, (contact: ContactWithRelations) => React.ReactNode> = {
+  customer: (contact) => {
+    const name = contactName(contact);
+    return <Link href={`/contacts/${contact.id}`} className="flex min-w-0 items-center gap-3"><span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-orange-500/10 text-[10px] font-semibold text-orange-300">{contact.isCompany ? <Building2 className="size-4" /> : initials(name)}</span><span className="min-w-0"><span className="block truncate font-medium text-foreground group-hover:text-orange-300">{name}</span><span className="block truncate text-xs text-muted-foreground">{contact.company || contact.city || (contact.isCompany ? "Company" : "Customer")}</span></span></Link>;
+  },
+  contact: (contact) => <><p className="truncate text-xs text-foreground/85">{contact.email || contact.phone || "No details"}</p>{contact.email && contact.phone && <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{contact.phone}</p>}</>,
+  relationship: (contact) => <div className="flex flex-wrap gap-1">{contact.tags.slice(0, 2).map((tag) => <Badge key={tag.id} variant="outline" className="text-[10px] text-muted-foreground"><span className="size-1.5 rounded-full" style={{ backgroundColor: tag.color }} />{tag.name}</Badge>)}{contact.owner && <span className="text-[11px] text-muted-foreground">{contact.tags.length ? "· " : ""}{contact.owner.name}</span>}</div>,
+  owner: (contact) => <span className="block truncate text-xs text-muted-foreground">{contact.owner?.name ?? "Unassigned"}</span>,
+  city: (contact) => <span className="block truncate text-xs text-muted-foreground">{contact.city || "—"}</span>,
+  vehicles: (contact) => <span className="font-medium tabular-nums">{contact._count.vehicles}</span>,
+  leads: (contact) => <span className={cn("inline-flex min-w-6 justify-center rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums", contact._count.leads ? "bg-orange-400/10 text-orange-300" : "text-muted-foreground")}>{contact._count.leads}</span>,
+  added: (contact) => <span className="whitespace-nowrap text-xs text-muted-foreground">{formatDate(contact.createdAt)}</span>,
+};
 
 function EmptyState({ query }: { query?: string }) {
   return (
