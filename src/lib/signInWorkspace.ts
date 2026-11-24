@@ -20,7 +20,7 @@ export async function brandForSignInSlug(slug: unknown): Promise<TenantBrand | n
   try {
     const row = await basePrisma.tenant.findFirst({
       where: { slug, active: true },
-      select: { id: true, name: true, brandPrimary: true, brandLogoRef: true, brandDisplayName: true, brandTagline: true, loginJson: true },
+      select: { id: true, name: true, brandPrimary: true, brandLogoRef: true, brandIconRef: true, brandDisplayName: true, brandTagline: true, loginJson: true },
     });
     if (!row) return null;
     const { id, name, ...brand } = row;

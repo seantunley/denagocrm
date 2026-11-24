@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { requireUser, getActiveTenantId, isTenantOwner } from "@/lib/auth";
 import type { Metadata } from "next";
 import { brandForTenant, brandIcons, brandLogoUrl, brandStyle, DEFAULT_BRAND } from "@/lib/tenantBrand";
+import { manifestHref } from "@/lib/installedApp";
 import { getRegionalSettings, getSetting } from "@/lib/settings";
 import { DEFAULT_REGIONAL } from "@/lib/format";
 import { getCurrencyOptions } from "@/lib/currency";
@@ -39,7 +40,8 @@ export async function generateMetadata(): Promise<Metadata> {
   try {
     const brand = await brandForTenant(await getActiveTenantId());
     if (!brand.tenantId) return {};
-    return { title: brand.displayName, icons: brandIcons(brand) };
+    // The installed app is this workspace's too: the manifest is fetched without the session, so its link names it.
+    return { title: brand.displayName, icons: brandIcons(brand), manifest: manifestHref("/manifest.webmanifest", brand.tenantId) };
   } catch {
     return {};
   }

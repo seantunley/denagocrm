@@ -3828,6 +3828,9 @@ model Tenant {
   /// Blob pathname (not a URL) written through putManagedBlob, resolved at render
   /// time. Storing the path rather than the URL keeps private-mode blobs working.
   brandLogoRef     String?
+  /// Blob pathname of the workspace's own square app icon (tab, installed app, notifications) — lib/appIcon.ts.
+  /// Null: a square logo stands in, else a letter tile.
+  brandIconRef     String?
   /// Replaces the literal "Denago Cape Town" in shells, login pages and documents.
   brandDisplayName String?
   /// Replaces "Authorized Denago EV Dealer" and the login page's tagline copy.

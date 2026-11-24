@@ -4,6 +4,8 @@ import { basePrisma } from "@/lib/db";
 import { getCompanyProfile } from "@/lib/companyProfile";
 import { saveCompanyProfile, saveRecordLabels } from "@/app/actions/company";
 import { uploadMyLogoAction } from "@/app/actions/workspaceLogo";
+import { removeMyAppIconAction, uploadMyAppIconAction } from "@/app/actions/workspaceIcon";
+import { appIconUrl } from "@/lib/appIcon";
 import { resetMyLoginLookAction, saveMyLoginLookAction } from "@/app/actions/loginLook";
 import { SaveButton, SaveForm } from "@/components/SaveForm";
 import LoginLookEditor from "@/components/branding/LoginLookEditor";
@@ -90,6 +92,34 @@ export default async function CompanyProfilePage() {
               <SaveButton>Upload logo</SaveButton>
             </div>
           </SaveForm>
+
+          <SaveForm action={uploadMyAppIconAction} success="App icon updated" className="card flex flex-col gap-4 p-5">
+            <div>
+              <h3 className="font-semibold">App icon</h3>
+              <p className="mt-1 text-xs text-muted-foreground">
+                The square picture on your browser tab, your team&apos;s installed app and its notifications. Without one,
+                your logo is placed on a square.
+              </p>
+            </div>
+            <div className="flex items-center gap-4">
+              {/* eslint-disable-next-line @next/next/no-img-element -- drawn by /api/brand/icon */}
+              <img src={appIconUrl(brand, 192)} alt="" className="size-16 rounded-xl border border-border" />
+              <span className="text-xs text-muted-foreground">{brand.iconRef ? "Your own icon" : brand.logoRef ? "Made from your logo" : "The standard icon"}</span>
+            </div>
+            <label className="space-y-1">
+              <span className="text-xs font-medium text-muted-foreground">{brand.iconRef ? "Replace with" : "Upload"}</span>
+              <input type="file" name="icon" accept="image/png,image/jpeg,image/webp" required className="block w-full text-xs file:mr-3 file:rounded-md file:border-0 file:bg-muted file:px-3 file:py-1.5 file:text-foreground" />
+              <span className="block text-[11px] text-muted-foreground">A square PNG, JPEG or WebP, at least 192 × 192 (512 × 512 is best), under 1 MB.</span>
+            </label>
+            <div className="mt-auto flex justify-end gap-2">
+              <SaveButton>Upload icon</SaveButton>
+            </div>
+          </SaveForm>
+          {brand.iconRef && (
+            <SaveForm action={removeMyAppIconAction} success="App icon removed" resetOnSuccess={false} className="-mt-2 flex justify-end">
+              <SaveButton className="btn-ghost btn-sm text-muted-foreground">Remove app icon</SaveButton>
+            </SaveForm>
+          )}
         </section>
 
         <section className="space-y-3">

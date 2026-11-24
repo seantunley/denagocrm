@@ -1,31 +1,7 @@
-<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <linearGradient id="bgg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#0c1626"/>
-      <stop offset="1" stop-color="#020617"/>
-    </linearGradient>
-    <radialGradient id="glow" cx="0.5" cy="0.4" r="0.62">
-      <stop offset="0" stop-color="#f97316" stop-opacity="0.30"/>
-      <stop offset="1" stop-color="#f97316" stop-opacity="0"/>
-    </radialGradient>
-    <linearGradient id="dg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#fdba74"/>
-      <stop offset="0.45" stop-color="#f97316"/>
-      <stop offset="1" stop-color="#ea580c"/>
-    </linearGradient>
-    <filter id="sh" x="-30%" y="-30%" width="160%" height="160%">
-      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#000000" flood-opacity="0.40"/>
-    </filter>
-  </defs>
-  <rect x="0" y="0" width="512" height="512" rx="112" fill="url(#bgg)"/>
-  <rect x="0" y="0" width="512" height="512" rx="112" fill="url(#glow)"/>
-  
-  <g filter="url(#sh)">
-    <path d="M160 120 L160 392 M160 120 C 308 120 372 182 372 256 C 372 330 308 392 160 392"
-          fill="none" stroke="url(#dg)" stroke-width="84" stroke-linecap="round" stroke-linejoin="round"/>
-    <g transform="translate(252 256) scale(1.15)" paint-order="stroke"
-       stroke="#020617" stroke-width="22" stroke-linejoin="round">
-      <path d="M 40 -140 L -48 20 L 6 20 L -28 140 L 70 -30 L 14 -30 Z" fill="#ffffff"/>
-    </g>
-  </g>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512"><defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0c1626"/><stop offset="1" stop-color="#020617"/></linearGradient>
+  <radialGradient id="glow" cx="0.5" cy="0.45" r="0.6"><stop offset="0" stop-color="#f97316" stop-opacity="0.28"/><stop offset="1" stop-color="#f97316" stop-opacity="0"/></radialGradient>
+  <linearGradient id="hx" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fdba74"/><stop offset="1" stop-color="#ea580c"/></linearGradient>
+</defs>
+  <rect width="512" height="512" rx="112.64" fill="url(#bg)"/><rect width="512" height="512" rx="112.64" fill="url(#glow)"/>
+  <polygon points="256.00,97.28 393.46,176.64 393.46,335.36 256.00,414.72 118.54,335.36 118.54,176.64" fill="none" stroke="url(#hx)" stroke-width="38.4" stroke-linejoin="round"/><circle cx="195.6864" cy="256" r="19.0464" fill="url(#hx)"/><circle cx="256" cy="256" r="19.0464" fill="url(#hx)"/><circle cx="316.3136" cy="256" r="19.0464" fill="url(#hx)"/></svg>
