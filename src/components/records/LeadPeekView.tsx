@@ -255,7 +255,7 @@ function ScheduleNext({ leadId, defaultDate, onDone }: { leadId: string; default
       {error && <p role="alert" className="text-xs text-red-400">{error}</p>}
       <div className="flex justify-end gap-2">
         <button type="button" className="btn-secondary btn-sm" onClick={() => setOpen(false)} disabled={pending}>Cancel</button>
-        <button type="button" className="btn-primary btn-sm" onClick={save} disabled={pending || !date}>{pending ? "Booking…" : "Book"}</button>
+        <button type="button" className="btn-primary btn-sm" onClick={save} disabled={pending || !date} title={!date ? "Pick a date first" : undefined}>{pending ? "Booking…" : "Book"}</button>
       </div>
     </div>
   );
@@ -298,7 +298,7 @@ function PickAndSave({ label, icon: Icon, options, current, button, save, onDone
           {!options.some((option) => option.id === current) && <option value={current}>—</option>}
           {options.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}
         </select>
-        <button type="button" className="btn-secondary btn-sm shrink-0" onClick={run} disabled={pending || value === current || !value}>
+        <button type="button" className="btn-secondary btn-sm shrink-0" onClick={run} disabled={pending || value === current || !value} title={value === current || !value ? `Pick a different ${label.toLowerCase()} first` : undefined}>
           {pending ? "…" : button}
         </button>
       </div>

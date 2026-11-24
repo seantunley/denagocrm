@@ -81,11 +81,11 @@ export default function RecordDrawer() {
           <SheetTitle className="truncate">{current?.ok ? current.peek.name : ref ? "Loading…" : ""}</SheetTitle>
           <SheetDescription className="sr-only">The record beside your list, with what can be done about it here.</SheetDescription>
           <nav className="flex flex-wrap items-center gap-2" aria-label="Record">
-            <button type="button" className="btn-secondary btn-sm" onClick={() => step(-1)} disabled={!previousRef} aria-label="Previous record">
+            <button type="button" className="btn-secondary btn-sm" onClick={() => step(-1)} disabled={!previousRef} title={previousRef ? "The record before this one in your list" : "This is the first record in your list"}>
               <ChevronLeft className="size-4" />
               Previous
             </button>
-            <button type="button" className="btn-secondary btn-sm" onClick={() => step(1)} disabled={!nextRef} aria-label="Next record">
+            <button type="button" className="btn-secondary btn-sm" onClick={() => step(1)} disabled={!nextRef} title={nextRef ? "The next record in your list" : "This is the last record in your list"}>
               Next
               <ChevronRight className="size-4" />
             </button>
