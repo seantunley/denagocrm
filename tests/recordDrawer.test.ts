@@ -31,6 +31,10 @@ test("Next and Previous follow the list as it was shown", () => {
   // Opening pushes one history entry (Back closes); stepping replaces it.
   assert.match(nav, /if \(already\) window\.history\.replaceState/);
   assert.match(nav, /window\.history\.pushState\(null, "", url\)/);
+  // Closed by the browser's Back (which never calls closeRecord), the page forgets it pushed the entry: a record
+  // opened later from a shared link then closes by dropping the param, not by going Back (review of #1235).
+  assert.match(nav, /export function drawerClosed\(\) \{\s*openedHere = false;\s*\}/);
+  assert.match(src("src/components/records/RecordDrawer.tsx"), /if \(!key\) \{\s*drawerClosed\(\);\s*return;\s*\}/);
   // The order is captured when a record opens, so a row that leaves the list after being done doesn't lose our place.
   assert.match(src("src/components/records/RecordDrawer.tsx"), /setOrder\(\(previous\) => \(previous\.includes\(key\) \? previous : listedRecords\(\)\)\)/);
 });
@@ -64,9 +68,18 @@ test("the drawer's read checks the workspace and THIS record's access before rea
   const peek = src("src/lib/records/leadPeek.ts");
   assert.ok(peek.indexOf("await canAccessLead(user, leadId)") < peek.indexOf("prisma.lead.findFirst"), "access is checked first");
   // Every read names the acting workspace.
-  const reads = peek.match(/prisma\.\w+\.(findFirst|findMany)\(\{\s*where: \{[^}]*/g) ?? [];
+  const reads = peek.match(/prisma\.\w+\s*\.(findFirst|findMany)\(\{\s*where: \{[^}]*/g) ?? [];
   assert.equal(reads.length, 5);
   for (const read of reads) assert.match(read, /tenantId/, read);
+  // Related records are records of their own (review of #1235): the customer's WhatsApps count only when the
+  // person may open the customer, and the sent quote's number reaches the drafts only when they may open the quote.
+  assert.ok(peek.indexOf("const mayOpenCustomer = lead.contactId ? await canAccessContact(user, lead.contactId) : false;") < peek.indexOf("prisma.communication.findFirst"));
+  assert.match(peek, /OR: \[\{ leadId: lead\.id \}, \.\.\.\(lead\.contactId && mayOpenCustomer \? \[\{ contactId: lead\.contactId \}\] : \[\]\)\]/);
+  assert.match(peek, /\.then\(async \(quote\) => \(quote && \(await canAccessQuote\(user, quote\.id\)\) \? quote : null\)\)/);
+  // Today's own drafts follow the same rule.
+  const today = src("src/app/(app)/today/page.tsx");
+  assert.match(today, /getAccessibleQuoteIds\(user\)/);
+  assert.match(today, /\.\.\.\(openableQuotes === null \? \{\} : \{ id: \{ in: openableQuotes \} \}\)/);
   // The customer's contact details only when the person may open that customer; activities only those they may see.
   assert.match(peek, /const customer = mayOpenCustomer \? lead\.contact : null;/);
   assert.match(peek, /seesActivities \? getAccessibleActivityIds\(user\)/);

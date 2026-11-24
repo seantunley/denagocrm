@@ -3,6 +3,7 @@ import { Sun } from "lucide-react";
 import {
   CUSTOMER_RECORD_WRITE_PERMISSIONS,
   getAccessibleContactIds,
+  getAccessibleQuoteIds,
   hasAnyPermission,
   hasPermission,
   requireAnyPermission,
@@ -57,7 +58,8 @@ export default async function TodayPage({
   const leadIds = shown.map((lead) => lead.id);
   // Only customers this viewer may open — the lead page's rule. A customer's own
   // WhatsApps would otherwise leak their timing through whether WhatsApp is offered.
-  const openableContacts = await getAccessibleContactIds(user);
+  // The same for quotes: a sent quote's number goes into the drafts only when this viewer may open that quote.
+  const [openableContacts, openableQuotes] = await Promise.all([getAccessibleContactIds(user), getAccessibleQuoteIds(user)]);
   const contactIds = [
     ...new Set(
       shown
@@ -74,9 +76,9 @@ export default async function TodayPage({
       isSmtpConfigured(),
       isWhatsAppConfigured(),
       getCompanyProfile(),
-      leadIds.length
+      leadIds.length && (openableQuotes === null || openableQuotes.length > 0)
         ? prisma.quote.findMany({
-            where: { leadId: { in: leadIds }, deletedAt: null, status: "sent", signedAt: null, supersededAt: null },
+            where: { leadId: { in: leadIds }, ...(openableQuotes === null ? {} : { id: { in: openableQuotes } }), deletedAt: null, status: "sent", signedAt: null, supersededAt: null },
             select: { leadId: true, number: true },
             orderBy: { createdAt: "desc" },
           })

@@ -5,7 +5,7 @@ import { getAccessibleActivityIds } from "@/lib/activityAccess";
 import { getCompanyProfile } from "@/lib/companyProfile";
 import { isSmtpConfigured } from "@/lib/email";
 import { scoreLeads } from "@/lib/leadScoreLoader";
-import { canAccessContact, canAccessLead, hasPermission, type PermissionKey, type PermissionUser } from "@/lib/permissions";
+import { canAccessContact, canAccessLead, canAccessQuote, hasPermission, type PermissionKey, type PermissionUser } from "@/lib/permissions";
 import { listPipelineStages } from "@/lib/pipelines";
 import { listActingTenantStaff } from "@/lib/tenantActor";
 import { addWorkingDays, defaultChannel, nextStepDefault, todayChannels, todayDrafts, type ChannelState, type TodayChannel } from "@/lib/todayAction";
@@ -94,22 +94,27 @@ export async function loadLeadPeek(user: PermissionUser, leadId: string, now = n
   const actions = availableActions("lead", (key) => held.has(key));
   const seesActivities = held.has("activities.view") || held.has("activities.manage");
 
-  const [scores, mayOpenCustomer, activityIds, smtp, whatsapp, company, stages, staff, sentQuote, lastWa, regional] = await Promise.all([
+  // The deal's customer is a record of its own: being able to open the lead does not open them (review of #1235).
+  const mayOpenCustomer = lead.contactId ? await canAccessContact(user, lead.contactId) : false;
+  const [scores, activityIds, smtp, whatsapp, company, stages, staff, sentQuote, lastWa, regional] = await Promise.all([
     scoreLeads([lead], now),
-    lead.contactId ? canAccessContact(user, lead.contactId) : false,
     seesActivities ? getAccessibleActivityIds(user) : ([] as string[]),
     isSmtpConfigured(),
     isWhatsAppConfigured(),
     getCompanyProfile(),
     actions.includes("changeStage") && lead.status === "open" ? listPipelineStages(lead.stage.pipelineId) : [],
     actions.includes("assignOwner") ? listActingTenantStaff() : [],
-    prisma.quote.findFirst({
-      where: { tenantId, leadId: lead.id, deletedAt: null, status: "sent", signedAt: null, supersededAt: null },
-      select: { number: true },
-      orderBy: { createdAt: "desc" },
-    }),
+    // The sent quote's number goes into the drafts — only when this person may open that quote.
+    prisma.quote
+      .findFirst({
+        where: { tenantId, leadId: lead.id, deletedAt: null, status: "sent", signedAt: null, supersededAt: null },
+        select: { id: true, number: true },
+        orderBy: { createdAt: "desc" },
+      })
+      .then(async (quote) => (quote && (await canAccessQuote(user, quote.id)) ? quote : null)),
+    // WhatsApp's 24 hours: the customer's last WhatsApp on THIS deal, and on the customer only when they may open them.
     prisma.communication.findFirst({
-      where: { tenantId, type: "whatsapp", direction: "inbound", OR: [{ leadId: lead.id }, ...(lead.contactId ? [{ contactId: lead.contactId }] : [])] },
+      where: { tenantId, type: "whatsapp", direction: "inbound", OR: [{ leadId: lead.id }, ...(lead.contactId && mayOpenCustomer ? [{ contactId: lead.contactId }] : [])] },
       select: { occurredAt: true },
       orderBy: { occurredAt: "desc" },
     }),

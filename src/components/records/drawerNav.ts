@@ -34,6 +34,16 @@ export function openRecord(ref: RecordRef, from?: HTMLElement | null) {
   }
 }
 
+/**
+ * The drawer has closed by ANY route — its own close, Esc, or the browser's Back,
+ * which never calls closeRecord. Forget that this page pushed the entry, so a record
+ * opened later from a shared link closes by dropping the param, never by going Back
+ * to an unrelated page (review of #1235).
+ */
+export function drawerClosed() {
+  openedHere = false;
+}
+
 export function closeRecord() {
   if (openedHere) {
     openedHere = false;

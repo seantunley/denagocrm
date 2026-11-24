@@ -7,7 +7,7 @@ import { peekRecord, type PeekResult } from "@/app/actions/recordPeek";
 import { fullRecordHref, formatRecordRef, OPEN_PARAM, parseRecordRef } from "@/lib/records/ref";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import LeadPeekView from "./LeadPeekView";
-import { closeRecord, listedRecords, openRecord, restoreList, stepRecord } from "./drawerNav";
+import { closeRecord, drawerClosed, listedRecords, openRecord, restoreList, stepRecord } from "./drawerNav";
 
 /**
  * The contextual record drawer (wave 2, W2-01): the record a row points at, beside
@@ -37,7 +37,10 @@ export default function RecordDrawer() {
   useEffect(() => {
     // Every new request supersedes the last: a slow answer for an earlier row is thrown away.
     const mine = ++request.current;
-    if (!key) return;
+    if (!key) {
+      drawerClosed();
+      return;
+    }
     lastKey.current = key;
     peekRecord(key)
       .then((value) => {

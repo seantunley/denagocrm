@@ -103,7 +103,7 @@ test("the row writes only through the existing guarded actions, and only on a cl
 
 test("WhatsApp's 24-hour window reads only customers the viewer may open", () => {
   const page = src("src/app/(app)/today/page.tsx");
-  assert.match(page, /const openableContacts = await getAccessibleContactIds\(user\);/);
+  assert.match(page, /const \[openableContacts, openableQuotes\] = await Promise\.all\(\[getAccessibleContactIds\(user\), getAccessibleQuoteIds\(user\)\]\);/);
   assert.match(page, /openableContacts === null \|\| openableContacts\.includes\(id as string\)/);
   assert.match(page, /where: \{ contactId: \{ in: contactIds \}, type: "whatsapp", direction: "inbound" \}/);
 });
