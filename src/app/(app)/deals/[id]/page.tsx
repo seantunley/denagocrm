@@ -74,11 +74,11 @@ function Fact({ label, value }: { label: string; value: ReactNode }) {
   );
 }
 
-function ReadinessRow({ done, label, detail, action }: { done: boolean; label: string; detail?: string; action?: ReactNode }) {
+function ReadinessRow({ done, skipped, label, detail, action }: { done: boolean; skipped?: boolean; label: string; detail?: string; action?: ReactNode }) {
   return (
     <div className="flex items-start gap-3 py-2">
-      <span className={`mt-0.5 grid size-5 shrink-0 place-items-center rounded-full border ${done ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300" : "border-amber-400/40 bg-amber-400/10 text-amber-300"}`}>
-        {done ? <Check className="size-3" /> : <span className="size-1.5 rounded-full bg-current" />}
+      <span className={`mt-0.5 grid size-5 shrink-0 place-items-center rounded-full border ${done ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300" : skipped ? "border-dashed border-border text-muted-foreground/60" : "border-amber-400/40 bg-amber-400/10 text-amber-300"}`}>
+        {done ? <Check className="size-3" /> : skipped ? <Minus className="size-3" /> : <span className="size-1.5 rounded-full bg-current" />}
       </span>
       <div className="min-w-0 flex-1">
         <p className="text-sm font-medium text-foreground">{label}</p>
@@ -284,6 +284,7 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
   };
   const pdiReady = dealPdiReady(stock);
   const journey = dealMilestones(facts);
+  const depositStep = journey.find((step) => step.key === "deposit")!;
   const current = currentMilestone(journey);
   const progress = dealProgress(journey);
   const blockers = dealBlockers(facts);
@@ -615,7 +616,8 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
               </div>
               <div className="mt-3 divide-y divide-border/60">
                 <ReadinessRow done={accepted} label="Agreement accepted" detail={quote.signedAt ? `Signed ${formatDateTime(quote.signedAt)}` : accepted ? "Marked accepted — not signed online" : "Customer acceptance outstanding"} />
-                <ReadinessRow done={Boolean(quote.depositPaidAt)} label="Deposit received" detail={quote.depositPaidAt ? formatDateTime(quote.depositPaidAt) : depositAmount ? `Waiting for ${formatZAR(depositAmount, moneyFmt)}` : "No deposit receipt recorded"} />
+                {/* The same deposit step as the journey: no deposit asked = not needed, never a failed row. */}
+                <ReadinessRow done={Boolean(quote.depositPaidAt)} skipped={depositStep.skipped} label="Deposit received" detail={quote.depositPaidAt ? formatDateTime(quote.depositPaidAt) : depositStep.skipped ? "Not needed — no deposit asked on this deal" : `Waiting for ${formatZAR(depositAmount, moneyFmt)}`} />
                 {finance && finance.status !== "withdrawn" && (
                   <ReadinessRow
                     done={!financeBlocksDelivery(finance.status)}
