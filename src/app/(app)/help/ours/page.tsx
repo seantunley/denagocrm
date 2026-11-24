@@ -14,7 +14,7 @@ export default async function OurGuidesPage() {
   const [owner, guides] = await Promise.all([isTenantOwner(), loadCustomGuides()]);
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <div className="space-y-6">
       <Link href="/help" className="inline-flex min-h-9 items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
         <ArrowLeft className="size-3.5" /> Help
       </Link>

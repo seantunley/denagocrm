@@ -7,6 +7,7 @@ import { HELP_AREA_STYLE } from "../src/lib/help/areas";
 import { HELP_DESTINATIONS, destinationFor } from "../src/lib/help/destinations";
 import { FEATURED_SLUGS, HELP_PATHS, featuredFor, featuredPathKey, parseRead, pathProgress, pathsFor, withRead } from "../src/lib/help/paths";
 import { rankHelp } from "../src/lib/help/quickSearch";
+import { MIN_OUTLINE, headingAnchor, outlineOf, readingMinutes } from "../src/lib/help/outline";
 
 const code = (path: string) => readFileSync(path, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 const ALL = new Set(HELP_ARTICLES.map((article) => article.slug));
@@ -116,7 +117,6 @@ test("the front page leads with search, and the side menu's search steps aside t
   assert.ok(home.indexOf("<HelpSearch") < home.indexOf("<HelpPaths"), "search comes before everything else");
   assert.ok(home.indexOf("<HelpPaths") < home.indexOf("Browse by area"));
   assert.match(home, /readKey\(user\.id\)/, "ticks are kept per person");
-  assert.match(code("src/components/help/HelpNav.tsx"), /pathname === "\/help" && "hidden"/);
 });
 
 test("an article offers its screen and ticks itself on the reader's paths", () => {
@@ -135,7 +135,7 @@ test("ticks are kept in the browser, and a browser that refuses storage breaks n
 
 test("the help home has the page to itself; a guide keeps the side menu", () => {
   const frame = code("src/components/help/HelpFrame.tsx");
-  assert.match(frame, /if \(pathname === "\/help"\) return <div className="mx-auto w-full max-w-6xl">\{children\}<\/div>;/);
+  assert.match(frame, /if \(pathname === "\/help"\) return <div className="w-full">\{children\}<\/div>;/);
   assert.match(frame, /<aside[^>]*>\{nav\}<\/aside>/);
   assert.match(code("src/app/(app)/help/layout.tsx"), /<HelpFrame nav=\{<HelpNav groups=\{groups\} \/>\}>\{children\}<\/HelpFrame>/);
 });
@@ -149,4 +149,48 @@ test("one path is shown in full: the one in progress, else the first unfinished"
   assert.equal(featuredPathKey([], new Set()), null);
   const view = code("src/components/help/HelpPaths.tsx");
   assert.equal(view.match(/<ol /g)?.length, 1, "only one list of guides is ever open");
+});
+
+test("the menu beside a guide lists the area being read, not every guide", () => {
+  const nav = code("src/components/help/HelpNav.tsx");
+  assert.match(nav, /const current = groups\.find\(\(g\) => g\.articles\.some\(\(a\) => pathname === `\/help\/\$\{a\.slug\}`\)\) \?\? null;/);
+  assert.match(nav, /\{current\.articles\.map\(/);
+  assert.doesNotMatch(nav, /groups\.map\(\(g\) => \(\s*<div key=\{g\.key\}>[\s\S]*g\.articles\.map/, "no longer every area's every guide");
+  assert.match(nav, /others\.map\(\(g\) => \(\s*<Link key=\{g\.key\} href=\{`\/help\/\$\{g\.articles\[0\]\.slug\}`\}/);
+  assert.match(nav, /<Link href="\/help"/);
+});
+
+test("a guide's outline and reading time come from its own blocks", () => {
+  const body = [
+    { type: "p" as const, text: "word ".repeat(390) },
+    { type: "h" as const, text: "The **sidebar**" },
+    { type: "steps" as const, items: ["one two", "three"] },
+    { type: "h" as const, text: "Search" },
+  ];
+  assert.deepEqual(outlineOf(body), [{ id: "h-1", text: "The sidebar" }, { id: "h-3", text: "Search" }]);
+  assert.equal(headingAnchor(3), "h-3");
+  assert.equal(readingMinutes(body), 2);
+  assert.equal(readingMinutes([]), 1);
+  assert.equal(MIN_OUTLINE, 2);
+});
+
+test("only a page showing one guide anchors its headings", () => {
+  assert.match(code("src/components/help/ArticleBody.tsx"), /id=\{anchors \? headingAnchor\(i\) : undefined\}/);
+  assert.match(code("src/app/(app)/help/[slug]/page.tsx"), /<ArticleBody body=\{article\.body\} anchors \/>/);
+  assert.doesNotMatch(code("src/app/(print)/manual/page.tsx"), /anchors/);
+});
+
+test("a guide with no outline keeps no empty column for one", () => {
+  const page = code("src/app/(app)/help/[slug]/page.tsx");
+  assert.match(page, /const outline = headings\.length >= MIN_OUTLINE \? headings : null;/);
+  assert.match(page, /<div className=\{outline \? "grid gap-10 xl:grid-cols-\[minmax\(0,1fr\)_14rem\]" : undefined\}>/);
+  assert.doesNotMatch(page, /max-w-3xl/, "the guide fills the width it has");
+  assert.match(page, /\{outline && \(\s*<aside/);
+});
+
+test("the help centre is full width: no centred column on any of its pages", () => {
+  assert.doesNotMatch(code("src/components/help/HelpFrame.tsx"), /max-w-|mx-auto/);
+  for (const page of ["page.tsx", "[slug]/page.tsx", "whats-new/page.tsx", "ours/page.tsx", "ours/new/page.tsx", "ours/[id]/page.tsx", "ours/[id]/edit/page.tsx"]) {
+    assert.doesNotMatch(code(`src/app/(app)/help/${page}`), /mx-auto max-w-(3xl|6xl|7xl)/, page);
+  }
 });

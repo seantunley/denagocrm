@@ -10,7 +10,7 @@ export const metadata: Metadata = { title: "New guide · Help" };
 export default async function NewGuidePage() {
   await requireTenantOwner();
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <div className="space-y-6">
       <Link href="/help/ours" className="inline-flex min-h-9 items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
         <ArrowLeft className="size-3.5" /> Our own guides
       </Link>
