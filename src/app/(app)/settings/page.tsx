@@ -784,7 +784,7 @@ export default async function SettingsPage({
                     className="input"
                     rows={5}
                     required
-                    placeholder={"Hi {{first_name}},\n\nThanks for your interest in the {{model}}…\n\n{{user_name}}\nDenago Cape Town · 073 789 3438"}
+                    placeholder={"Hi {{first_name}},\n\nThanks for your interest in the {{model}}…\n\n{{user_name}}"}
                   />
                   <SaveButton className="btn-primary btn-sm">Create template</SaveButton>
                 </SaveForm>
@@ -1012,7 +1012,7 @@ export default async function SettingsPage({
               action="Edit"
             >
               <p className="text-xs text-muted-foreground mb-4">
-                Customers booking a service on denagocpt.co.za can only pick these slots. A slot
+                Customers booking a service on your website can only pick these slots. A slot
                 disappears from the website the moment it&apos;s taken.
               </p>
               <SaveForm success="Workshop settings saved" resetOnSuccess={false} action={saveWorkshopSettings} className="space-y-4 max-w-xl">

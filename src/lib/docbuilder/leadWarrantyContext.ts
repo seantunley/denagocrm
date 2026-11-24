@@ -73,7 +73,7 @@ const addressOf = (c: ContactForDoc | null) =>
 
 /** Test-drive indemnity: the driver (lead), the vehicle of interest, today's date. */
 export function buildLeadContext(lead: LeadForDoc, now = new Date(), r: Regional = DEFAULT_REGIONAL): MergeContext {
-  const vehicle = lead.product?.name ?? "Denago EV";
+  const vehicle = lead.product?.name ?? "the vehicle";
   const tokens: Record<string, string> = {
     "customer.name": lead.name,
     "customer.phone": lead.phone ?? "",

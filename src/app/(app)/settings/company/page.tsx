@@ -12,11 +12,11 @@ export const dynamic = "force-dynamic";
 
 const FIELDS: { name: string; label: string; placeholder?: string }[] = [
   { name: "name", label: "Company name" },
-  { name: "tagline", label: "Tagline", placeholder: "Authorized Denago EV Dealer" },
+  { name: "tagline", label: "Tagline", placeholder: "Family-owned since 1998" },
   { name: "address", label: "Address" },
   { name: "phone", label: "Phone" },
   { name: "email", label: "Email" },
-  { name: "website", label: "Website", placeholder: "denagocpt.co.za" },
+  { name: "website", label: "Website", placeholder: "yourbusiness.co.za" },
   { name: "facebook", label: "Facebook", placeholder: "facebook.com/…" },
   { name: "instagram", label: "Instagram", placeholder: "@handle" },
   { name: "logoUrl", label: "Logo URL", placeholder: "https://…" },

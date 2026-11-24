@@ -80,7 +80,7 @@ test("brand is optional on AppShell, so an unbranded render is the old render", 
   const shell = shipped("src/components/AppShell.tsx");
   assert.match(shell, /brand\?: \{ logoUrl: string \| null; displayName: string \}/);
   assert.match(shell, /brand\?\.logoUrl \?\? null/, "absent brand → built-in asset");
-  assert.match(shell, /brand\?\.displayName \?\? "Denago Cape Town"/, "absent brand → the original alt text");
+  assert.match(shell, /brand\?\.displayName \?\? "Logo"/, "absent brand → a neutral alt text, never one business's name");
 });
 
 /**

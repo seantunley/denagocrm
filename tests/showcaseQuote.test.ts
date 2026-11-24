@@ -88,7 +88,8 @@ test("the showcase renders THIS quote's model with its photo embedded as a data 
     showcaseSpecs: [{ icon: "seats", label: "4 SEATS", sub: "Comfortable seating" }, { icon: "range", label: "64 KM", sub: "Typical range" }],
   }, PNG);
   const html = renderDocumentHtml(doc, ctx({ showcase }), "data:image/png;base64,AAAA");
-  assert.match(html, />Rover XL</);
+  // A new showcase block names no brand, so the product's full name shows (a template that sets one strips it).
+  assert.match(html, />Denago EV Rover XL</);
   assert.match(html, /Lifted 4-seater/);
   assert.match(html, /4 SEATS/);
   assert.ok(html.includes(`src="${PNG}"`), "the vehicle photo is embedded inline");
@@ -99,14 +100,14 @@ test("the showcase renders THIS quote's model with its photo embedded as a data 
 
   // A different quote, a different model.
   const scout = renderDocumentHtml(doc, ctx({ showcase: showcaseFromProduct({ name: "Denago EV Scout 2", description: null, showcaseTagline: null, showcaseSpecs: null }, null) }));
-  assert.match(scout, />Scout 2</);
+  assert.match(scout, />Denago EV Scout 2</);
   assert.doesNotMatch(scout, />Rover XL</);
 });
 
 test("no product, photo or specs: those parts are hidden — no broken image, no tokens", () => {
   const doc = showcaseQuoteTemplate();
   const nameOnly = renderDocumentHtml(doc, ctx({}, { vehicle: "Denago EV Nomad" }));
-  assert.match(nameOnly, />Nomad</, "falls back to the quote's vehicle name");
+  assert.match(nameOnly, />Denago EV Nomad</, "falls back to the quote's vehicle name");
   assert.doesNotMatch(nameOnly, /<img[^>]+alt="Denago EV Nomad"/);
   assert.doesNotMatch(nameOnly, /Vehicle photo of the quoted model/, "the design-time placeholder never reaches a real quote");
   assert.doesNotMatch(nameOnly, /Model name/);
