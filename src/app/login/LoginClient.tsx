@@ -553,7 +553,9 @@ function Shell({ children, brand }: { children: React.ReactNode; brand: LoginBra
           <BrandLogo
             logoUrl={brand.logoUrl}
             alt={brand.displayName}
-            className={isPwa ? "h-7 w-auto object-contain" : "h-8 w-auto object-contain sm:h-9"}
+            // Bounded by height AND width, not a fixed height: a wide wordmark is held by the width, a square logo
+            // (Fourbuy's) gets the height. A fixed h-8 made a square logo a 32-pixel stamp.
+            className={isPwa ? "h-auto max-h-12 w-auto max-w-[160px] object-contain" : "h-auto max-h-16 w-auto max-w-[200px] object-contain sm:max-h-20 sm:max-w-[240px]"}
             wordmarkClassName="text-sm text-white sm:text-base"
           />
           {/* Decoration (the real security line is under the button), so not on phones or in the installed app. */}

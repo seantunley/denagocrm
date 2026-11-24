@@ -63,7 +63,7 @@ export default function PortalLoginClient({ brand }: { brand: LoginBrand }) {
           <BrandLogo
             logoUrl={brand.logoUrl}
             alt={brand.displayName}
-            className="h-8 w-auto object-contain sm:h-9"
+            className="h-auto max-h-16 w-auto max-w-[200px] object-contain sm:max-h-20 sm:max-w-[240px]"
             wordmarkClassName="text-sm text-white sm:text-base"
           />
           <span className="rounded-full border border-white/[0.09] bg-white/[0.035] px-3 py-1.5 text-[9px] font-semibold uppercase tracking-[0.18em] text-slate-500 sm:text-[10px]">

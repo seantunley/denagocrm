@@ -28,7 +28,7 @@ export default async function SurveyLayout({ children }: { children: React.React
             <BrandLogo
               logoUrl={brand.logoUrl}
               alt={brand.displayName}
-              className="h-7 w-auto object-contain"
+              className="h-auto max-h-10 w-auto max-w-[170px] object-contain"
             />
             <span className="rounded-full border border-white/[0.08] bg-white/[0.035] px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Customer feedback</span>
           </div>
