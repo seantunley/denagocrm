@@ -30,6 +30,10 @@ const PUBLIC_PREFIXES = [
   // response, nosniff). It discloses what that tenant's own login page already
   // shows the world. Suspended tenants 404. See the route's header comment.
   "brand/logo",
+  // A workspace's sign-in pictures (background, card). Public for the same reason as the logo: the sign-in page renders
+  // before anyone signs in. It streams only the two files the workspace's CURRENT sign-in settings name, its path
+  // rebuilt from the tenant id and a strictly-shaped name; suspended tenants 404 (lib/loginLook.ts).
+  "brand/login-image",
   // Email open pixel. PUBLIC BY NECESSITY: the customer's mail app loads it with
   // no session. It answers every request with the same 1×1 GIF and, for a token
   // that matches a sent email, only bumps that email's open count — it returns
