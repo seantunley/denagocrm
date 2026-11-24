@@ -21,6 +21,7 @@ import {
 } from "@/lib/quoteEditorRecord";
 import { loadBillToFleets, quoteBillTo } from "@/lib/quoteBillTo";
 import { editorDefaults, quoteFromLeadDefaults } from "@/lib/quoteFromLead";
+import { getCompanyProfile } from "@/lib/companyProfile";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { EmptyState, SectionHeading, StatusPill, Surface, WorkspaceToolbar } from "@/components/visual-system";
@@ -147,7 +148,7 @@ export default async function QuotesPage({
     hasPermission(user, "quotes.create"),
   ]);
 
-  const defaults = editorDefaults(quoteDefaults);
+  const defaults = editorDefaults(quoteDefaults, (await getCompanyProfile()).name);
   const contactOptions = contacts.map((contact) => ({ id: contact.id, label: contactName(contact) }));
   // `lead.title` is the MODEL someone wants, and a dealership sells the same few
   // models repeatedly — so preferring it made every option in the picker read
