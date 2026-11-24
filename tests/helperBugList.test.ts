@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { parseMoneyField } from "../src/lib/moneyInput";
 
 // 2026-11-24 help-review bug list: behaviour the guides had to warn about, now fixed at the source.
 const code = (path: string) => readFileSync(path, "utf8");
@@ -24,6 +25,19 @@ test("the vehicle page shows its forms only to people who may use them", () => {
   }
   assert.match(page, /\{canManageWarranty && <form action=\{addWarrantyClaim\.bind/);
   assert.match(page, /\{canOpenJobCard && \(/);
+});
+
+test("campaign money is typed as an amount, kept as typed, and stored in cents only when it reads clearly", () => {
+  const cases: Array<[string, number | null]> = [["1.25", 125], ["0.05", 5], ["1000.50", 100050], ["1 000,50", 100050], ["", null]];
+  for (const [typed, cents] of cases) assert.deepEqual(parseMoneyField(typed), { ok: true, cents }, typed);
+  // Mid-typing text is not a clear amount: the field keeps it and the stored cents don't move.
+  assert.equal(parseMoneyField("1.").ok, false);
+  assert.equal(parseMoneyField("1.255").ok, false);
+  const editor = code("src/components/marketing/CampaignDraftEditor.tsx");
+  assert.match(editor, /const \[text, setText\] = useState\(cents == null \? "" : \(cents \/ 100\)\.toFixed\(2\)\);/);
+  assert.match(editor, /if \(next\.ok\) onCents\(next\.cents\);/);
+  assert.equal(editor.match(/<AmountInput cents=\{value\.(budgetCents|targetRevenueCents)\}/g)?.length, 2);
+  assert.doesNotMatch(editor, /\(cents\)<\/span>/);
 });
 
 test("labour rate and package price hints use the workspace currency", () => {

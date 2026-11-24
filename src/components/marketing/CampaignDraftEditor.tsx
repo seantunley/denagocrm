@@ -2,6 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import { updateCampaignDraft } from "@/app/actions/marketingCampaignDrafts";
+import { useMoneyFormat } from "@/components/MoneyFormatProvider";
+import { currencySymbol } from "@/lib/format";
+import { parseMoneyField } from "@/lib/moneyInput";
 
 export type CampaignDraftEditorValue = {
   id: string;
@@ -34,9 +37,32 @@ export type CampaignDraftEditorValue = {
 
 type SaveState = "idle" | "dirty" | "saving" | "saved" | "error";
 
-// Money is typed in the currency's units and stored in cents.
-const toAmount = (cents: number | null) => (cents == null ? "" : String(cents / 100));
-const toCents = (raw: string) => (raw === "" ? "" : String(Math.round(Number(raw) * 100)));
+/**
+ * A money field typed in the currency's units and stored in cents. It keeps exactly what the person typed ("1.",
+ * "1 000,5"), so no keystroke is rewritten; the cents change only when the text reads as a clear amount
+ * (lib/moneyInput.ts, the same reading every money form uses). Blank clears it.
+ */
+function AmountInput({ cents, onCents }: { cents: number | null; onCents: (cents: number | null) => void }) {
+  const money = useMoneyFormat();
+  const [text, setText] = useState(cents == null ? "" : (cents / 100).toFixed(2));
+  const parsed = parseMoneyField(text, money.currency);
+  return (
+    <>
+      <input
+        className="input tabular-nums"
+        inputMode="decimal"
+        placeholder={`${currencySymbol(money)} 0.00`}
+        value={text}
+        onChange={(e) => {
+          setText(e.target.value);
+          const next = parseMoneyField(e.target.value, money.currency);
+          if (next.ok) onCents(next.cents);
+        }}
+      />
+      {!parsed.ok && <span className="text-xs text-destructive">{parsed.error} Not saved until it is.</span>}
+    </>
+  );
+}
 
 function toForm(value: CampaignDraftEditorValue) {
   const form = new FormData();
@@ -108,9 +134,9 @@ export default function CampaignDraftEditor({ initial }: { initial: CampaignDraf
           <label className="space-y-1"><span className="label">Landing page</span><input className="input" type="url" value={value.landingPageUrl ?? ""} onChange={(e) => set("landingPageUrl", e.target.value)} /></label>
           <label className="space-y-1"><span className="label">CTA label</span><input className="input" value={value.primaryCtaLabel ?? ""} onChange={(e) => set("primaryCtaLabel", e.target.value)} /></label>
           <label className="space-y-1"><span className="label">CTA URL</span><input className="input" type="url" value={value.primaryCtaUrl ?? ""} onChange={(e) => set("primaryCtaUrl", e.target.value)} /></label>
-          <label className="space-y-1"><span className="label">Budget</span><input className="input" type="number" min="0" step="0.01" value={toAmount(value.budgetCents)} onChange={(e) => set("budgetCents", toCents(e.target.value))} /></label>
+          <label className="space-y-1"><span className="label">Budget</span><AmountInput cents={value.budgetCents} onCents={(cents) => setValue((current) => ({ ...current, budgetCents: cents }))} /></label>
           <label className="space-y-1"><span className="label">Target leads</span><input className="input" type="number" min="0" value={value.targetLeadCount ?? ""} onChange={(e) => set("targetLeadCount", e.target.value)} /></label>
-          <label className="space-y-1"><span className="label">Target revenue</span><input className="input" type="number" min="0" step="0.01" value={toAmount(value.targetRevenueCents)} onChange={(e) => set("targetRevenueCents", toCents(e.target.value))} /></label>
+          <label className="space-y-1"><span className="label">Target revenue</span><AmountInput cents={value.targetRevenueCents} onCents={(cents) => setValue((current) => ({ ...current, targetRevenueCents: cents }))} /></label>
           <label className="space-y-1"><span className="label">Success metric</span><input className="input" value={value.successMetric ?? ""} onChange={(e) => set("successMetric", e.target.value)} /></label>
         </div>
         <label className="space-y-1 block"><span className="label">Internal notes</span><textarea className="input min-h-24" value={value.internalNotes ?? ""} onChange={(e) => set("internalNotes", e.target.value)} /></label>
