@@ -12,6 +12,7 @@ import {
   type DashboardConfig,
 } from "./config";
 import { DEFAULT_LAYOUT, cardById } from "./registry";
+import { DASHBOARD_TEMPLATES, offersTemplate, templateBySlug, templateConfig } from "./templates";
 
 /**
  * The READ path for user-built dashboards.
@@ -300,3 +301,63 @@ export function defaultDashboard(): LoadedDashboard {
     dropped: [],
   };
 }
+
+/**
+ * A role template (./templates.ts) as a generated dashboard — exactly the
+ * `defaultDashboard()` treatment: nothing is written until the person edits it,
+ * and then `takeControl(slug)` materialises this verbatim. `null` for an address
+ * that is not a template.
+ */
+export function templateDashboard(slug: string): LoadedDashboard | null {
+  const template = templateBySlug(slugify(slug));
+  if (!template) return null;
+  return {
+    id: null,
+    shared: false,
+    slug: template.slug,
+    title: template.title,
+    icon: null,
+    sortOrder: 0,
+    config: templateConfig(template),
+    updatedAt: null,
+    dropped: [],
+  };
+}
+
+/**
+ * The template at this address, only if it is OFFERED to the viewer — what the
+ * page resolves when the viewer has no row of their own there. Not offered reads
+ * as not found, the same answer as any other address that is not theirs.
+ */
+export const offeredTemplateDashboard = cache(async (slug: string): Promise<LoadedDashboard | null> => {
+  const template = templateBySlug(slugify(slug));
+  if (!template) return null;
+  const { access } = await dashboardViewer();
+  return offersTemplate(template, access.permissions) ? templateDashboard(template.slug) : null;
+});
+
+/**
+ * The switcher's entries: the viewer's own and shared dashboards, plus Home and
+ * every template offered to them that is not already stored at its address
+ * (their own copy wins, as it does on the page). Generated Home stays first —
+ * it always was.
+ */
+export const switcherEntries = cache(async (): Promise<DashboardSummary[]> => {
+  const [rows, { access }] = await Promise.all([dashboardsForViewer(), dashboardViewer()]);
+  const taken = new Set(rows.map((row) => row.slug));
+  const generated = [
+    { slug: DEFAULT_DASHBOARD_SLUG, title: DEFAULT_DASHBOARD_TITLE },
+    ...DASHBOARD_TEMPLATES.filter((template) => offersTemplate(template, access.permissions)),
+  ]
+    .filter((entry) => !taken.has(entry.slug))
+    .map((entry, index) => ({
+      id: `generated-${entry.slug}`,
+      slug: entry.slug,
+      title: entry.title,
+      icon: null,
+      sortOrder: rows.length + index,
+      shared: false,
+    }));
+  const isHome = (entry: DashboardSummary) => entry.slug === DEFAULT_DASHBOARD_SLUG;
+  return [...generated.filter(isHome), ...rows, ...generated.filter((entry) => !isHome(entry))];
+});

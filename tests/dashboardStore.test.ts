@@ -589,7 +589,8 @@ test("the store and the actions agree about the default dashboard's address", ()
   );
   assert.match(
     actions,
-    /const seed = defaultDashboard\(\);/,
+    // Or the store's own role template at that address (lib/dashboard/templates.ts).
+    /const seed = \(typeof slug === "string" \? templateDashboard\(slug\) : null\) \?\? defaultDashboard\(\);/,
     "takeControl must materialise the store's own default, not a second copy of it",
   );
 });

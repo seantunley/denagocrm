@@ -57,7 +57,10 @@ test("every card in the catalogue has a loader and renderer registered", () => {
   // Checking the source for each id as a map key still catches the real failure:
   // adding a registry entry and forgetting the implementation, which would throw
   // at render time on `DASHBOARD_CARD_IMPLS[meta.id].load()`.
-  const impls = src("src/lib/dashboard/cards.tsx");
+  // The Command Centre's cards live in their own file, spread into the map.
+  const cards = src("src/lib/dashboard/cards.tsx");
+  assert.match(cards, /\.\.\.COMMAND_CARD_IMPLS,/);
+  const impls = cards + src("src/lib/dashboard/commandCards.tsx");
   for (const id of DASHBOARD_CARD_IDS) {
     assert.ok(
       impls.includes(`"${id}": card(`),
@@ -66,8 +69,9 @@ test("every card in the catalogue has a loader and renderer registered", () => {
   }
 });
 
-test("the default layout is the whole catalogue and fits under the cap", () => {
-  assert.deepEqual([...DEFAULT_LAYOUT], [...DASHBOARD_CARD_IDS]);
+test("the default layout is the whole catalogue (bar template-only cards) and fits under the cap", () => {
+  // Template-only cards (the Command Centre's) belong to the role templates, not Home.
+  assert.deepEqual([...DEFAULT_LAYOUT], DASHBOARD_CARDS.filter((card) => !card.templateOnly).map((card) => card.id));
   assert.ok(
     DEFAULT_LAYOUT.length <= MAX_CARDS,
     "the default layout is longer than the cap, so a new user could not save it back",
@@ -112,7 +116,8 @@ test("the picker and the renderer agree for every card and every single-permissi
   // offered exactly the cards that would render for them.
   for (const key of EVERY_PERMISSION) {
     const access = viewer([key]);
-    const rendered = visibleCards([...DEFAULT_LAYOUT], access).map((c) => c.id).sort();
+    // The whole catalogue, not DEFAULT_LAYOUT: template-only cards are offered too.
+    const rendered = visibleCards([...DASHBOARD_CARD_IDS], access).map((c) => c.id).sort();
     const offered = addableCards([], access).map((c) => c.id).sort();
     assert.deepEqual(
       offered,

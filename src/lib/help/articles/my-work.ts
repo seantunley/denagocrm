@@ -1,0 +1,42 @@
+import type { HelpArticle } from "../types";
+
+export const myWorkArticles: HelpArticle[] = [
+  {
+    slug: "my-work",
+    title: "My Work: everything waiting on you",
+    summary: "One list of what is on you right now, from every part of the CRM, sorted by when it is due.",
+    category: "getting-started",
+    audience: "everyone",
+    keywords: ["my work", "my tasks", "to do", "queue", "assigned to me", "what is on me", "overdue", "waiting"],
+    body: [
+      { type: "p", text: "**My Work** gathers everything that is waiting on you into one list, so you don't have to check each page. Every row opens the record it is about. Do the work there — log the call, move the job card, approve the document — and the row leaves the list on its own." },
+      { type: "h", text: "What appears on it" },
+      {
+        type: "table",
+        headers: ["Area", "What shows"],
+        rows: [
+          ["Sales", "Your deals most worth contacting today (the same as **Today → Mine**), your planned calls, meetings and tasks for the next seven days and any that are overdue, and quotes you sent that the customer has not signed yet."],
+          ["Deliveries", "Signed deals of yours that have not been handed over yet."],
+          ["Workshop", "Open job cards where you are the technician."],
+          ["Support", "Open help desk cases assigned to you."],
+          ["Approvals", "Documents waiting for your approval."],
+        ],
+      },
+      { type: "callout", tone: "info", text: "You only see what you are allowed to open on its own page. An area your role cannot see, or a part of the CRM your workspace has switched off, is simply left out." },
+      { type: "h", text: "How it is sorted" },
+      {
+        type: "list",
+        items: [
+          "**Overdue** — past its date. A task with a time is overdue once that time has passed; an all-day one once its day has.",
+          "**Today** — due today.",
+          "**Coming up** — due in the days ahead.",
+          "**No date** — yours, without a due date, such as a case or a job card.",
+          "**Waiting on someone else** — still yours, but the next move is the customer's or a signer's.",
+        ],
+      },
+      { type: "p", text: "Urgent job cards and cases go to the top of their section. Use the buttons at the top to show one area at a time." },
+      { type: "p", text: "Rows marked **Suggested** were worked out from the record — for example a deal worth contacting — rather than set as a task by someone. They go away by themselves once the record changes." },
+      { type: "callout", tone: "tip", text: "My Work is a module. A workspace owner can ask for it to be switched on; while it is off, the page and its menu link are hidden." },
+    ],
+  },
+];
