@@ -16,6 +16,8 @@ import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
 import { brandForTenant, brandLogoUrl } from "@/lib/tenantBrand";
 import { parseLoginLook } from "@/lib/loginLook";
 import { signInLinkFor } from "@/lib/signInWorkspace";
+import DealLifecycleCard from "@/components/settings/DealLifecycleCard";
+import { getLifecycleTemplate } from "@/lib/dealLifecycleServer";
 
 export const dynamic = "force-dynamic";
 
@@ -180,6 +182,7 @@ export default async function CompanyProfilePage() {
             <SaveButton>Save names</SaveButton>
           </div>
         </SaveForm>
+        <DealLifecycleCard current={await getLifecycleTemplate()} />
       </div>
     </SettingsWorkspace>
   );

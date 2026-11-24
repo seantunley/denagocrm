@@ -6,6 +6,7 @@ import { gettingStartedArticles } from "./articles/getting-started";
 import { homeArticles } from "./articles/home";
 import { myWorkArticles } from "./articles/my-work";
 import { dashboardArticles } from "./articles/dashboards";
+import { commandCentreArticles } from "./articles/command-centre";
 import { tenantOnboardingArticles } from "./articles/tenant-onboarding";
 import { xAndAttentionArticles } from "./articles/x-and-attention";
 import { journeysArticles } from "./articles/journeys";
@@ -18,6 +19,7 @@ import { assistantArticles } from "./articles/assistant";
 import { chatbotArticles } from "./articles/chatbot";
 import { todayAndLeadScoreArticles } from "./articles/today-and-lead-scores";
 import { dealWorkspaceArticles } from "./articles/deal-workspace";
+import { dealsCentreArticles } from "./articles/deals-centre";
 import { customerEmailArticles } from "./articles/customer-emails";
 import { administrationArticles } from "./articles/administration";
 import crm from "./data/crm.json";
@@ -90,6 +92,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
   ...homeArticles,
   ...myWorkArticles,
   ...dashboardArticles,
+  ...commandCentreArticles,
   ...tenantOnboardingArticles,
   ...emailSignatureArticles,
   ...signatureBannerArticles,
@@ -124,6 +127,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
   ...chatbotArticles,
   ...todayAndLeadScoreArticles,
   ...dealWorkspaceArticles,
+  ...dealsCentreArticles,
   ...customerEmailArticles,
   ...administrationArticles,
   ...companyProfileArticles,

@@ -39,6 +39,7 @@ import {
   Sun,
   Cake,
   ListTodo,
+  Briefcase,
   type LucideIcon,
 } from "lucide-react";
 import { isPathEnabled } from "@/lib/modules/registry";
@@ -93,6 +94,8 @@ export function buildNav(
 
   const salesLinks: NavLink[] = [];
   if (can("leads.view_all", "leads.view_owned")) salesLinks.push({ href: "/leads", label: labels["/leads"] ?? "Leads", icon: SquareKanban, keywords: ["leads"] });
+  // The Deals Centre (brief §3): the same door as the deal page and the quotes it is made of.
+  if (can("quotes.view_all", "quotes.view_owned")) salesLinks.push({ href: "/deals", label: "Deals", icon: Briefcase, keywords: ["deals centre", "balance", "owed", "blocked", "ready for delivery", "deposit outstanding"] });
   if (can("quotes.view_all", "quotes.view_owned")) salesLinks.push({ href: "/quotes", label: "Quotes", icon: FileText });
   if (can("activities.view", "activities.manage")) salesLinks.push({ href: "/test-drives", label: "Test Drives", icon: Route });
   if (can("signing.view", "signing.manage")) salesLinks.push({ href: "/signatures", label: "Signatures", icon: PenLine });
@@ -154,6 +157,8 @@ export function buildNav(
   // moving them off the home screen did not move them out of sight.
   insightLinks.push({ href: "/d/home", label: "Dashboards", icon: LayoutDashboard, keywords: ["dashboard", "charts", "cards", "widgets"] });
   if (can("reports.view", "reports.view_all", "reports.view_team")) {
+    // The management template (lib/dashboard/templates.ts) — offered on the same permissions.
+    insightLinks.push({ href: "/d/command-centre", label: "Command Centre", icon: LayoutDashboard, keywords: ["command centre", "command center", "overview", "kpi", "management"] });
     insightLinks.push({ href: "/reports", label: "Reports", icon: ChartColumnIncreasing });
     insightLinks.push({ href: "/targets", label: "Targets", icon: Target });
   }

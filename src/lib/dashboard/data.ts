@@ -17,6 +17,7 @@ import {
 } from "@/lib/permissions";
 import { computeDue } from "@/lib/serviceDue";
 import { DEFAULT_LAYOUT, normaliseLayout, type DashboardAccess, type DashboardCardId } from "./registry";
+import { wonWithin } from "./commandCentre";
 
 /**
  * The dashboard's shared data layer.
@@ -135,7 +136,7 @@ function scopeIds(ids: string[] | null): Record<string, unknown> {
   return ids === null ? {} : { id: { in: ids } };
 }
 
-const leadScope = cache(async () => getAccessibleLeadIds((await dashboardViewer()).user));
+export const leadScope = cache(async () => getAccessibleLeadIds((await dashboardViewer()).user));
 const quoteScope = cache(async () => getAccessibleQuoteIds((await dashboardViewer()).user));
 const vehicleScope = cache(async () => getAccessibleVehicleIds((await dashboardViewer()).user));
 const jobCardScope = cache(async () => getAccessibleJobCardIds((await dashboardViewer()).user));
@@ -163,13 +164,17 @@ export const prevLeadCount = cache(async () => {
   });
 });
 
-/** Deals marked won this month — feeds the "won value" stat AND the sales ring. */
+/**
+ * Deals won this month — feeds the "won value" stat, the sales ring and the
+ * Command Centre. Dated by `wonAt` (wonWithin), the rule /targets and /reports
+ * use, so the three agree; this used to read `updatedAt`, which moved a deal into
+ * this month whenever anyone edited it.
+ */
 export const wonThisMonth = cache(async () => {
-  const { monthStart } = await dashboardWindow();
-  // updatedAt ≈ when the deal was marked won.
+  const { monthStart, now } = await dashboardWindow();
   return prisma.lead.findMany({
-    where: { ...(await leadWhere()), status: "won", updatedAt: { gte: monthStart } },
-    select: { updatedAt: true, valueCents: true, currency: true },
+    where: { ...(await leadWhere()), ...wonWithin({ gte: monthStart, lt: now }) },
+    select: { wonAt: true, updatedAt: true, valueCents: true, currency: true },
   });
 });
 
@@ -188,8 +193,7 @@ export const prevWonValue = cache(async () => {
   const rows = await prisma.lead.findMany({
     where: {
       ...(await leadWhere()),
-      status: "won",
-      updatedAt: { gte: prevMonthStart, lt: prevSameDay },
+      ...wonWithin({ gte: prevMonthStart, lt: prevSameDay }),
     },
     select: { valueCents: true, currency: true },
   });
