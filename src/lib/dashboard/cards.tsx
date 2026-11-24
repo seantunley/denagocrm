@@ -51,6 +51,8 @@ import {
 } from "./data";
 import { getRegionalSettings } from "@/lib/settings";
 import { formatTotals, stageSegments, totalsByCurrency } from "@/lib/currencyRules";
+import { wonOn } from "./commandCentre";
+import { COMMAND_CARD_IMPLS } from "./commandCards";
 
 /**
  * The dashboard card catalogue — the executable half. ./registry.ts declares
@@ -241,7 +243,7 @@ export const DASHBOARD_CARD_IMPLS: Record<DashboardCardId, DashboardCardImpl> = 
               delta: pctDelta(wonValue, prevWon),
               ...(wonOthers ? { context: `Plus ${wonOthers} in other currencies` } : {}),
               href: "/reports",
-              spark: dailySeries(won.map((w) => w.updatedAt), daysSoFar, (i) =>
+              spark: dailySeries(won.map(wonOn), daysSoFar, (i) =>
                 Math.round(won[i].valueCents / 100),
               ),
             },
@@ -797,4 +799,7 @@ export const DASHBOARD_CARD_IMPLS: Record<DashboardCardId, DashboardCardImpl> = 
       </SectionCard>
     ),
   ),
+
+  // The Command Centre cards live in their own file (brief §8).
+  ...COMMAND_CARD_IMPLS,
 };

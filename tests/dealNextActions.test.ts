@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { dealBlockers, dealMilestones } from "../src/lib/dealMilestones";
 
 /**
  * Brief §4 (Phase 3): the deal page surfaces what is in the way and where each
@@ -18,6 +19,15 @@ test("the journey, the step it is on and its blockers come from the shared rules
   assert.doesNotMatch(page, /\{ label: "Deposit", done: Boolean\(quote\.depositPaidAt\) \}/);
   // A step that does not apply says so.
   assert.match(page, /skipped=\{step\.skipped\}/);
+  // The readiness card reads the SAME deposit step: no deposit asked = "not needed", not a failed row
+  // (review of #1230), and no "No deposit receipt recorded" for a deal that never asked for one.
+  // #1231: the row's words are the lifecycle's own, and a lifecycle without a deposit step has no row.
+  assert.match(page, /const depositStep = journey\.find\(\(step\) => step\.key === "deposit"\);/);
+  assert.match(page, /skipped=\{depositStep\.skipped\} label=\{ready\.deposit\}/);
+  assert.doesNotMatch(page, /No deposit receipt recorded/);
+  const noDeposit = dealMilestones({ accepted: true, depositCents: 0, depositPaid: false, stock: [], deliveryBooked: false, delivered: false });
+  assert.equal(noDeposit.find((s) => s.key === "deposit")?.skipped, true);
+  assert.ok(!dealBlockers({ accepted: true, depositCents: 0, depositPaid: false, stock: [], deliveryBooked: false, delivered: false }).some((b) => b.key === "deposit"));
 });
 
 test("each button goes where the step is done, only for someone allowed to do it there", () => {

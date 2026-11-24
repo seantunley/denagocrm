@@ -19,7 +19,8 @@ export type ModuleId =
   | "suppliers"
   | "signatures"
   | "finance"
-  | "warranty";
+  | "warranty"
+  | "work";
 
 export type AppModule = {
   id: ModuleId;
@@ -130,6 +131,13 @@ export const MODULE_REGISTRY: AppModule[] = [
     requires: "suppliers",
     // The Finance list. The rest lives on the deal: its Finance tab, the delivery hold, the chaser, DAX.
     routePrefixes: ["/finance"],
+  },
+  {
+    id: "work",
+    label: "My Work",
+    description: "One list per person of everything waiting on them — deals to contact, tasks, deliveries, job cards, cases and approvals — by when it is due.",
+    // Sean, 2026-11-24: every workspace eventually, Denago only while it is tested.
+    routePrefixes: ["/work"],
   },
 ];
 
