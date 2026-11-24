@@ -194,3 +194,9 @@ test("the help centre is full width: no centred column on any of its pages", () 
     assert.doesNotMatch(code(`src/app/(app)/help/${page}`), /mx-auto max-w-(3xl|6xl|7xl)/, page);
   }
 });
+
+test("the help hero keeps its three coloured planes behind the search", () => {
+  const home = code("src/app/(app)/help/page.tsx");
+  for (const plane of ["bg-blue-400/[0.13]", "bg-primary/[0.16]", "bg-emerald-400/[0.14]"]) assert.ok(home.includes(`${plane} depth-key`), plane);
+  assert.equal(home.match(/<div aria-hidden className="pointer-events-none absolute /g)?.length, 3);
+});
