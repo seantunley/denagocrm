@@ -6,14 +6,16 @@ import { loadAttentionList } from "@/lib/attention/load";
 import { getEnabledModuleIds } from "@/lib/modules/enabled";
 import {
   getAccessibleCaseIds,
+  getAccessibleContactIds,
   getAccessibleJobCardIds,
+  getAccessibleLeadIds,
   getAccessibleQuoteIds,
   hasAnyPermission,
   type PermissionUser,
 } from "@/lib/permissions";
 import { pendingApprovalsFor } from "@/lib/signing/access";
 import { stageMeta } from "@/lib/workshop-constants";
-import type { WorkItem } from "./rules";
+import { activityHref, type WorkItem } from "./rules";
 
 /**
  * Everything waiting on this person, read from the records themselves. Each source
@@ -25,8 +27,13 @@ import type { WorkItem } from "./rules";
 const DAY = 24 * 60 * 60 * 1000;
 /** Planned work this far ahead is "coming up"; further out is the calendar's job. */
 const LOOKAHEAD_DAYS = 7;
-/** A display limit per source, so one busy source cannot make the page unbounded. */
-const PER_SOURCE = 50;
+/**
+ * Only the "worth contacting" suggestions are a top-N (Today's own ranking): they
+ * are advice, not obligations. Every task, delivery, job card, case and approval
+ * on me is loaded in full, so the totals are true — the page limits how many rows
+ * it draws, never what it counts.
+ */
+const TOP_SUGGESTIONS = 50;
 
 const within = (ids: string[] | null) => (ids === null ? {} : { id: { in: ids } });
 type Person = { firstName: string; lastName: string | null; company: string | null; isCompany: boolean };
@@ -50,7 +57,7 @@ export async function loadMyWork(user: PermissionUser, now: Date = new Date()): 
 async function salesDeals(user: PermissionUser, now: Date): Promise<WorkItem[]> {
   if (!(await hasAnyPermission(user, "leads.view_all", "leads.view_owned"))) return [];
   const { leads } = await loadTodayLeads(user, { mine: true }, now);
-  return leads.slice(0, PER_SOURCE).map((lead) => ({
+  return leads.slice(0, TOP_SUGGESTIONS).map((lead) => ({
     area: "Sales",
     source: { type: "lead", id: lead.id },
     kind: "suggestion",
@@ -73,8 +80,8 @@ async function myActivities(user: PermissionUser, now: Date): Promise<WorkItem[]
     },
     select: { id: true, type: true, summary: true, dueDate: true, allDay: true, leadId: true, contactId: true },
     orderBy: { dueDate: "asc" },
-    take: PER_SOURCE,
   });
+  const { leads, contacts } = await openableRecords(user, rows);
   return rows.map((row) => ({
     area: "Sales",
     source: { type: "activity", id: row.id },
@@ -83,8 +90,18 @@ async function myActivities(user: PermissionUser, now: Date): Promise<WorkItem[]
     reason: `Planned ${row.type === "todo" ? "task" : row.type}`,
     due: row.dueDate,
     allDay: row.allDay,
-    href: row.leadId ? `/leads/${row.leadId}` : row.contactId ? `/contacts/${row.contactId}` : "/activities",
+    href: activityHref(row, leads, contacts),
   }));
+}
+
+/** The lead and contact ids I may open — an empty set when I may open none of them. */
+async function openableRecords(user: PermissionUser, rows: { leadId: string | null; contactId: string | null }[]) {
+  const asSet = (ids: string[] | null) => (ids === null ? null : new Set(ids));
+  const [leads, contacts] = await Promise.all([
+    rows.some((r) => r.leadId) && (await hasAnyPermission(user, "leads.view_all", "leads.view_owned")) ? getAccessibleLeadIds(user).then(asSet) : new Set<string>(),
+    rows.some((r) => r.contactId) && (await hasAnyPermission(user, "contacts.view_all", "contacts.view_owned")) ? getAccessibleContactIds(user).then(asSet) : new Set<string>(),
+  ]);
+  return { leads, contacts };
 }
 
 /** Quotes on my deals sent to the customer and not signed yet: mine, but the customer's move. */
@@ -95,7 +112,6 @@ async function quotesAwaitingSignature(user: PermissionUser): Promise<WorkItem[]
     where: { ...within(quoteIds), status: "sent", signedAt: null, supersededAt: null, deletedAt: null, lead: { assignedToId: user.id } },
     select: { id: true, number: true, validUntil: true, contact: PERSON },
     orderBy: { sentAt: "asc" },
-    take: PER_SOURCE,
   });
   return rows.map((row) => ({
     area: "Sales",
@@ -118,7 +134,6 @@ async function myDeliveries(user: PermissionUser): Promise<WorkItem[]> {
     where: { ...within(quoteIds), status: "accepted", deliveredAt: null, supersededAt: null, deletedAt: null, lead: { assignedToId: user.id } },
     select: { id: true, number: true, deliveryScheduledFor: true, contact: PERSON },
     orderBy: { deliveryScheduledFor: { sort: "asc", nulls: "last" } },
-    take: PER_SOURCE,
   });
   return rows.map((row) => ({
     area: "Deliveries",
@@ -139,7 +154,6 @@ async function myJobCards(user: PermissionUser): Promise<WorkItem[]> {
     where: { ...within(jobIds), technicianId: user.id, deletedAt: null, status: { notIn: ["collected", "cancelled"] } },
     select: { id: true, number: true, status: true, priority: true, contact: PERSON },
     orderBy: { openedAt: "asc" },
-    take: PER_SOURCE,
   });
   return rows.map((row) => ({
     area: "Workshop",
@@ -161,7 +175,6 @@ async function myCases(user: PermissionUser): Promise<WorkItem[]> {
     where: { ...within(caseIds), assignedToId: user.id, closedAt: null, status: { in: ["new", "open", "waiting_internal", "waiting_customer"] } },
     select: { id: true, number: true, subject: true, status: true, priority: true },
     orderBy: { createdAt: "asc" },
-    take: PER_SOURCE,
   });
   return rows.map((row) => ({
     area: "Support",
@@ -186,7 +199,6 @@ async function myApprovals(user: PermissionUser): Promise<WorkItem[]> {
   const steps = await pendingApprovalsFor(user);
   return steps
     .filter((step) => (step.assigneeType === "owner" ? user.role === "owner" : step.assigneeType === "staff" && step.assigneeUserId === user.id))
-    .slice(0, PER_SOURCE)
     .map((step) => ({
       area: "Approvals",
       source: { type: "approval", id: step.id },

@@ -41,6 +41,22 @@ export type WorkItem = {
 
 export const workKey = (item: Pick<WorkItem, "source">) => `${item.source.type}:${item.source.id}`;
 
+/**
+ * An activity of mine can sit on a lead or contact I may not open (Activities
+ * granted, Leads/Contacts not, or someone else's deal). The row then opens
+ * Activities, where the task itself is done — never a page that turns me away.
+ * `null` = may open any.
+ */
+export function activityHref(row: { leadId: string | null; contactId: string | null }, leads: Set<string> | null, contacts: Set<string> | null): string {
+  const may = (set: Set<string> | null, id: string) => set === null || set.has(id);
+  if (row.leadId && may(leads, row.leadId)) return `/leads/${row.leadId}`;
+  if (row.contactId && may(contacts, row.contactId)) return `/contacts/${row.contactId}`;
+  return "/activities";
+}
+
+/** The queue draws this many rows by default; the counts above it always cover everything. */
+export const QUEUE_ROWS = 100;
+
 /** The row's button: what doing it means for that kind of record. */
 export const ACTION_LABEL: Record<WorkItem["source"]["type"], string> = {
   lead: "Contact",

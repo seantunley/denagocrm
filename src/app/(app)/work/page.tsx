@@ -3,7 +3,7 @@ import { AlertTriangle, ArrowRight, CalendarDays, CheckCircle2, Clock, ListTodo,
 import { requireUser } from "@/lib/auth";
 import { requireModuleEnabled } from "@/lib/modules/enabled";
 import { loadMyWork, myDealsAtRisk } from "@/lib/myWork/load";
-import { ACTION_LABEL, WORK_AREAS, priorityOf, rankWork, workKey, type WorkArea, type WorkBucket } from "@/lib/myWork/rules";
+import { ACTION_LABEL, QUEUE_ROWS, WORK_AREAS, priorityOf, rankWork, workKey, type WorkArea, type WorkBucket } from "@/lib/myWork/rules";
 import { getRegionalSettings } from "@/lib/settings";
 import { johannesburgDateKey } from "@/lib/activityDay";
 import { formatDate, formatDue } from "@/lib/format";
@@ -22,15 +22,17 @@ const PRIORITY_TONE = { High: "danger", Medium: "warning", Low: "neutral" } as c
  * (brief §6; layout from Sean's mockups, 2026-11-24). Each row opens the record
  * where the work is done; doing it there takes it off this list.
  */
-export default async function MyWorkPage({ searchParams }: { searchParams: Promise<{ area?: string }> }) {
+export default async function MyWorkPage({ searchParams }: { searchParams: Promise<{ area?: string; all?: string }> }) {
   await requireModuleEnabled("work");
   const user = await requireUser();
-  const { area } = await searchParams;
+  const { area, all: showAll } = await searchParams;
   const only = WORK_AREAS.find((a) => a === area) as WorkArea | undefined;
   const now = new Date();
   const [all, atRisk, regional] = await Promise.all([loadMyWork(user, now), myDealsAtRisk(user, now), getRegionalSettings()]);
   const ranked = rankWork(all, now);
-  const rows = only ? ranked.filter((item) => item.area === only) : ranked;
+  const matching = only ? ranked.filter((item) => item.area === only) : ranked;
+  const rows = showAll ? matching : matching.slice(0, QUEUE_ROWS);
+  const allHref = `/work?${only ? `area=${only}&` : ""}all=1`;
   const count = (bucket: WorkBucket) => ranked.filter((item) => item.bucket === bucket).length;
   const approvals = ranked.filter((item) => item.area === "Approvals");
   const time = new Intl.DateTimeFormat("en-ZA", { timeZone: regional.timeZone, hour: "2-digit", minute: "2-digit" });
@@ -163,6 +165,12 @@ export default async function MyWorkPage({ searchParams }: { searchParams: Promi
             </div>
               }
             />
+          )}
+          {rows.length < matching.length && (
+            <p className="mt-3 text-sm text-muted-foreground">
+              Showing the {rows.length} most pressing of {matching.length}.{" "}
+              <Link href={allHref} className="text-primary hover:underline">Show all {matching.length}</Link>
+            </p>
           )}
         </Panel>
       </CentreMain>

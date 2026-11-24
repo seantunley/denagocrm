@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { ACTION_LABEL, bucketOf, groupWork, priorityOf, rankWork, workKey, type WorkItem } from "../src/lib/myWork/rules";
+import { ACTION_LABEL, QUEUE_ROWS, activityHref, bucketOf, groupWork, priorityOf, rankWork, workKey, type WorkItem } from "../src/lib/myWork/rules";
 import { MODULE_REGISTRY, OPTIONAL_MODULE_IDS, moduleForPath } from "../src/lib/modules/registry";
 import { grantedModuleIds } from "../src/lib/modules/entitlement";
 
@@ -85,4 +85,25 @@ test("every source asks its own page's permission, and module, before reading", 
   ]) assert.match(load, gate);
   // Narrowed to what the record's own list would show, not just "assigned to me".
   assert.equal(load.match(/\.\.\.within\(/g)?.length, 4);
+});
+
+test("an activity opens its lead or contact only when I may open it; otherwise Activities", () => {
+  const row = { leadId: "L1", contactId: "C1" };
+  assert.equal(activityHref(row, null, null), "/leads/L1", "may open any");
+  assert.equal(activityHref(row, new Set(), new Set(["C1"])), "/contacts/C1", "lead is not mine to open");
+  assert.equal(activityHref(row, new Set(), new Set()), "/activities", "Activities-only staff");
+  assert.equal(activityHref({ leadId: null, contactId: null }, null, null), "/activities");
+});
+
+test("nothing that is on me is cut off: tasks, deliveries, job cards, cases and approvals load in full", () => {
+  const load = readFileSync("src/lib/myWork/load.ts", "utf8");
+  assert.doesNotMatch(load, /take:/, "no per-source row cap on obligations");
+  assert.equal(load.match(/\.slice\(0, TOP_SUGGESTIONS\)/g)?.length, 1, "only the contact suggestions are a top-N");
+  // 160 overdue tasks: all 160 are counted and ranked; the page draws 100 by default with a Show all link.
+  const many = Array.from({ length: 160 }, (_, i) => item({ source: { type: "activity", id: String(i) }, due: new Date("2026-11-20T09:00:00+02:00") }));
+  assert.equal(rankWork(many, NOW).filter((r) => r.bucket === "overdue").length, 160);
+  const page = readFileSync("src/app/(app)/work/page.tsx", "utf8");
+  assert.match(page, /showAll \? matching : matching\.slice\(0, QUEUE_ROWS\)/);
+  assert.match(page, /Show all \{matching\.length\}/);
+  assert.equal(QUEUE_ROWS, 100);
 });
