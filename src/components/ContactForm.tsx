@@ -25,6 +25,8 @@
  */
 
 import type { ActionResult } from "@/lib/actionResultTypes";
+import type { WorkspaceRegions } from "@/lib/regions";
+import { regionChoices } from "@/lib/regionRules";
 import { SaveForm } from "@/components/SaveForm";
 import {
   AtSign,
@@ -83,7 +85,10 @@ export default function ContactForm({
   users = [],
   fleetPicker = NO_FLEET_PICKER,
   variant = "compact",
+  regions,
 }: {
+  /** The workspace's regions (lib/regions.ts workspaceRegions), resolved by the calling page. */
+  regions: WorkspaceRegions;
   action: (formData: FormData) => Promise<ActionResult | void>;
   defaults?: ContactDefaults;
   submitLabel: string;
@@ -103,6 +108,7 @@ export default function ContactForm({
   // Which of the three options an EXISTING contact is showing, derived from the
   // two columns that hold it — never re-worked out inline. See lib/contactKind.ts.
   const kind = contactKind(defaults);
+  const regionOptions = regionChoices(regions.options, defaults.province);
 
   return (
     <SaveForm
@@ -290,20 +296,13 @@ export default function ContactForm({
         <Field label="City / town">
           <input name="city" className="input" autoComplete="address-level2" defaultValue={defaults.city ?? ""} />
         </Field>
-        <Field label="Province">
+        {/* The workspace's own list (Settings → Regions); hidden when it has none and this contact has no value to keep. */}
+        {regionOptions.length > 0 && <Field label={regions.label}>
           <select name="province" className="input" autoComplete="address-level1" defaultValue={defaults.province ?? ""}>
-            <option value="">Select province</option>
-            <option>Western Cape</option>
-            <option>Eastern Cape</option>
-            <option>Northern Cape</option>
-            <option>Gauteng</option>
-            <option>KwaZulu-Natal</option>
-            <option>Free State</option>
-            <option>North West</option>
-            <option>Limpopo</option>
-            <option>Mpumalanga</option>
+            <option value="">Select {regions.label.toLowerCase()}</option>
+            {regionOptions.map((region) => <option key={region}>{region}</option>)}
           </select>
-        </Field>
+        </Field>}
         <Field label="Postal code">
           <input
             name="postalCode"

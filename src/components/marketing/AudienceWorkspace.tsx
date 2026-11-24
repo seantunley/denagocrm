@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { currencySymbol } from "@/lib/format";
+import type { WorkspaceRegions } from "@/lib/regions";
 import { useMoneyFormat } from "@/components/MoneyFormatProvider";
 import { useRouter } from "next/navigation";
 import {
@@ -68,17 +69,6 @@ type FieldDefinition = {
   help: string;
 };
 
-const PROVINCES = [
-  "Western Cape",
-  "Eastern Cape",
-  "Northern Cape",
-  "Gauteng",
-  "KwaZulu-Natal",
-  "Free State",
-  "North West",
-  "Limpopo",
-  "Mpumalanga",
-];
 const SOURCES = ["manual", "facebook", "instagram", "website", "whatsapp"];
 const LEAD_STATUSES = ["open", "won", "lost"];
 const QUOTE_STATUSES = ["draft", "sent", "viewed", "accepted", "rejected", "expired"];
@@ -96,9 +86,12 @@ const OPERATOR_LABELS: Record<string, string> = {
   less_or_equal: "is at most",
 };
 
-function definitions(tags: Option[], products: Option[]): FieldDefinition[] {
+function definitions(tags: Option[], products: Option[], regions: WorkspaceRegions): FieldDefinition[] {
   return [
-    { value: "province", label: "Province", kind: "select", options: PROVINCES.map((value) => ({ value, label: value })), help: "Customer province" },
+    // Settings → Regions; no list, no rule to offer.
+    ...(regions.options.length
+      ? [{ value: "province", label: regions.label, kind: "select" as const, options: regions.options.map((value) => ({ value, label: value })), help: `Customer ${regions.label.toLowerCase()}` }]
+      : []),
     { value: "source", label: "Lead source", kind: "select", options: SOURCES.map((value) => ({ value, label: title(value) })), help: "Where the customer originally came from" },
     { value: "tag", label: "Customer tag", kind: "select", options: tags.map((tag) => ({ value: tag.id, label: tag.name })), help: "Only tags owned by this tenant are offered" },
     { value: "has_vehicle", label: "Owns a vehicle", kind: "boolean", help: "Has at least one active vehicle record" },
@@ -166,9 +159,9 @@ function formattedAt(value: string | null) {
   return Number.isNaN(date.getTime()) ? "Calculated previously" : date.toLocaleString("en-ZA", { dateStyle: "medium", timeStyle: "short" });
 }
 
-export default function AudienceWorkspace({ audiences, tags, products }: { audiences: Audience[]; tags: Option[]; products: Option[] }) {
+export default function AudienceWorkspace({ audiences, tags, products, regions }: { audiences: Audience[]; tags: Option[]; products: Option[]; regions: WorkspaceRegions }) {
   const router = useRouter();
-  const fields = useMemo(() => definitions(tags, products), [tags, products]);
+  const fields = useMemo(() => definitions(tags, products, regions), [tags, products, regions]);
   const [editor, setEditor] = useState<"new" | string | null>(audiences.length === 0 ? "new" : null);
   const [name, setName] = useState("");
   const [tree, setTree] = useState<AudienceGroup>(() => makeGroup(fields));
@@ -286,7 +279,7 @@ export default function AudienceWorkspace({ audiences, tags, products }: { audie
 
               <div>
                 <label className="label" htmlFor="audience-name">Audience name</label>
-                <input id="audience-name" className="input" value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. Western Cape Rover prospects" />
+                <input id="audience-name" className="input" value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. Owners due a service" />
               </div>
 
               <section className="rounded-2xl border border-border bg-muted/15 p-4 sm:p-5">

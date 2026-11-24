@@ -3,6 +3,7 @@ import { getActiveTenantId } from "@/lib/auth";
 import { requirePermission } from "@/lib/permissions";
 import MarketingPageHeader from "@/components/marketing/MarketingPageHeader";
 import AudienceWorkspace from "@/components/marketing/AudienceWorkspace";
+import { workspaceRegions } from "@/lib/regions";
 
 type AudienceRow = {
   id: string;
@@ -70,6 +71,7 @@ export default async function MarketingAudiencesPage() {
         }))}
         tags={tags}
         products={products}
+        regions={await workspaceRegions(tenantId)}
       />
     </div>
   );
