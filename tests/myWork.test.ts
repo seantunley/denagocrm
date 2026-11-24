@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { bucketOf, groupWork, workKey, type WorkItem } from "../src/lib/myWork/rules";
+import { ACTION_LABEL, bucketOf, groupWork, priorityOf, rankWork, workKey, type WorkItem } from "../src/lib/myWork/rules";
 import { MODULE_REGISTRY, OPTIONAL_MODULE_IDS, moduleForPath } from "../src/lib/modules/registry";
 import { grantedModuleIds } from "../src/lib/modules/entitlement";
 
@@ -42,6 +42,22 @@ test("one row per record, urgent first, then soonest", () => {
   );
   // Urgent first; then (no dates) by area, Sales before Workshop.
   assert.deepEqual(groups.undated.map(workKey), ["jobcard:3", "case:1", "jobcard:2"]);
+});
+
+test("one list, most pressing first; priority from facts — urgent or late is High", () => {
+  const ranked = rankWork(
+    [
+      item({ source: { type: "case", id: "w" }, waiting: true }),
+      item({ source: { type: "jobcard", id: "u" } }),
+      item({ source: { type: "activity", id: "late" }, due: new Date("2026-11-23T09:00:00+02:00") }),
+      item({ source: { type: "activity", id: "today" }, due: new Date("2026-11-24T15:00:00+02:00") }),
+    ],
+    NOW,
+  );
+  assert.deepEqual(ranked.map((r) => `${r.source.id}:${r.bucket}`), ["late:overdue", "today:today", "u:undated", "w:waiting"]);
+  assert.deepEqual(ranked.map((r) => priorityOf(r, r.bucket)), ["High", "Medium", "Low", "Low"]);
+  assert.equal(priorityOf(item({ urgent: true }), "undated"), "High");
+  assert.equal(ACTION_LABEL.approval, "Approve");
 });
 
 test("its own module, off until a workspace is granted it (Denago only while testing)", () => {

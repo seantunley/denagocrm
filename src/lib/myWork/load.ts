@@ -2,6 +2,7 @@ import "server-only";
 import { prisma } from "@/lib/db";
 import { contactName } from "@/lib/format";
 import { loadTodayLeads } from "@/lib/leadScoreLoader";
+import { loadAttentionList } from "@/lib/attention/load";
 import { getEnabledModuleIds } from "@/lib/modules/enabled";
 import {
   getAccessibleCaseIds,
@@ -198,3 +199,16 @@ async function myApprovals(user: PermissionUser): Promise<WorkItem[]> {
 }
 
 const who = (contact: Person | null) => (contact ? contactName(contact) : "Customer");
+
+/**
+ * My deals the Attention Centre says need acting on — its own list, narrowed to
+ * deals I own, worst first, with its reasons. Cached per request by the loader.
+ */
+export async function myDealsAtRisk(user: PermissionUser, now: Date, limit = 3) {
+  if (!(await hasAnyPermission(user, "leads.view_all", "leads.view_owned"))) return [];
+  const { leads } = await loadAttentionList(user, now);
+  return leads
+    .filter((lead) => lead.ownerId === user.id && (lead.band === "act" || lead.band === "urgent"))
+    .slice(0, limit)
+    .map((lead) => ({ id: lead.id, name: lead.name, band: lead.band, reason: lead.signals[0]?.detail ?? "" }));
+}

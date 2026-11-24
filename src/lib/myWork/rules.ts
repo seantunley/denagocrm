@@ -41,6 +41,30 @@ export type WorkItem = {
 
 export const workKey = (item: Pick<WorkItem, "source">) => `${item.source.type}:${item.source.id}`;
 
+/** The row's button: what doing it means for that kind of record. */
+export const ACTION_LABEL: Record<WorkItem["source"]["type"], string> = {
+  lead: "Contact",
+  activity: "Do it",
+  quote: "Chase",
+  delivery: "Plan",
+  jobcard: "Open",
+  case: "Reply",
+  approval: "Approve",
+};
+
+/** How pressing it is, from facts: urgent flag, then how late. */
+export function priorityOf(item: WorkItem, bucket: WorkBucket): "High" | "Medium" | "Low" {
+  if (item.urgent || bucket === "overdue") return "High";
+  if (bucket === "today") return "Medium";
+  return "Low";
+}
+
+/** One list, most pressing first: overdue, today, coming up, undated, then waiting on others. */
+export function rankWork(items: WorkItem[], now: Date): (WorkItem & { bucket: WorkBucket })[] {
+  const groups = groupWork(items, now);
+  return WORK_BUCKETS.flatMap((bucket) => groups[bucket.key].map((item) => ({ ...item, bucket: bucket.key })));
+}
+
 export function bucketOf(item: Pick<WorkItem, "due" | "allDay" | "waiting">, now: Date): WorkBucket {
   if (item.waiting) return "waiting";
   if (!item.due) return "undated";
