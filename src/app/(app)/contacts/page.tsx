@@ -26,6 +26,8 @@ import ListPager from "@/components/ListPager";
 import { listActingTenantStaff } from "@/lib/tenantActor";
 import { fleetPicker } from "@/lib/fleetDirectory";
 import { NO_FLEET_PICKER } from "@/lib/fleetTypes";
+import { NO_REGIONS, workspaceRegions } from "@/lib/regions";
+import { getActiveTenantId } from "@/lib/auth";
 import { contactName, formatDate } from "@/lib/format";
 import {
   getAccessibleContactIds,
@@ -87,7 +89,7 @@ export default async function ContactsPage({
   const { page, skip, take } = pageWindow(parsePage(params.page), total);
   const matched = { is: { ...where, deletedAt: null } };
 
-  const [contacts, users, picker, vehicleCount, leadCount] = await Promise.all([
+  const [contacts, users, picker, vehicleCount, leadCount, regions] = await Promise.all([
     prisma.contact.findMany({
       where,
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
@@ -111,6 +113,7 @@ export default async function ContactsPage({
     canCreate ? fleetPicker() : Promise.resolve(NO_FLEET_PICKER),
     prisma.vehicle.count({ where: { contact: matched } }),
     prisma.lead.count({ where: { status: "open", contact: matched } }),
+    canCreate ? getActiveTenantId().then(workspaceRegions) : Promise.resolve(NO_REGIONS),
   ]);
 
   const queryString = (target: string) =>
@@ -152,6 +155,7 @@ export default async function ContactsPage({
               submitLabel="Create contact"
               users={users.map((item) => ({ id: item.id, name: item.name }))}
               fleetPicker={picker}
+              regions={regions}
               variant="dialog"
             />
           </ModalTrigger>

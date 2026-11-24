@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { getCurrentUser } from "@/lib/auth";
+import { getActiveTenantId, getCurrentUser } from "@/lib/auth";
+import { NO_REGIONS, workspaceRegions } from "@/lib/regions";
 import { getAccessibleContactIds, getAccessibleVehicleIds, hasPermission, hasAnyPermission } from "@/lib/permissions";
 import { contactName } from "@/lib/format";
 import { editorDefaults, quoteFromLeadDefaults } from "@/lib/quoteFromLead";
@@ -58,6 +59,7 @@ export async function GET(request: Request) {
       users: [],
       vehicles: [],
       fleetPicker: NO_FLEET_PICKER,
+      regions: NO_REGIONS,
     });
   }
 
@@ -157,6 +159,7 @@ export async function GET(request: Request) {
     contacts: contacts.map((c) => ({ id: c.id, label: contactName(c) })),
     users,
     fleetPicker: picker,
+    regions: canCreateContact ? await workspaceRegions(await getActiveTenantId()) : NO_REGIONS,
     quoteDefaults: quoteDefaults ? editorDefaults(quoteDefaults, (await getCompanyProfile()).name) : null,
     vehicles: vehicles.map((v) => ({ id: v.id, label: `${v.model} — ${contactName(v.contact)}` })),
   });

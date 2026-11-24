@@ -14,6 +14,8 @@ import { SectionHeading, Surface } from "@/components/visual-system";
 import { fleetPicker } from "@/lib/fleetDirectory";
 import { listActingTenantStaff } from "@/lib/tenantActor";
 import { requirePermission } from "@/lib/permissions";
+import { getActiveTenantId } from "@/lib/auth";
+import { workspaceRegions } from "@/lib/regions";
 
 const nextSteps = [
   { icon: MessageSquareText, label: "Start a conversation", detail: "Email, WhatsApp or call from the customer timeline." },
@@ -23,12 +25,13 @@ const nextSteps = [
 
 export default async function NewContactPage() {
   await requirePermission("contacts.create");
-  const [users, picker] = await Promise.all([
+  const [users, picker, regions] = await Promise.all([
     // The owner picker: staff of THIS tenant, not every User row. `User` is a
     // global model, so prisma.user.findMany is not tenant-scoped by anything.
     // Same helper the edit form already uses.
     listActingTenantStaff(),
     fleetPicker(),
+    getActiveTenantId().then(workspaceRegions),
   ]);
 
   return (
@@ -52,6 +55,7 @@ export default async function NewContactPage() {
           submitLabel="Create contact"
           users={users.map((user) => ({ id: user.id, name: user.name }))}
           fleetPicker={picker}
+          regions={regions}
           variant="page"
         />
 

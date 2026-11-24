@@ -43,6 +43,7 @@ import {
 } from "@/components/visual-system";
 import { WorkspaceHero } from "@/components/workspace-hero";
 import RecordContextMenu from "@/components/RecordContextMenu";
+import { workspaceRegions } from "@/lib/regions";
 
 // Read-only compatibility screen: campaign creation and launch now live under
 // the governed Marketing → Campaigns workspace, so no bulk send runs here.
@@ -479,7 +480,7 @@ export default async function CampaignsPage({
 
   const audiences = (
     <div className="space-y-6">
-      <SegmentBuilder tags={tags.map((tag) => ({ id: tag.id, name: tag.name }))} />
+      <SegmentBuilder tags={tags.map((tag) => ({ id: tag.id, name: tag.name }))} regions={await workspaceRegions(tenantId)} />
       <div>
         <SectionHeading
           title="Saved audiences"

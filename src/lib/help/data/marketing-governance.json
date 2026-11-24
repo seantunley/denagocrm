@@ -144,7 +144,7 @@
           "Click **Save audience** (or **Save new version** when editing)."
         ]
       },
-      { "type": "p", "text": "Conditions can use: **Province**, **Lead source**, **Customer tag**, **Owns a vehicle**, **Vehicle model**, **Bought before**, **Service due**, **Lead status**, **Product interest**, **Customer created date**, **Has email address**, **Has phone / WhatsApp**, **Quote status** and **Customer value**." },
+      { "type": "p", "text": "Conditions can use: **Province** (your workspace's own list and name for it, set under **Settings → Quotes → Regions**; not offered when the list is empty), **Lead source**, **Customer tag**, **Owns a vehicle**, **Vehicle model**, **Bought before**, **Service due**, **Lead status**, **Product interest**, **Customer created date**, **Has email address**, **Has phone / WhatsApp**, **Quote status** and **Customer value**." },
       { "type": "callout", "tone": "info", "text": "**Marketing consent enforced**: deleted contacts and customers who opted out of marketing are always left out, whatever the rules say." },
       { "type": "h", "text": "Versions and saved audiences" },
       {

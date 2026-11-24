@@ -48,6 +48,9 @@ import { COMMON_CURRENCIES } from "@/lib/currencyRules";
 import { formatDate, formatDateTime, formatZAR, regionalFrom } from "@/lib/format";
 import { DEFAULT_QUOTE_TERMS, quoteValidDays } from "@/lib/quoteExpiry";
 import { DOCUMENT_TYPES_KEY, DOCUMENT_TYPES_MAX, parseDocumentTypes } from "@/lib/documentLabels";
+import { workspaceRegions } from "@/lib/regions";
+import { REGIONS_MAX } from "@/lib/regionRules";
+import { saveRegions } from "@/app/actions/regions";
 import { DEAL_BUILTINS, DEAL_FILE_CHECKLIST_KEY, isSupplierOnlyType, parseDealFileConfig } from "@/lib/dealFile";
 import { decryptValue } from "@/lib/settings";
 import { PUSH_KINDS } from "@/lib/push";
@@ -87,6 +90,7 @@ export default async function SettingsPage({
   const signatureTenantId = await getActiveTenantId();
   const signatureDesign = await signatureDesignInUse(signatureTenantId, parseSignatureDesign(await getSetting(SIGNATURE_DESIGN_KEY)));
   const signatureCompany = signatureCompanyFrom(profile, await tenantOrigin(signatureTenantId), signatureDesign, await signatureAccent(signatureTenantId));
+  const regions = await workspaceRegions(signatureTenantId);
   const enabled = await getEnabledModuleIds();
   const automotiveOn = enabled.has("automotive");
   const commerceOn = enabled.has("commerce");
@@ -881,6 +885,35 @@ export default async function SettingsPage({
                   </p>
                 </div>
                 <SaveButton className="btn-primary">Save document types</SaveButton>
+              </SaveForm>
+            </Row>
+            <Row
+              title="Regions"
+              status={
+                <span className="badge bg-muted text-muted-foreground">
+                  {regions.options.length ? `${regions.label} · ${regions.options.length} listed` : "None"}
+                </span>
+              }
+              action="Edit"
+            >
+              <p className="text-xs text-muted-foreground mb-4">
+                The list offered for a customer&apos;s address and in audience rules. With no list, the field is hidden.
+                Removing a region does not change customers who already have it.
+              </p>
+              <SaveForm success="Regions saved" resetOnSuccess={false} action={saveRegions} className="space-y-4 max-w-xl">
+                <div>
+                  <label className="label" htmlFor="region-label">What you call them</label>
+                  <input id="region-label" name="label" className="input" maxLength={40} defaultValue={regions.label} placeholder="Province, State, County…" />
+                </div>
+                <div>
+                  <label className="label" htmlFor="regions">Regions (one per line)</label>
+                  <textarea id="regions" name="regions" className="input" rows={10} defaultValue={regions.options.join("\n")} />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Up to {REGIONS_MAX}, in the order they should appear. Leave it empty to go back to the standard list
+                    (South Africa&apos;s provinces for a rand workspace, none otherwise).
+                  </p>
+                </div>
+                <SaveButton className="btn-primary">Save regions</SaveButton>
               </SaveForm>
             </Row>
             <Row
