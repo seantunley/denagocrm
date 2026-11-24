@@ -31,7 +31,7 @@ const SCREENS: ReadonlyArray<readonly [pattern: string, slug: string]> = [
   ["/calendar", "activities-calendar"],
   ["/fleets", "fleets-management"],
   ["/health", "customer-health"],
-  ["/deals", "deal-workspace"],
+  ["/deals", "deals-centre"],
   ["/deals/*", "deal-workspace"],
   ["/quotes", "quotes-overview"],
   ["/quotes/*", "quotes-send-revise-lock"],
