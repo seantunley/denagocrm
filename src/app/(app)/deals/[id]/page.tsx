@@ -13,6 +13,7 @@ import {
   FileText,
   Mail,
   MessageSquareText,
+  Minus,
   PackageCheck,
   Phone,
   ReceiptText,
@@ -28,6 +29,10 @@ import { dealFinanceHouses, loadDealFinance } from "@/lib/dealFinance";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import { financeBlocksDelivery, financeStatusShort, quoteInPlay } from "@/lib/dealFinanceRules";
 import DealFinancePanel from "@/components/deals/DealFinancePanel";
+import DealNextActions, { type BlockerActions } from "@/components/deals/DealNextActions";
+import { currentMilestone, dealBlockers, dealMilestones, dealProgress, pdiReady as dealPdiReady, type MilestoneKey } from "@/lib/dealMilestones";
+import { getDealLifecycle } from "@/lib/dealLifecycleServer";
+import { readinessLabels } from "@/lib/dealLifecycle";
 import { formatDate, formatDateTime, formatZAR } from "@/lib/format";
 import { loadBillToFleet, quoteBillTo } from "@/lib/quoteBillTo";
 import { payableTotalCents } from "@/lib/pricing";
@@ -71,11 +76,11 @@ function Fact({ label, value }: { label: string; value: ReactNode }) {
   );
 }
 
-function ReadinessRow({ done, label, detail, action }: { done: boolean; label: string; detail?: string; action?: ReactNode }) {
+function ReadinessRow({ done, skipped, label, detail, action }: { done: boolean; skipped?: boolean; label: string; detail?: string; action?: ReactNode }) {
   return (
     <div className="flex items-start gap-3 py-2">
-      <span className={`mt-0.5 grid size-5 shrink-0 place-items-center rounded-full border ${done ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300" : "border-amber-400/40 bg-amber-400/10 text-amber-300"}`}>
-        {done ? <Check className="size-3" /> : <span className="size-1.5 rounded-full bg-current" />}
+      <span className={`mt-0.5 grid size-5 shrink-0 place-items-center rounded-full border ${done ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300" : skipped ? "border-dashed border-border text-muted-foreground/60" : "border-amber-400/40 bg-amber-400/10 text-amber-300"}`}>
+        {done ? <Check className="size-3" /> : skipped ? <Minus className="size-3" /> : <span className="size-1.5 rounded-full bg-current" />}
       </span>
       <div className="min-w-0 flex-1">
         <p className="text-sm font-medium text-foreground">{label}</p>
@@ -86,13 +91,13 @@ function ReadinessRow({ done, label, detail, action }: { done: boolean; label: s
   );
 }
 
-function JourneyStep({ label, done, current }: { label: string; done: boolean; current?: boolean }) {
+function JourneyStep({ label, done, current, skipped }: { label: string; done: boolean; current?: boolean; skipped?: boolean }) {
   return (
-    <div className="relative flex min-w-0 flex-1 items-center gap-2">
-      <span className={`relative z-10 grid size-7 shrink-0 place-items-center rounded-full border ${done ? "border-emerald-400/50 bg-emerald-400/15 text-emerald-300" : current ? "border-primary/60 bg-primary/15 text-primary" : "border-border bg-background text-muted-foreground"}`}>
-        {done ? <Check className="size-3.5" /> : <span className="size-1.5 rounded-full bg-current" />}
+    <div className="relative flex min-w-0 flex-1 items-center gap-2" title={skipped ? `${label}: not needed on this deal` : undefined}>
+      <span className={`relative z-10 grid size-7 shrink-0 place-items-center rounded-full border ${done ? "border-emerald-400/50 bg-emerald-400/15 text-emerald-300" : current ? "border-primary/60 bg-primary/15 text-primary" : skipped ? "border-dashed border-border bg-background text-muted-foreground/60" : "border-border bg-background text-muted-foreground"}`}>
+        {done ? <Check className="size-3.5" /> : skipped ? <Minus className="size-3.5" /> : <span className="size-1.5 rounded-full bg-current" />}
       </span>
-      <span className={`truncate text-xs font-medium ${done ? "text-foreground" : current ? "text-primary" : "text-muted-foreground"}`}>{label}</span>
+      <span className={`truncate text-xs font-medium ${done ? "text-foreground" : current ? "text-primary" : "text-muted-foreground"}`}>{label}{skipped ? " · not needed" : ""}</span>
       <span className="absolute left-7 right-0 top-3.5 h-px bg-border last:hidden" />
     </div>
   );
@@ -266,19 +271,42 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
   const nextActivity = lead?.activities.find((item) => item.status === "planned") ?? null;
   const accepted = quote.status === "accepted" || Boolean(quote.signedAt);
   const stockReady = stock.length > 0;
-  const pdiReady = stockReady && stock.every((item) => item.pdiStatus === "ready_for_delivery" || item.pdiStatus === "passed");
   const deliveryBooked = Boolean(quote.deliveryScheduledFor);
   const delivered = Boolean(quote.deliveredAt);
 
-  const journey = [
-    { label: "Quote", done: true },
-    { label: "Accepted", done: accepted },
-    { label: "Deposit", done: Boolean(quote.depositPaidAt) },
-    { label: "Stock", done: stockReady },
-    { label: "PDI", done: pdiReady },
-    { label: "Delivery", done: delivered },
-  ];
-  const currentIndex = Math.min(journey.findIndex((step) => !step.done), journey.length - 1);
+  // Where the deal stands, by the shared rules (dealMilestones.ts) the Deals Centre uses too.
+  const facts = {
+    accepted,
+    depositCents: depositAmount,
+    depositPaid: Boolean(quote.depositPaidAt),
+    stock,
+    deliveryBooked,
+    delivered,
+    financeHolds: finance ? financeBlocksDelivery(finance.status) : false,
+  };
+  const pdiReady = dealPdiReady(stock);
+  // The workspace's lifecycle (brief §5): its step names, and which steps its deals have.
+  const lifecycle = await getDealLifecycle();
+  const hasStep = (step: MilestoneKey) => lifecycle.steps.includes(step);
+  const journey = dealMilestones(facts, lifecycle);
+  const depositStep = journey.find((step) => step.key === "deposit");
+  const ready = readinessLabels(lifecycle);
+  const current = currentMilestone(journey);
+  const progress = dealProgress(journey);
+  const blockers = dealBlockers(facts, lifecycle);
+  // Each blocker's button goes where it is fixed — only for someone allowed to fix it there.
+  const [canManageDeliveries, canSeeStock] = await Promise.all([
+    hasAnyPermission(user, "deliveries.manage"),
+    hasAnyPermission(user, "stock.view", "stock.manage"),
+  ]);
+  const blockerActions: BlockerActions = {
+    accept: { label: "Open quote", href: `/quotes/${quote.id}` },
+    deposit: canManageDeliveries ? { label: "Record deposit", href: "/deliveries" } : null,
+    finance: finance ? { label: "Finance", href: "#finance" } : null,
+    stock: canSeeStock ? { label: "Allocate", href: "/stock" } : null,
+    pdi: canSeeStock && unit ? { label: "Open unit", href: `/stock/${unit.id}` } : null,
+    delivery: canManageDeliveries ? { label: "Book delivery", href: "/deliveries" } : null,
+  };
 
   const commercialLines = quote.items
     .filter((item) => item.selected !== false)
@@ -384,9 +412,13 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
           </div>
 
           <div className="border-t border-border bg-muted/15 px-5 py-4 sm:px-6">
+            <p className="mb-3 text-xs text-muted-foreground">
+              {delivered ? "Delivered" : <>Current step: <span className="font-medium text-foreground">{current.label}</span></>}
+              <span title="Steps done out of the steps that apply to this deal — a step that does not apply counts in neither."> · {progress.done} of {progress.of} steps done</span>
+            </p>
             <div className="flex gap-3 overflow-x-auto pb-1">
-              {journey.map((step, index) => (
-                <JourneyStep key={step.label} label={step.label} done={step.done} current={index === currentIndex && !step.done} />
+              {journey.map((step) => (
+                <JourneyStep key={step.key} label={step.label} done={step.done} skipped={step.skipped} current={step.key === current.key && !step.done} />
               ))}
             </div>
           </div>
@@ -432,7 +464,9 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
             </Surface>
 
             {lead && (finance || financeHouses.length > 0) && (
-              <DealFinancePanel quote={{ id: quote.id, number: quote.number, inPlay: quoteInPlay(quote) }} finance={finance} financeHouses={financeHouses} canEdit={canEditFinance} now={requestNow} />
+              <div id="finance" className="scroll-mt-20">
+                <DealFinancePanel quote={{ id: quote.id, number: quote.number, inPlay: quoteInPlay(quote) }} finance={finance} financeHouses={financeHouses} canEdit={canEditFinance} now={requestNow} />
+              </div>
             )}
 
             {invoice && (
@@ -572,17 +606,26 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
           </div>
 
           <aside className="space-y-4">
+            <DealNextActions
+              blockers={blockers}
+              actions={blockerActions}
+              noNextStep={!delivered && Boolean(lead) && !nextActivity}
+              scheduleHref={lead ? `/leads/${lead.id}?tab=activities&schedule=1` : null}
+            />
             <Surface className="p-5">
               <div className="flex items-center gap-2">
                 <ShieldCheck className="size-5 text-primary" />
                 <div>
                   <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Readiness</p>
-                  <h2 className="mt-0.5 text-base font-semibold">Ready to deliver?</h2>
+                  <h2 className="mt-0.5 text-base font-semibold">{ready.title}</h2>
                 </div>
               </div>
+              {/* The same steps, names and "not needed" as the journey above — the workspace's lifecycle (dealLifecycle.ts). */}
               <div className="mt-3 divide-y divide-border/60">
-                <ReadinessRow done={accepted} label="Agreement accepted" detail={quote.signedAt ? `Signed ${formatDateTime(quote.signedAt)}` : accepted ? "Marked accepted — not signed online" : "Customer acceptance outstanding"} />
-                <ReadinessRow done={Boolean(quote.depositPaidAt)} label="Deposit received" detail={quote.depositPaidAt ? formatDateTime(quote.depositPaidAt) : depositAmount ? `Waiting for ${formatZAR(depositAmount, moneyFmt)}` : "No deposit receipt recorded"} />
+                <ReadinessRow done={accepted} label={ready.accepted} detail={quote.signedAt ? `Signed ${formatDateTime(quote.signedAt)}` : accepted ? "Marked accepted — not signed online" : "Customer acceptance outstanding"} />
+                {depositStep && (
+                  <ReadinessRow done={Boolean(quote.depositPaidAt)} skipped={depositStep.skipped} label={ready.deposit} detail={quote.depositPaidAt ? formatDateTime(quote.depositPaidAt) : depositStep.skipped ? "Not needed — none asked on this deal" : `Waiting for ${formatZAR(depositAmount, moneyFmt)}`} />
+                )}
                 {finance && finance.status !== "withdrawn" && (
                   <ReadinessRow
                     done={!financeBlocksDelivery(finance.status)}
@@ -590,9 +633,9 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
                     detail={`${finance.vendor.name}: ${financeStatusShort(finance.status)} since ${formatDate(finance.statusAt)}${financeBlocksDelivery(finance.status) ? " — delivery can be booked once it's approved" : ""}`}
                   />
                 )}
-                <ReadinessRow done={stockReady} label="Stock allocated" detail={stockReady ? stock.map((item) => item.stockNumber ?? item.product.name).join(", ") : "No physical unit assigned"} />
-                <ReadinessRow done={pdiReady} label="PDI complete" detail={stockReady ? (pdiReady ? "Allocated stock ready for delivery" : "Workshop preparation still outstanding") : "Requires stock allocation first"} />
-                <ReadinessRow done={deliveryBooked} label="Delivery booked" detail={deliveryBooked ? formatDateTime(quote.deliveryScheduledFor) : "No delivery date scheduled"} />
+                {hasStep("stock") && <ReadinessRow done={stockReady} label={ready.stock} detail={stockReady ? stock.map((item) => item.stockNumber ?? item.product.name).join(", ") : "No physical unit assigned"} />}
+                {hasStep("pdi") && <ReadinessRow done={pdiReady} label={ready.pdi} detail={stockReady ? (pdiReady ? "Allocated stock ready for delivery" : "Workshop preparation still outstanding") : "Requires stock allocation first"} />}
+                <ReadinessRow done={deliveryBooked} label={ready.delivery} detail={deliveryBooked ? formatDateTime(quote.deliveryScheduledFor) : ready.noDeliveryDate} />
               </div>
               {quote.status === "accepted" && <Link href="/deliveries" className="btn-primary btn-sm mt-4 w-full"><Truck className="size-4" />Open fulfilment</Link>}
             </Surface>

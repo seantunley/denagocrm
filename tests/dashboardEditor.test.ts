@@ -205,7 +205,8 @@ test("a generated dashboard is materialised once, before its first write", () =>
   // of it. See lib/dashboard/saveQueue.
   const write = provider.split("write: async (next, stamp) =>")[1]?.split("onAccepted:")[0] ?? "";
   assert.ok(write.length > 0, "could not isolate the write callback");
-  const claim = write.indexOf("await takeControl()");
+  // By address (slug): Home, or the role template being looked at.
+  const claim = write.indexOf("await takeControl(slug)");
   const save = write.indexOf("await saveDashboardConfig(");
   assert.ok(claim > -1 && save > -1, "both calls must be present");
   assert.ok(claim < save, "the row must exist before anything is written into it");

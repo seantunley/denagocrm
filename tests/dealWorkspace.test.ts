@@ -29,7 +29,9 @@ test("deal jacket composes existing records instead of adding a second deal mode
   assert.match(read("src/lib/dealFileData.ts"), /prisma\.signatureRequest\.findMany/);
   // The workspace's own word for a deal (#1003), "Deal" by default.
   assert.match(page, /\{labels\.deal\.one\} timeline/);
-  assert.match(page, /Ready to deliver\?/);
+  // The readiness card, in the workspace's own step names (#1231): "Ready for delivery?" by default.
+  assert.match(page, /<h2 className="mt-0\.5 text-base font-semibold">\{ready\.title\}<\/h2>/);
+  assert.match(page, /const ready = readinessLabels\(lifecycle\)/);
   // No invented payment data: money shown is the deposit recorded on the
   // deliveries board plus real QuotePayment rows from the quote's OWN workspace
   // (customer statements, 2026-10-28) — and no other payment-like model.

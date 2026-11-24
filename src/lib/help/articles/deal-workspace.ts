@@ -26,7 +26,7 @@ export const dealWorkspaceArticles: HelpArticle[] = [
         ["Deal sheet", "Each line on the quote, any fees, and the deal total."],
         ["Deal timeline", "The most recent messages, documents, signature requests and milestones. **Full timeline** opens the lead's complete history."],
         ["Allocated stock", "Each physical unit reserved for or sold on this deal. Click one to open it."],
-        ["Ready to deliver?", "A checklist: Agreement accepted, Deposit received, Stock allocated, PDI complete and Delivery booked."],
+        ["Ready for delivery?", "A checklist: Accepted, Deposit received, Stock allocated, PDI complete and Delivery booked — in your workspace's own step names (Settings → Company → Deal steps), so a property workspace sees \"Ready for handover?\". A deposit nobody asked for shows as **not needed**."],
         ["Next action", "The next planned activity, with **Schedule activity**."],
         ["Deal file (right)", "The checklist of what every deal must have on file, with how many are done — see below. **Open the file** jumps to the documents."],
         ["Deal file (main column)", "Every document for the whole deal — every quote on the lead, revisions included: the quotations, invoice, sales agreement and delivery note the CRM makes, the signature requests, and every uploaded file under the quote it belongs to. Type in **Search this deal's documents** to filter by name, type, supplier or who uploaded it. Upload a file here with its type and, for supplier paperwork, its supplier."],
@@ -67,7 +67,7 @@ export const dealWorkspaceArticles: HelpArticle[] = [
       { type: "callout", tone: "info", text: "Anything the AI isn't sure of is left blank rather than guessed. If an invoice couldn't be read (a scan that's too faint, a file over 10 MB, a Word file) fill the boxes in yourself, or press **Read invoice** to try again. Invoices uploaded before this existed show **Read invoice** too. Needs the Suppliers module and AI set up in **Settings → Integrations**." },
       { type: "h", text: "Using the readiness checklist" },
       { type: "steps", items: [
-        "Open the deal and look at **Ready to deliver?** on the right.",
+        "Open the deal and look at **Ready for delivery?** on the right (it uses your workspace's own step names).",
         "Each line with a green tick is done. Each line without one says what is still outstanding, such as \"No physical unit assigned\".",
         "For an accepted quote, press **Open fulfilment** to go to the delivery board and complete the outstanding steps there.",
       ] },

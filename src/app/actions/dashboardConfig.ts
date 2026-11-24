@@ -19,7 +19,7 @@ import {
   slugify,
   type DashboardConfig,
 } from "@/lib/dashboard/config";
-import { defaultDashboard } from "@/lib/dashboard/store";
+import { DEFAULT_DASHBOARD_SLUG, defaultDashboard, templateDashboard } from "@/lib/dashboard/store";
 
 /**
  * The WRITE path for user-built dashboards. The read path is
@@ -484,18 +484,21 @@ export async function saveDashboardConfig(
  *
  * IDEMPOTENT, AND IT HAS TO BE. The editor calls this before its first save, and
  * "before the first save" is a race with itself the moment a user has two tabs
- * open. A caller who already has rows gets a no-op; a caller who loses the insert
+ * open. A caller who already has a row at this address gets a no-op; a caller who loses the insert
  * race gets the same, because the partial unique index added in migration
  * 20260805140000 turns the second insert into a constraint violation rather than
  * a duplicate "home" — which is exactly why that index exists.
  */
-export async function takeControl(): Promise<DashboardSaveResult> {
+export async function takeControl(slug: unknown = DEFAULT_DASHBOARD_SLUG): Promise<DashboardSaveResult> {
   let stamp: Date | null = null;
 
   const result = await asActionResult(async () => {
     const user = await requireUser();
     const count = await ownCount(user.id);
-    const seed = defaultDashboard();
+    // Home, or a role template at this address (lib/dashboard/templates.ts). Any
+    // other address falls back to Home. A template is a layout and confers no
+    // access — every card re-checks the viewer — so no permission gate is needed.
+    const seed = (typeof slug === "string" ? templateDashboard(slug) : null) ?? defaultDashboard();
 
     /**
      * The revision of the row this call guarantees exists.
@@ -514,10 +517,16 @@ export async function takeControl(): Promise<DashboardSaveResult> {
       stamp = row?.updatedAt ?? null;
     };
 
-    // Already taken control. Not a refusal: the caller's intent — "make sure a
-    // real row exists" — is already satisfied, and telling them otherwise would
-    // turn a harmless double-click into an error message.
-    if (count > 0) {
+    // Already taken control of THIS address. Not a refusal: the caller's intent —
+    // "make sure a real row exists" — is already satisfied, and telling them
+    // otherwise would turn a harmless double-click into an error message.
+    //
+    // Checked per address, not "has any row": with templates a person can own
+    // the Command Centre and still be on a generated Home, and a count check would
+    // skip the insert and leave the first save with no row to write to.
+    const exists = async () =>
+      (await prisma.dashboard.count({ where: { userId: user.id, slug: seed.slug } })) > 0;
+    if (await exists()) {
       await stampNow();
       return {};
     }
@@ -529,16 +538,17 @@ export async function takeControl(): Promise<DashboardSaveResult> {
           userId: user.id,
           slug: seed.slug,
           title: seed.title,
-          sortOrder: 0,
+          // Home keeps its place at the front; a template goes after what they have.
+          sortOrder: seed.slug === DEFAULT_DASHBOARD_SLUG ? 0 : count,
           config: validated(seed.config),
         },
       });
     } catch {
-      // Lost the race, or the row appeared between the count and the insert. If
+      // Lost the race, or the row appeared between the check and the insert. If
       // there is now a row, the intent is satisfied and there is nothing to
       // report; if there is not, the failure was something else and must not be
       // swallowed.
-      if ((await ownCount(user.id)) === 0) refuse("Could not set up your dashboard.");
+      if (!(await exists())) refuse("Could not set up your dashboard.");
     }
     // Read after the create OR after losing the race, so the caller gets the
     // winner's stamp either way rather than none.
