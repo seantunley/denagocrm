@@ -3,7 +3,7 @@ import { AlertTriangle, ArrowRight, CalendarDays, CheckCircle2, Clock, ListTodo,
 import { requireUser } from "@/lib/auth";
 import { requireModuleEnabled } from "@/lib/modules/enabled";
 import { loadMyWork, myDealsAtRisk } from "@/lib/myWork/load";
-import { ACTION_LABEL, WORK_AREAS, priorityOf, rankWork, workKey, type WorkArea, type WorkBucket } from "@/lib/myWork/rules";
+import { ACTION_LABEL, WORK_AREAS, fingerprintOf, priorityOf, rankWork, workKey, type WorkArea, type WorkBucket } from "@/lib/myWork/rules";
 import { getRegionalSettings } from "@/lib/settings";
 import { johannesburgDateKey } from "@/lib/activityDay";
 import { formatDate, formatDue } from "@/lib/format";
@@ -178,7 +178,7 @@ export default async function MyWorkPage({ searchParams }: { searchParams: Promi
                         <td className="whitespace-nowrap text-right">
                           <span className="inline-flex items-center gap-1.5">
                             <Link href={item.href} className="btn-secondary btn-sm">{ACTION_LABEL[item.source.type]}<ArrowRight className="size-3.5" /></Link>
-                            <WorkItemMenu itemKey={workKey(item)} dismissable={item.kind === "suggestion" && DISMISSABLE_SOURCES.has(item.source.type)} fingerprint={item.reason} />
+                            <WorkItemMenu itemKey={workKey(item)} dismissable={item.kind === "suggestion" && DISMISSABLE_SOURCES.has(item.source.type)} fingerprint={fingerprintOf(item)} />
                           </span>
                         </td>
                       </tr>

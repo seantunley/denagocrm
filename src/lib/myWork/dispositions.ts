@@ -12,7 +12,7 @@
  *    off the list is doing it on its record.
  */
 import { johannesburgStartOfDay } from "@/lib/activityDay";
-import { workKey, type WorkItem } from "./rules";
+import { fingerprintOf, workKey, type WorkItem } from "./rules";
 
 export const SNOOZE_CHOICES = [
   { days: 1, label: "Until tomorrow" },
@@ -52,8 +52,8 @@ export function applyDispositions<T extends WorkItem>(items: T[], dispositions: 
   for (const item of items) {
     const d = live.get(workKey(item));
     if (d?.action === "snoozed") snoozed.push({ ...item, until: d.until });
-    // Dismissed holds only for a suggestion whose reason is unchanged.
-    else if (d?.action === "dismissed" && item.kind === "suggestion" && d.fingerprint === item.reason) continue;
+    // Dismissed holds only for a suggestion whose reason is unchanged (numbers aside — fingerprintOf).
+    else if (d?.action === "dismissed" && item.kind === "suggestion" && d.fingerprint === fingerprintOf(item)) continue;
     else shown.push(item);
   }
   return { shown, snoozed };

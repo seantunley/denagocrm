@@ -31,7 +31,8 @@ test("a snoozed item leaves my list until the day I picked, then comes back", ()
 
 test("a dismissed suggestion comes back when its reason changes; a task cannot be dismissed away", () => {
   const until = new Date(NOW.getTime() + 30 * 86_400_000);
-  const dismissed = [{ itemKey: "lead:x", action: "dismissed", until, fingerprint: "No contact for 9 days" }];
+  // The page stores the reason with its numbers taken out (fingerprintOf), as the action receives it.
+  const dismissed = [{ itemKey: "lead:x", action: "dismissed", until, fingerprint: "No contact for # days" }];
   assert.equal(applyDispositions([item("lead", "x")], dismissed, NOW).shown.length, 0);
   assert.equal(applyDispositions([item("lead", "x", { reason: "Replied on WhatsApp" })], dismissed, NOW).shown.length, 1, "a new reason is a new suggestion");
   // Even a stray dismissed row never hides a TASK.
