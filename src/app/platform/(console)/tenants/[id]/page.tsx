@@ -23,6 +23,9 @@ import { formatDateTime } from "@/lib/format";
 import { MODULE_REGISTRY } from "@/lib/modules/registry";
 import { parseModuleCsv } from "@/lib/modules/entitlement";
 import { brandFromRow, brandLogoUrl } from "@/lib/tenantBrand";
+import { parseLoginLook } from "@/lib/loginLook";
+import LoginLookEditor from "@/components/branding/LoginLookEditor";
+import { savePlatformLoginLookAction } from "@/app/actions/loginLook";
 import {
   setTenantBrandAction,
   setTenantLogoAction,
@@ -132,6 +135,7 @@ export default async function TenantProfilePage({
       brandLogoRef: true,
       brandDisplayName: true,
       brandTagline: true,
+      loginJson: true,
       domains: {
         select: { id: true, hostname: true, verifiedAt: true },
         orderBy: { hostname: "asc" },
@@ -633,43 +637,24 @@ export default async function TenantProfilePage({
                   </div>
                 </div>
 
-                {/* Live preview — rendered from the SAME brandFromRow + brandStyle the
-                    login page uses, so what the admin sees is what ships. A platform
-                    admin setting a brand for someone else cannot check by signing in
-                    as them; this panel is that check. */}
-                <div className="card p-5">
-                  <h2 className="font-semibold">Login preview</h2>
-                  <p className="mt-0.5 text-xs text-muted-foreground">
-                    How this tenant&apos;s sign-in page greets staff on a verified hostname.
+                {/* The sign-in screen — the same editor and live preview the workspace's owner has in
+                    Settings → Company profile, drawn by the components the sign-in page itself uses, so
+                    what the admin sees is what ships. A platform admin setting it up for someone else
+                    cannot check by signing in as them; this preview is that check. */}
+                <div className="card p-5 lg:col-span-2">
+                  <h2 className="font-semibold">Sign-in screen</h2>
+                  <p className="mb-4 mt-0.5 text-xs text-muted-foreground">
+                    How this workspace&apos;s sign-in page greets staff on a verified hostname. Its owner can also edit this.
                   </p>
-                  <div
-                    className="mt-4 rounded-xl border border-border bg-[#020617] p-6"
-                    style={
-                      brand.primary
-                        ? ({ "--primary": brand.primary, "--primary-foreground": brand.primaryForeground } as React.CSSProperties)
-                        : undefined
-                    }
-                  >
-                    {brandLogo ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={brandLogo} alt="" className="mb-4 max-h-10 w-auto" />
-                    ) : null}
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-primary">
-                      Staff portal
-                    </p>
-                    <p className="mt-2 text-xl font-semibold tracking-tight text-white">
-                      Welcome back.
-                    </p>
-                    <p className="mt-1 text-xs text-slate-400">
-                      Sign in to {brand.displayName}.
-                    </p>
-                    <span className="mt-4 inline-block rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground">
-                      Sign in
-                    </span>
-                    {brand.tagline && (
-                      <p className="mt-4 text-[10px] text-slate-500">{brand.tagline}</p>
-                    )}
-                  </div>
+                  <LoginLookEditor
+                    action={savePlatformLoginLookAction.bind(null, tenant.id)}
+                    initial={parseLoginLook(tenant.loginJson)}
+                    tenantId={tenant.id}
+                    displayName={brand.displayName}
+                    tagline={brand.tagline}
+                    logoUrl={brandLogo}
+                    accent={brand.primary && brand.primaryForeground ? { primary: brand.primary, foreground: brand.primaryForeground } : null}
+                  />
                 </div>
               </div>
             ),

@@ -94,7 +94,7 @@ test("lead context carries what the indemnity prints", () => {
   assert.deepEqual(items, []);
 
   const bare = buildLeadContext({ ...lead, product: null, color: null }, NOW).tokens;
-  assert.equal(bare.vehicle, "Denago EV", "same fallback as the legacy page");
+  assert.equal(bare.vehicle, "the vehicle", "no product: a neutral phrase, never one business's brand");
   assert.equal(bare["vehicle.lines"], "");
 });
 
