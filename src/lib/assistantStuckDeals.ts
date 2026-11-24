@@ -1,5 +1,6 @@
 import "server-only";
 import { prisma } from "./db";
+import { actingTenantId } from "./actingTenant";
 import { getAccessibleLeadIds, hasAnyPermission, type PermissionUser } from "./permissions";
 import { stuckLookup } from "./assistantStuckLookup";
 import { overLimit } from "./assistantStuck";
@@ -33,12 +34,7 @@ export async function stuckDealsLookup(user: PermissionUser, now = new Date()): 
   const mine = worst(open.filter((l) => l.assignedToId === user.id || l.assignedToId === null), MINE_SHOWN);
   const team = worst(open.filter((l) => l.assignedToId !== null && l.assignedToId !== user.id), TEAM_SHOWN);
 
-  // The one-deal check on each: its top reason, exactly as `stuck` states it.
-  const check = async (id: string) => {
-    const out = await stuckLookup(user, id);
-    const d = out.data[0] as { deal?: unknown; reasons?: { why: string; date?: string; link: string }[] } | undefined;
-    return { deal: d?.deal, topReason: d?.reasons?.[0] ?? "nothing in the records is holding it up", link: out.rows[0]?.href ?? `/leads/${id}` };
-  };
+  const check = (id: string) => topReasonOf(user, id);
   const [mineChecked, teamChecked] = [await Promise.all(mine.map((l) => check(l.id))), await Promise.all(team.map((l) => check(l.id)))];
   return {
     truncated: open.length === 2000,
@@ -49,4 +45,43 @@ export async function stuckDealsLookup(user: PermissionUser, now = new Date()): 
       ...(teamChecked.length ? { team: teamChecked } : {}),
     }],
   };
+}
+
+type Reason = { why: string; date?: string; link: string; title?: string };
+
+/** The one-deal check: its top reason, exactly as `stuck` states it — ranked, dated, linked; never re-derived. */
+async function topReasonOf(user: PermissionUser, id: string) {
+  const out = await stuckLookup(user, id);
+  const d = out.data[0] as { deal?: unknown; reasons?: Reason[] } | undefined;
+  return { deal: d?.deal, topReason: d?.reasons?.[0] ?? "nothing in the records is holding it up", link: out.rows[0]?.href ?? `/leads/${id}` };
+}
+
+/**
+ * The same detection, for My Work (brief §7, Phase 6): the deals ASSIGNED TO ME that are past their stage's time
+ * limit, most stuck first, each with its top reason. Open deals only — a deal parked in Nurture is not stuck, it is
+ * waiting on purpose. The threshold is each stage's own "stale after" days (pipeline settings), so it is configurable
+ * per stage and nothing here is a second number. A deal with no recorded reason gets none: missing data is not
+ * stated as a fact.
+ */
+export async function myStuckDeals(user: PermissionUser, now = new Date(), limit = 5) {
+  if (!(await hasAnyPermission(user, "leads.view_all", "leads.view_owned"))) return [];
+  const ids = await getAccessibleLeadIds(user);
+  if (ids !== null && ids.length === 0) return [];
+  // Every open deal of mine is scored — no row cap — so the most stuck can never sit past a cut-off (review of #1233).
+  // Only my own open deals, four small columns each.
+  const open = await prisma.lead.findMany({
+    where: { tenantId: await actingTenantId(), deletedAt: null, status: "open", assignedToId: user.id, ...(ids === null ? {} : { id: { in: ids } }) },
+    select: { id: true, name: true, stageEnteredAt: true, stage: { select: { name: true, staleAfterDays: true } } },
+  });
+  const worst = open
+    .map((lead) => ({ ...lead, over: overLimit(lead.stageEnteredAt, lead.stage.staleAfterDays, now) }))
+    .filter((lead) => lead.over >= 0)
+    .sort((a, b) => b.over - a.over)
+    .slice(0, limit);
+  return Promise.all(
+    worst.map(async (lead) => {
+      const { topReason, link } = await topReasonOf(user, lead.id);
+      return { id: lead.id, name: lead.name, stage: lead.stage.name, over: lead.over, reason: typeof topReason === "string" ? null : topReason, link };
+    }),
+  );
 }

@@ -37,9 +37,20 @@ export type WorkItem = {
   urgent?: boolean;
   /** Where the work is done. */
   href: string;
+  /** A suggestion's proof (brief §7): the record and date its reason was read from. */
+  evidence?: { label: string; href: string };
+  /** What a dismissal is held against; defaults to the reason. */
+  fingerprint?: string;
 };
 
 export const workKey = (item: Pick<WorkItem, "source">) => `${item.source.type}:${item.source.id}`;
+
+/**
+ * The reason a dismissal is held against, with its numbers taken out: "no contact
+ * for 12 days" tomorrow is "13 days" — the same reason, not a new one. A different
+ * reason (a reply came in, the stage moved) is a new suggestion and shows again.
+ */
+export const fingerprintOf = (item: Pick<WorkItem, "reason" | "fingerprint">) => (item.fingerprint ?? item.reason).replace(/\d+/g, "#");
 
 /**
  * An activity of mine can sit on a lead or contact I may not open (Activities

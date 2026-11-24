@@ -1,0 +1,22 @@
+/// What one person decided about one item on their My Work list (brief §6/§7): snoozed until a date, or — for a
+/// SUGGESTION only — dismissed. It never changes the record the item is about: a snoozed task is still due, and
+/// comes back when the snooze ends; a dismissed suggestion comes back when its reason changes (`fingerprint`) or
+/// the dismissal expires. One row per person per item (`itemKey` = the item's dedupe key, e.g. "lead:<id>").
+/// lib/myWork/dispositions.ts.
+model WorkDisposition {
+  id          String   @id @default(cuid())
+  tenantId    String
+  userId      String
+  itemKey     String
+  /// snoozed | dismissed
+  action      String
+  /// Snoozed: when it comes back. Dismissed: when the dismissal lapses.
+  until       DateTime
+  /// The reason the item had when it was dismissed; a different reason later is a new item worth seeing.
+  fingerprint String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([tenantId, userId, itemKey])
+  @@index([tenantId, userId, until])
+}
