@@ -207,7 +207,7 @@ export default async function AuditPage({
         </table>
       </div>
       <p className="text-xs text-muted-foreground">
-        Showing up to 500 newest matching events. Audit entries can't be changed or deleted, by anyone.
+        Showing up to 500 newest matching events. Audit entries can&apos;t be changed or deleted, by anyone.
       </p>
     </div>
   );

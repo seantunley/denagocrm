@@ -373,7 +373,7 @@ export default function AudienceWorkspace({ audiences, tags, products }: { audie
 
       <details className="card group">
         <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-sm font-medium"><span className="flex items-center gap-2"><Braces className="size-4 text-muted-foreground" /> About audience rules</span><ChevronDown className="size-4 transition-transform group-open:rotate-180" /></summary>
-        <p className="mt-3 text-xs leading-5 text-muted-foreground">Every save keeps a new version of the audience. When a campaign is scheduled, its audience is worked out again on the server: only your workspace's customers, tags and products count, and anyone who has opted out of marketing is always left out.</p>
+        <p className="mt-3 text-xs leading-5 text-muted-foreground">Every save keeps a new version of the audience. When a campaign is scheduled, its audience is worked out again on the server: only your workspace&apos;s customers, tags and products count, and anyone who has opted out of marketing is always left out.</p>
       </details>
     </div>
   );
