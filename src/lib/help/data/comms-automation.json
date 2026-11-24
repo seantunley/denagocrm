@@ -1,1 +1,332 @@
-[{"slug":"inbox-overview","title":"Social inbox: one place for every conversation","summary":"See WhatsApp, Messenger, Instagram DMs and Google reviews in a single threaded workspace.","category":"comms","audience":"everyone","keywords":["inbox","whatsapp","messenger","instagram","dm","google reviews","conversations"],"body":[{"type":"p","text":"The **Social inbox** gathers your WhatsApp, Facebook Messenger and Instagram conversations into one list, plus a tab for recent Google reviews. Messages are grouped into threads by customer and channel so the whole back-and-forth stays together."},{"type":"h","text":"Finding your way around"},{"type":"list","items":["Tabs across the top: **All**, **WhatsApp**, **Messenger**, **Instagram** and **Google Reviews**. Each tab badge shows how many conversations are unread.","Threads are sorted so unread come first, then conversations awaiting a reply, then most recent.","The page refreshes on its own every 60 seconds, so new messages appear without reloading."]},{"type":"h","text":"Reading a thread's status"},{"type":"table","headers":["Badge","Meaning"],"rows":[["Unread","The customer messaged and nobody has opened it yet"],["Read · reply due","You have opened it but not replied — the customer spoke last"],["Replied","Your team sent the last message"]]},{"type":"steps","items":["Click a thread to open the full conversation in a pop-up.","Opening an unread thread automatically marks it as read.","The customer or lead name links through to their CRM record."]},{"type":"callout","tone":"info","text":"Messenger and Instagram DMs flow for app admins immediately, and for everyone once Meta approves the messaging permissions. WhatsApp threads start once the WhatsApp Business number is connected in Settings → Integrations."},{"type":"h","text":"Google reviews"},{"type":"p","text":"The **Google Reviews** tab lists your latest reviews with star rating, author and text. New reviews appear here within about 6 hours with a push notification. Use **Reply on Google** to respond on Google itself."},{"type":"callout","tone":"tip","text":"No reviews showing? Connect your Places API key and Place ID in Settings → Integrations to pull them in."}]},{"slug":"inbox-replying","title":"Replying to customers in the inbox","summary":"Send text, emoji and attachments from the reply box, view media, and check drafts with AI.","category":"comms","audience":"everyone","keywords":["reply","inbox","attachment","emoji","voice note","media","whatsapp"],"body":[{"type":"p","text":"Open any thread to see the messages as chat bubbles — the customer on the left, your team's replies on the right — and a reply box at the bottom that adapts to the channel."},{"type":"h","text":"Sending a reply"},{"type":"steps","items":["Open a conversation from the inbox list.","Type your message in the reply box (the placeholder shows which channel it will send on).","Tap the emoji button for a quick emoji, or the paperclip to attach a file on Messenger and Instagram.","Press **Send**."]},{"type":"callout","tone":"warning","text":"Attachments are available on Messenger and Instagram only — WhatsApp media sending is not available yet. Attached files (images, GIFs, voice notes, video, PDF or Word docs) must be 4MB or smaller."},{"type":"h","text":"Viewing media the customer sent"},{"type":"list","items":["Images preview inline and open full-size when clicked.","Voice notes and audio play with an inline audio player.","Videos play inline; other files show as a download link."]},{"type":"h","text":"Check with AI before sending"},{"type":"p","text":"Under the reply box, use the **AI check** button to review your draft before it goes out. This is available when the workspace has an AI set up — its ChatGPT subscription (the default) or Claude (Settings → Integrations → Which AI the CRM uses)."}]},{"slug":"chatbot-setup","title":"Turning the chatbot on and choosing where it runs","summary":"Master switch, guided menus and DM channels for the automated assistant across your inboxes.","category":"automation","audience":"admins","keywords":["chatbot","automation","settings","guided flow","menus","office hours","away message"],"body":[{"type":"p","text":"The **Chatbot** page controls the automated assistant that answers customers across WhatsApp, Messenger, Instagram and Telegram. It is an owner-only settings area."},{"type":"callout","tone":"info","text":"This page requires owner access. Regular staff will not see it."},{"type":"h","text":"The master switch"},{"type":"p","text":"The top **Chatbot** toggle is the master switch. When it is off, **no** automatic replies go out on any channel, regardless of the other settings."},{"type":"h","text":"Where it runs & how"},{"type":"list","items":["**Guided flow (menus)** — tappable menus that branch into answers, bookings and the AI on every channel. Turn it off to fall back to plain keyword replies only.","**Messenger & Instagram DMs** — run the flow on Facebook Messenger and Instagram DMs using your Meta connection."]},{"type":"p","text":"Use the **Flow builder** button here to design the conversation itself (see the flow builder articles)."},{"type":"h","text":"Office hours & away message"},{"type":"p","text":"Under the collapsible **Office hours & away message** section, set your open hours and days and the after-hours message. This away message is used when the AI assistant is off."},{"type":"callout","tone":"tip","text":"An away message goes out at most once per customer every 4 hours, so people are not spammed with the same auto-reply."},{"type":"p","text":"Remember to click **Save bot settings** after changing anything on this form."}]},{"slug":"chatbot-ai-faqs","title":"The AI assistant and FAQ pathways","summary":"Let Claude answer open questions grounded in your prices and brief, and route common questions to exact answers.","category":"automation","audience":"admins","keywords":["ai","claude","faq","pathways","handoff","voice notes","whisper","brief"],"body":[{"type":"p","text":"The chatbot can answer open-ended questions with AI and route common questions to canned answers you define. Both are configured on the Chatbot settings page (owner only)."},{"type":"h","text":"The AI assistant"},{"type":"p","text":"Enable **Claude replies to open questions** to have the assistant answer conversationally. It is grounded in your **live product prices, colours and business hours**, plus the **brief** you write, and it only states facts you have given it — it will not invent prices, specs, stock or dates."},{"type":"steps","items":["Connect ChatGPT in Settings → Integrations (the default), or add an Anthropic API key and choose Claude under Which AI the CRM uses — one of them is required for AI replies.","Turn on **Claude replies to open questions**.","Fill in **About us / policies (the bot's brief)** — delivery areas and fees, warranty, finance, service turnaround, location and tone.","Save bot settings."]},{"type":"callout","tone":"info","text":"The assistant hands off to a human automatically when the customer wants to order or pay, book a specific date or test drive, has a complaint, asks something it does not know, or asks for a person."},{"type":"h","text":"FAQ pathways"},{"type":"p","text":"Pathways give exact, canonical answers to common questions. The assistant matches each incoming message to the right pathway and sends its exact answer. Your price list and colours are built in automatically from your products."},{"type":"steps","items":["In the **FAQ pathways** card, open **+ Add pathway**.","Describe when it applies, e.g. \"asking about delivery, shipping, how they get the cart\".","Write the exact answer to send.","Optionally tick **Hand off to a human after this answer**.","Click **Add pathway**. Remove a pathway with the ✕ button."]},{"type":"h","text":"Voice notes (optional)"},{"type":"p","text":"Paste an **OpenAI Whisper** key to let the bot understand WhatsApp voice notes. Transcribed voice notes are answered naturally and then handed to a human. Leave the field blank to keep an existing saved key."}]},{"slug":"chatbot-telegram","title":"Connecting a Telegram bot","summary":"Create a bot with BotFather, paste the token, and Telegram runs the same conversation flow.","category":"automation","audience":"admins","keywords":["telegram","botfather","token","connect","webhook","chatbot"],"body":[{"type":"p","text":"Telegram runs the exact same conversation flow as your other channels. Connecting it takes a bot token from Telegram's BotFather."},{"type":"steps","items":["In Telegram, open **@BotFather** and create a new bot to get its token (looks like 123456789:ABCdef...).","On the Chatbot settings page, find the **Telegram** card.","Paste the token and click **Connect**."]},{"type":"p","text":"Connecting saves the token and registers the webhook. Once the webhook registers, the card shows **connected & live**. To stop it, use **Disconnect**."},{"type":"callout","tone":"info","text":"Telegram only answers when the master Chatbot switch is on and Telegram is enabled. The webhook registers after deploy, so a freshly connected bot may show connected but not yet live until then."}]},{"slug":"flow-builder-overview","title":"Building chatbot flows: the flow library","summary":"Create, name, duplicate and set live the conversation journeys your chatbot runs across channels.","category":"automation","audience":"admins","keywords":["flow builder","flows","chatbot","live flow","duplicate","canvas"],"body":[{"type":"p","text":"The **Chatbot flows** builder is where you design the tappable, branching conversations customers have with the bot. It is owner-only. You keep a library of flows but only one runs live at a time."},{"type":"h","text":"Managing your flow library"},{"type":"steps","items":["Click **New flow** to add a flow (it starts from a sensible default).","Click a flow's name to rename it in place.","Use **Set live** to make a flow the active one — the live flow shows a green **Live** badge.","**Duplicate** copies a flow so you can experiment safely.","**Delete** removes a flow (you cannot delete the live one)."]},{"type":"callout","tone":"info","text":"One active flow runs across your connected channels. Each channel uses its own live flow if it has one, otherwise it falls back to the live WhatsApp flow."},{"type":"h","text":"Editing a flow"},{"type":"p","text":"Click **Edit** to open the visual canvas. Add steps from the **Nodes** palette, then drag from a node's right-hand dot onto another node to connect them. Select any node to configure it in the **Inspector** panel."},{"type":"steps","items":["Open **Nodes** and click a node type to drop it on the canvas.","Select the node and edit its wording and settings in the Inspector.","Drag from the node's output dot to the next node to link the path.","Use **Set as start** in the Inspector to mark the first step (the START node).","Click **Save** when done."]},{"type":"callout","tone":"warning","text":"**Reset** replaces every node, connection and unsaved change with the default flow — it cannot be undone."},{"type":"callout","tone":"tip","text":"When a customer types menu, hi, hello, hey, start, restart or begin, the flow restarts from the beginning."}]},{"slug":"flow-builder-nodes","title":"Flow builder node types explained","summary":"Reference for every step you can add — menus, captures, bookings, AI answers and hand-offs.","category":"automation","audience":"admins","keywords":["nodes","flow","menu","capture","booking","slots","ai","handoff","variables"],"body":[{"type":"p","text":"Each flow is built from connected nodes. Here is what each node does and when to use it."},{"type":"table","headers":["Node","What it does"],"rows":[["Message","Sends a plain message, then continues."],["Menu (choice)","Shows tappable options that each branch to a different next step."],["Ask & save (capture)","Asks a question and stores the answer in a variable (text, email, phone, number or date)."],["Get a file (captureFile)","Asks the customer to attach a photo or file, saved and linked to the lead/booking."],["Send image","Sends an image with an optional caption."],["Answer","Sends your live price list, your colours, or custom text."],["Book a slot (slots)","Offers real open workshop slots as buttons and reserves the chosen one in the diary."],["CRM action (booking)","Creates a service request, a demo/test-drive, or a lead/enquiry in the CRM."],["AI answer","Chats conversationally, grounded in your prices, hours and brief."],["Hand off","Sends an optional message and passes the conversation to a human."],["End","Ends the conversation."]]},{"type":"h","text":"Using captured details"},{"type":"p","text":"Anything you capture is reusable later in the flow with double braces, for example `{{name}}`. The **name**, **phone** and **email** you capture feed the CRM action and booking nodes automatically."},{"type":"callout","tone":"tip","text":"For a real, dated service booking use the **Book a slot** node — the chosen time lands in `{{slot}}`. The plain **CRM action** node logs a request the team confirms, without picking a specific time."},{"type":"h","text":"Controlling hand-off"},{"type":"p","text":"On an **AI answer** node, connect the amber dot to another node to control where the conversation goes when the AI decides to hand off. If you leave it unconnected, the AI simply notifies the team when it hands off."},{"type":"callout","tone":"warning","text":"On WhatsApp, a menu with more than 3 options is shown as a list rather than buttons. The builder warns you when a menu exceeds three options."}]},{"slug":"competitors-overview","title":"Competitor intelligence: tracking rivals' pages","summary":"Add competitors by tier and watch their pricing, product and social pages for material changes.","category":"automation","audience":"managers","keywords":["competitors","monitoring","sources","tiers","pricing","changes","watch"],"body":[{"type":"p","text":"**Competitor intelligence** tracks the rivals that matter and watches their public pages for meaningful changes. Access is permission-gated, so it is intended for managers."},{"type":"h","text":"Adding a competitor"},{"type":"steps","items":["Click **Add competitor**.","Enter a name, and optionally a website and notes on why they matter.","Choose a tier: **Tier 1 · critical**, **Tier 2 · important**, or **Tier 3 · watch**.","Save — you land on the competitor's page."]},{"type":"p","text":"The main list shows each competitor with its tier, how many sources are watched, and how many changes are awaiting review (critical ones are flagged in red)."},{"type":"h","text":"Watching pages"},{"type":"p","text":"On a competitor's page, the **Watched pages** panel is where you add the specific URLs to monitor — a pricing page, product page, changelog, or a social profile."},{"type":"steps","items":["In **Watched pages**, enter a label and the public URL.","Pick a type: pricing, product, news, blog, Facebook, Instagram, LinkedIn, YouTube or other page.","Click **Add page to watch**.","Use **Check now** on any source to scan it immediately, or **Remove** to stop watching it."]},{"type":"callout","tone":"info","text":"Only public http(s) URLs are accepted — private or internal addresses are rejected. Removing a source also deletes its snapshot history for that page."},{"type":"callout","tone":"warning","text":"Adding, checking and removing sources, and deleting a competitor, require the competitor management permission. Deleting a competitor moves it and its monitoring to Trash."}]},{"slug":"competitors-ai-research","title":"AI research and reviewing competitor changes","summary":"Discover a competitor's pages, generate an intelligence brief with citations, and triage detected changes.","category":"automation","audience":"managers","keywords":["competitors","ai research","discover sources","brief","changes","materiality","review"],"body":[{"type":"p","text":"Beyond passive page-watching, each competitor page has an **AI intelligence** section and a **Changes to review** feed. These use permission-gated actions."},{"type":"h","text":"AI intelligence"},{"type":"list","items":["**Discover sources** — a strong model finds the competitor's key pages and social profiles for you and adds them as sources to watch.","**Run research** — a strong model researches the competitor on the web and writes a fresh intelligence brief, complete with citation links you can click through."]},{"type":"p","text":"The latest research brief shows at the top with its headline, body and sources. Earlier briefs (including discovery runs) collapse under **Earlier briefs**."},{"type":"callout","tone":"tip","text":"For a brand-new competitor, run **Discover sources** first to populate pages and socials, then **Run research** for the first intelligence brief."},{"type":"h","text":"Reviewing changes"},{"type":"p","text":"The daily check watches your sources between briefs and surfaces material changes into **Changes to review**. Each change shows a materiality label — **critical**, **important**, **minor** or **noise** — plus the source, a summary and before/after evidence."},{"type":"steps","items":["Read the change summary and compare the **Before** and **After** evidence.","Click **Mark reviewed** once you have actioned or noted it.","Click **Dismiss as noise** if it is not meaningful."]},{"type":"p","text":"Reviewed and dismissed changes move into the **History** list below, so you keep an audit trail of what was seen and when."}]},{"slug":"cases-overview","title":"Customer cases help desk overview","summary":"Work customer questions, service concerns and ownership requests from one shared queue with folders and mailboxes.","category":"comms","audience":"everyone","keywords":["cases","help desk","tickets","support","folders","mailboxes","queue"],"body":[{"type":"p","text":"**Customer cases** is the shared help desk where your team resolves customer questions, service concerns and ownership requests. Everything lives in one workspace with work queues, mailboxes and tags."},{"type":"h","text":"The dashboard"},{"type":"p","text":"Four counters sit at the top of the page:"},{"type":"table","headers":["Metric","Meaning"],"rows":[["Open","Active customer cases"],["Awaiting reply","The customer spoke last and is waiting on you"],["Unassigned","Cases that still need an owner"],["Unread","Cases with unread customer messages in the current view"]]},{"type":"h","text":"Work queues and filters"},{"type":"list","items":["**Work queues** in the sidebar: Unassigned, Mine, Open, Pending, Closed and All. Each shows a live count.","**Mailboxes** let you narrow to one team queue (each has its own colour).","**Tags** filter the list to a single label.","The search bar finds a case by subject, description or case number, and you can filter by case type."]},{"type":"p","text":"In the list, cases awaiting your reply are marked with an amber edge and a **Customer replied** flag. Unread cases show a count badge and bold subject. Each row shows the case number (C-…), contact, vehicle, type, priority, status, assignee and tags."},{"type":"h","text":"Opening a new case"},{"type":"steps","items":["Click **New case** (available if you have permission to create cases).","Choose the customer contact and, if used, the mailbox.","Fill in the details and create the case."]},{"type":"callout","tone":"info","text":"What you can see depends on your permissions — some staff see all cases, others only cases they own. Creating cases is also permission-gated."}]},{"slug":"cases-working-a-ticket","title":"Working a customer case","summary":"Reply, add internal notes, use saved replies, and set status, assignee, priority, mailbox and tags.","category":"comms","audience":"everyone","keywords":["cases","ticket","reply","note","canned reply","assignee","status","priority","tags"],"body":[{"type":"p","text":"Opening a case shows the full conversation with the customer plus a properties sidebar. Opening it marks the customer's messages as read."},{"type":"h","text":"Reading the conversation"},{"type":"list","items":["Customer and staff messages appear as a threaded conversation, staff replies aligned to the right.","**Internal notes** show on an amber background — customers never see these.","System **events** (like status changes) appear as small centred lines for context."]},{"type":"h","text":"Replying and adding notes"},{"type":"steps","items":["Use the composer at the bottom of the conversation.","Write a **reply** to send to the customer, or switch to a **note** for an internal-only comment.","Insert a **saved reply** to answer common questions quickly.","Optionally set the case status as you reply — Pending customer, Open, Resolved or Closed."]},{"type":"callout","tone":"warning","text":"Internal notes are for your team only — double-check you are on **reply** (not note) when you actually want the customer to receive the message, and vice versa."},{"type":"h","text":"Managing case properties"},{"type":"p","text":"The sidebar lets you change **Status**, **Assignee**, **Priority** and **Mailbox** — each change saves as soon as you pick it. Add tags by typing a name, and remove a tag with its ✕."},{"type":"p","text":"The sidebar also shows the linked customer (with email, phone and a link to their contact record), the vehicle if one is attached, any file attachments, and the customer's other cases for quick cross-reference."}]},{"slug":"helpdesk-settings","title":"Configuring help desk mailboxes, saved replies and tags","summary":"Set up the shared mailboxes, canned responses and tags used across all customer cases.","category":"comms","audience":"managers","keywords":["help desk","settings","mailbox","saved reply","canned reply","tags","signature"],"body":[{"type":"p","text":"The **Help desk** settings page configures the shared mailboxes, saved replies and tags that power customer cases. It requires the case management permission."},{"type":"h","text":"Mailboxes"},{"type":"p","text":"Mailboxes route tickets into separate queues, each with its own colour and signature."},{"type":"steps","items":["Click **New mailbox**.","Enter a name, pick a colour, and optionally add a signature (e.g. \"Kind regards, the support team\").","Leave **Active** ticked to make it usable, then create it.","Use **Edit** on any mailbox to change its details or deactivate it."]},{"type":"h","text":"Saved replies"},{"type":"p","text":"Saved replies are reusable canned responses agents can drop into a case from the composer."},{"type":"steps","items":["Click **New reply**.","Give it a title, choose the mailbox it belongs to (or All mailboxes), and write the body.","Create it — edit or delete it later from the list."]},{"type":"h","text":"Tags"},{"type":"p","text":"Tags are created on the fly while working a case. This page lists all existing tags so you can remove any you no longer need by clicking them."},{"type":"callout","tone":"info","text":"This settings area is management-only. Day-to-day agents apply mailboxes, saved replies and tags from within a case rather than here."}]}]
+[
+  {
+    "slug": "chatbot-setup",
+    "title": "Turning the chatbot on and choosing where it runs",
+    "summary": "The chatbot's master switch, which channels it answers on, your office hours and the away message.",
+    "category": "automation",
+    "audience": "admins",
+    "keywords": ["chatbot", "bot", "automatic replies", "master switch", "guided flow", "menus", "office hours", "away message", "messenger", "instagram"],
+    "body": [
+      { "type": "p", "text": "The **Chatbot** page controls the assistant that answers customers automatically on WhatsApp, Messenger, Instagram and Telegram — greeting them, offering menus, answering questions and handing over to your team." },
+      { "type": "h", "text": "The master switch" },
+      { "type": "p", "text": "The **Chatbot** switch at the top turns everything on or off. When it's off, **no** automatic replies go out on any channel, whatever else is set." },
+      { "type": "h", "text": "Where it runs & how" },
+      { "type": "list", "items": [
+        "**Guided flow (menus)** — runs your published flow: tappable menus that lead to answers, bookings and the AI, on every connected channel. Turn it off and the bot only uses simple keyword replies.",
+        "**Messenger & Instagram DMs** — also runs the published flow on Facebook Messenger and Instagram messages."
+      ] },
+      { "type": "p", "text": "Press **Open flow builder** to design the conversation itself — see **Building chatbot flows: the flow library**." },
+      { "type": "h", "text": "Office hours & away message" },
+      { "type": "steps", "items": [
+        "Open **Office hours & away message**.",
+        "Set your opening times and **Days**.",
+        "Write the **After-hours away message**.",
+        "Press **Save bot settings**."
+      ] },
+      { "type": "p", "text": "The away message is used after hours when the AI assistant is off. Public holidays and days you're closed come from **Settings → Public holidays**, and a flow's **Opening hours** step treats them as closed." },
+      { "type": "callout", "tone": "tip", "text": "A customer gets the away message at most once every 4 hours, so nobody is sent the same reply over and over." },
+      { "type": "callout", "tone": "info", "text": "Connecting a channel doesn't switch the chatbot on there — it only brings messages into the inbox. The chatbot answers only where you've switched it on here." },
+      { "type": "h", "text": "Related guides" },
+      { "type": "list", "items": ["The AI assistant, approved knowledge and FAQ answers", "Building chatbot flows: the flow library", "Chatbot flow builder: working on a flow", "Chatbot analytics: how your flows perform"] }
+    ]
+  },
+  {
+    "slug": "chatbot-ai-faqs",
+    "title": "The AI assistant, approved knowledge and FAQ answers",
+    "summary": "Let the chatbot answer open questions from your prices and approved facts, give exact answers to common questions, and see what it couldn't answer.",
+    "category": "automation",
+    "audience": "admins",
+    "keywords": ["ai", "chatbot", "faq", "pathways", "knowledge", "approved knowledge", "handoff", "voice notes", "brief", "unanswered questions"],
+    "body": [
+      { "type": "p", "text": "Besides menus, the chatbot can answer questions in its own words, and give exact, approved answers to common questions. All of this is on the **Chatbot** page." },
+      { "type": "h", "text": "AI replies to open questions" },
+      { "type": "p", "text": "Turn on **AI replies to open questions** to let the assistant answer things like \"Do you deliver to Durban?\" conversationally. It uses only what you've given it: your live product prices and colours, your opening hours, the brief below, and your approved knowledge. It won't make up prices, specifications, stock or dates." },
+      { "type": "steps", "items": [
+        "Turn on **AI replies to open questions**.",
+        "Fill in **About us / policies (short global brief)** — your tone, where you are, and facts that rarely change.",
+        "Put detailed policies and specifications into the knowledge workspace instead (below), so each can be checked and given an end date.",
+        "Press **Save bot settings**."
+      ] },
+      { "type": "callout", "tone": "info", "text": "The assistant hands the customer to a person when they want to order or pay, book a particular date or test drive, have a complaint, ask something it doesn't know, or ask for a person." },
+      { "type": "h", "text": "Approved knowledge" },
+      { "type": "p", "text": "Press **Open knowledge workspace** to manage the facts the chatbot may use — policies, specifications, excerpts from your documents." },
+      { "type": "steps", "items": [
+        "Under **Add knowledge draft**, write the precise fact, optionally pick the **Library source** it comes from, and press **Add draft**.",
+        "New and edited entries stay as private drafts. An owner approves each one separately before the chatbot can use it.",
+        "Give an entry **Valid from** and **Valid until** dates for things that expire, such as a promotion.",
+        "Use **Test an AI answer** to see how the chatbot would answer a question with what's approved."
+      ] },
+      { "type": "callout", "tone": "warning", "text": "Editing an approved entry returns it to **Draft**, so a changed fact needs approving again before customers see it." },
+      { "type": "p", "text": "**Questions the chatbot couldn't answer** lists what customers asked that it had no answer for. Press **Draft an answer** and a draft is prepared for you to check and approve." },
+      { "type": "h", "text": "FAQ pathways: exact answers" },
+      { "type": "p", "text": "For common questions where the wording must be exactly right, add a pathway. When a customer's question matches, the bot sends your approved answer word for word." },
+      { "type": "steps", "items": [
+        "Under **FAQ pathways**, press **+ Add pathway**.",
+        "Describe when it applies, for example \"asking about delivery or how they get the vehicle\".",
+        "Write the exact answer to send.",
+        "Tick **Hand off after this answer** if a person should follow up.",
+        "Press **Add pathway**."
+      ] },
+      { "type": "h", "text": "Voice notes" },
+      { "type": "p", "text": "Customers' WhatsApp voice notes are turned into text so the bot can answer them. A **Voice-note transcription key (OpenAI Whisper)** is an optional fallback; leave it blank to keep the saved one." },
+      { "type": "h", "text": "Related guides" },
+      { "type": "list", "items": ["Turning the chatbot on and choosing where it runs", "Flow builder steps explained", "The document library"] }
+    ]
+  },
+  {
+    "slug": "chatbot-telegram",
+    "title": "Telegram",
+    "summary": "How Telegram chats reach the chatbot and inbox, and who connects it.",
+    "category": "automation",
+    "audience": "admins",
+    "keywords": ["telegram", "botfather", "bot token", "connect", "chatbot"],
+    "body": [
+      { "type": "p", "text": "Telegram runs the same published chatbot flow as your other channels, and its chats appear in the Social inbox." },
+      { "type": "callout", "tone": "info", "text": "Telegram is connected once for the whole CRM by your CRM provider, so you won't find it under your own Integrations. Ask them if you'd like it switched on." },
+      { "type": "h", "text": "For the CRM provider: connecting a Telegram bot" },
+      { "type": "steps", "items": [
+        "In Telegram, message **@BotFather** and create a new bot. It gives you a token that looks like 123456789:ABCdef…",
+        "Open **Settings → Integrations → Telegram**, paste it into **Bot token** and press **Connect**.",
+        "The card shows **Connected** once Telegram accepts it. Nothing needs setting up on Telegram's side."
+      ] },
+      { "type": "callout", "tone": "warning", "text": "If the card says **Token saved, but Telegram didn't accept the webhook — nothing arrives**, no messages are reaching the CRM. Disconnect and connect again with the token from @BotFather." }
+    ]
+  },
+  {
+    "slug": "flow-builder-overview",
+    "title": "Building chatbot flows: the flow library",
+    "summary": "Create a flow from a template or blank, edit it as a draft, test it, and publish it when it's ready for customers.",
+    "category": "automation",
+    "audience": "admins",
+    "keywords": ["flow builder", "flows", "chatbot", "publish", "draft", "template", "take offline", "live flow"],
+    "body": [
+      { "type": "p", "text": "A **flow** is a conversation the chatbot has with customers — the greeting, the menus, the questions it asks and where each answer leads. You design flows in the **Flow builder**. Customers only ever see a flow once you **publish** it; until then you can change it freely." },
+      { "type": "h", "text": "Starting a flow" },
+      { "type": "steps", "items": [
+        "Open the **Flow builder** (from the Chatbot page, **Open flow builder**).",
+        "Choose a starter under **Start from a template**, or **Blank flow** to start from nothing. Press **Use template**.",
+        "The new flow opens as a draft — change anything you like."
+      ] },
+      { "type": "h", "text": "Working on a draft" },
+      { "type": "steps", "items": [
+        "Press **Edit draft** to open the canvas.",
+        "Add steps and connect them — see **Flow builder steps explained** and **Chatbot flow builder: working on a flow**.",
+        "Try it in the test chat to see exactly what a customer would see.",
+        "Save as you go. Saving doesn't change what customers see."
+      ] },
+      { "type": "h", "text": "Publishing" },
+      { "type": "p", "text": "Each flow shows whether it's ready: **Graph compiles** (every step is complete and connected), **Channel compatible** (it works on each connected channel — for example WhatsApp shows at most three buttons) and **Saved draft differs** (you've changed it since the last publish)." },
+      { "type": "steps", "items": [
+        "Press **Review & publish**.",
+        "If it says **Fix publish errors first**, open the draft and fix what's listed.",
+        "Publish. The flow shows **Live** and customers get the new version."
+      ] },
+      { "type": "callout", "tone": "info", "text": "Publishing saves a fixed version for customers. Changes you make afterwards stay in the draft until you publish again." },
+      { "type": "h", "text": "Taking a flow offline" },
+      { "type": "p", "text": "Press **Take offline** on a live flow to stop customers reaching it. The draft is kept, so you can publish it again later." },
+      { "type": "h", "text": "Related guides" },
+      { "type": "list", "items": ["Flow builder steps explained", "Chatbot flow builder: working on a flow", "QR codes that send your brochure on WhatsApp", "Chatbot analytics: how your flows perform"] }
+    ]
+  },
+  {
+    "slug": "flow-builder-nodes",
+    "title": "Flow builder steps explained",
+    "summary": "What each kind of step in a chatbot flow does, and when to use it.",
+    "category": "automation",
+    "audience": "admins",
+    "keywords": ["nodes", "steps", "flow", "menu", "ask and save", "booking", "workshop slots", "ai answer", "hand off", "condition", "variables"],
+    "body": [
+      { "type": "p", "text": "A flow is made of steps joined together. Add a step from the step list on the canvas (or hold Ctrl/⌘ and click an empty spot), then fill it in on the right." },
+      { "type": "h", "text": "Talking to the customer" },
+      { "type": "table", "headers": ["Step", "What it does"], "rows": [
+        ["Message", "Sends some text"],
+        ["Menu", "Offers buttons or a list, each leading somewhere different"],
+        ["Ask & save", "Asks a question and keeps the answer, for example their name or email"],
+        ["Get a file", "Asks the customer to send a photo or document, saved with their record"],
+        ["Send image", "Sends a picture with an optional caption"],
+        ["Send a document", "Sends one of your files, such as a brochure or price list"],
+        ["Send contact card", "Sends your business's (or a staff member's) contact card"],
+        ["Answer", "Sends your live price list, your colours, or text you write"],
+        ["Knowledge answer", "Answers from your approved knowledge"],
+        ["AI answer", "Lets the AI reply conversationally, using only what you've given it"]
+      ] },
+      { "type": "h", "text": "Getting things done" },
+      { "type": "table", "headers": ["Step", "What it does"], "rows": [
+        ["Workshop slots", "Offers real open booking times and reserves the chosen one in the diary"],
+        ["CRM / booking action", "Creates a service request, test drive or lead, or finds or updates work in the CRM"],
+        ["Update the CRM", "Tags the customer, sets their salesperson or moves their deal"],
+        ["Start Journey", "Enrols the customer in one of your Journeys"],
+        ["Tell someone", "Alerts a team member while the bot carries on — the customer isn't handed over"],
+        ["Hand off", "Passes the conversation to your team"],
+        ["API request", "Fetches information from another web service (for technical set-ups)"]
+      ] },
+      { "type": "h", "text": "Deciding where to go" },
+      { "type": "table", "headers": ["Step", "What it does"], "rows": [
+        ["Condition", "Goes one way or another based on a rule"],
+        ["Switch", "Goes one of several ways depending on a value"],
+        ["Opening hours", "Goes one way when you're open and another when closed, including public holidays"],
+        ["Set variable", "Stores or changes a value to use later"],
+        ["AI extract", "Picks details such as a name or date out of what the customer wrote"],
+        ["Wait", "Pauses quietly; the flow carries on with the customer's next message once the time has passed"],
+        ["Run subflow", "Runs another published flow, so common parts can be reused"],
+        ["Go to", "Jumps to another step — for example back to the menu — without drawing a line"],
+        ["End", "Finishes the conversation"]
+      ] },
+      { "type": "h", "text": "For your team only" },
+      { "type": "list", "items": ["**Note** — a sticky note on the canvas. Never sent.", "**Group** — a coloured box to frame a section. Never sent."] },
+      { "type": "h", "text": "Using what the customer told you" },
+      { "type": "p", "text": "Anything saved by **Ask & save** can be used later with double braces, for example `{{name}}`. The name, phone number and email you collect are used automatically by booking and CRM steps." },
+      { "type": "callout", "tone": "tip", "text": "For a real, dated booking use **Workshop slots** — the chosen time is saved as `{{slot}}`. A **CRM / booking action** on its own logs a request for your team to confirm." },
+      { "type": "callout", "tone": "warning", "text": "On WhatsApp, a menu with more than three options is shown as a list instead of buttons. The builder warns you." },
+      { "type": "h", "text": "Related guides" },
+      { "type": "list", "items": ["Building chatbot flows: the flow library", "Chatbot flow builder: working on a flow"] }
+    ]
+  },
+  {
+    "slug": "competitors-overview",
+    "title": "Competitor intelligence: watching your competitors",
+    "summary": "List the competitors that matter, and watch their pricing, product and social pages for important changes.",
+    "category": "automation",
+    "audience": "managers",
+    "keywords": ["competitors", "monitoring", "watch", "tiers", "pricing", "changes"],
+    "body": [
+      { "type": "p", "text": "**Competitor intelligence** keeps an eye on the competitors that matter to you and tells you when something important changes on their public pages — a new price, a new product, a promotion." },
+      { "type": "h", "text": "Adding a competitor" },
+      { "type": "steps", "items": [
+        "Press **Add competitor**.",
+        "Enter the **Name**, and optionally their **Website** and **Notes** on why they matter.",
+        "Choose a **Tier**: **Tier 1 · critical**, **Tier 2 · important** or **Tier 3 · watch**.",
+        "Save. Their profile opens."
+      ] },
+      { "type": "p", "text": "The list shows each competitor's tier, how many pages are watched and how many changes are waiting for you, with critical ones in red." },
+      { "type": "h", "text": "Choosing pages to watch" },
+      { "type": "steps", "items": [
+        "On the competitor's profile, under **Watched pages**, enter a label and the page's web address.",
+        "Pick what kind of page it is — pricing, product, news, blog, Facebook, Instagram, LinkedIn, YouTube or other.",
+        "Press **Add page to watch**.",
+        "Use **Check now** to look at a page straight away, or **Remove** to stop watching it."
+      ] },
+      { "type": "callout", "tone": "info", "text": "Only public web pages can be watched. Removing a page also removes its saved history." },
+      { "type": "callout", "tone": "warning", "text": "Changing competitors and their pages needs the permission to manage competitors. Deleting a competitor moves it, with its history, to Trash." },
+      { "type": "h", "text": "Related guides" },
+      { "type": "list", "items": ["AI research and reviewing competitor changes"] }
+    ]
+  },
+  {
+    "slug": "competitors-ai-research",
+    "title": "AI research and reviewing competitor changes",
+    "summary": "Let the AI find a competitor's pages and write a briefing, and work through the changes it spots.",
+    "category": "automation",
+    "audience": "managers",
+    "keywords": ["competitors", "ai research", "discover sources", "brief", "changes", "review", "dismiss"],
+    "body": [
+      { "type": "h", "text": "Letting the AI do the legwork" },
+      { "type": "list", "items": [
+        "**Discover sources** — the AI finds the competitor's main pages and social profiles and adds them to **Watched pages**.",
+        "**Run research** — the AI researches the competitor online and writes a briefing, with links to where each point came from."
+      ] },
+      { "type": "p", "text": "The newest briefing shows at the top. Older ones are under **Earlier briefs**." },
+      { "type": "callout", "tone": "tip", "text": "For a new competitor, press **Discover sources** first, then **Run research**." },
+      { "type": "h", "text": "Reviewing changes" },
+      { "type": "p", "text": "Watched pages are checked every day. Important changes appear under **Changes to review**, each marked **critical**, **important**, **minor** or **noise**, with a summary and the before-and-after wording." },
+      { "type": "steps", "items": [
+        "Read the summary and compare **Before** with **After**.",
+        "Press **Mark reviewed** once you've dealt with it, or **Dismiss as noise** if it doesn't matter."
+      ] },
+      { "type": "p", "text": "Reviewed and dismissed changes move to **History**, so you have a record of what was seen and when." }
+    ]
+  },
+  {
+    "slug": "cases-overview",
+    "title": "Customer cases: the help desk",
+    "summary": "Work customer questions, service concerns and requests from one shared queue.",
+    "category": "comms",
+    "audience": "everyone",
+    "keywords": ["cases", "help desk", "tickets", "support", "queue", "mailboxes", "tags"],
+    "body": [
+      { "type": "p", "text": "**Customer cases** is your shared help desk. Each case is one customer question or concern, from first message to resolved, so nothing gets lost in someone's inbox." },
+      { "type": "h", "text": "The counters at the top" },
+      { "type": "table", "headers": ["Counter", "Meaning"], "rows": [
+        ["Open", "Cases still being worked on"],
+        ["Awaiting reply", "The customer wrote last and is waiting for you"],
+        ["Unassigned", "Cases nobody has taken yet"],
+        ["Unread", "Cases with customer messages nobody has read, in the current view"]
+      ] },
+      { "type": "h", "text": "Finding cases" },
+      { "type": "list", "items": [
+        "**Work queues** on the left: Unassigned, Mine, Open, Pending, Closed and All, each with a count.",
+        "**Mailboxes** narrow the list to one team's queue.",
+        "**Tags** narrow it to one label.",
+        "Search by subject, description or case number (C-…), and filter by type."
+      ] },
+      { "type": "p", "text": "Cases waiting for you are marked **Customer replied**. Unread ones show a count and a bold subject." },
+      { "type": "h", "text": "Opening a new case" },
+      { "type": "steps", "items": [
+        "Press **New case**.",
+        "Choose the customer and, if you use them, the mailbox.",
+        "Fill in the details and create it."
+      ] },
+      { "type": "callout", "tone": "info", "text": "Depending on your permissions you see every case or only your own and your team's. Customers can also open cases themselves from the customer portal, and emails to a mailbox's address become cases automatically." },
+      { "type": "h", "text": "Related guides" },
+      { "type": "list", "items": ["Working a customer case", "Help desk settings: mailboxes, saved replies and tags"] }
+    ]
+  },
+  {
+    "slug": "cases-working-a-ticket",
+    "title": "Working a customer case",
+    "summary": "Reply to the customer, leave notes for your team, use saved replies, and set the status, owner, priority and tags.",
+    "category": "comms",
+    "audience": "everyone",
+    "keywords": ["cases", "ticket", "reply", "internal note", "saved reply", "assign", "status", "priority", "tags"],
+    "body": [
+      { "type": "p", "text": "Opening a case shows the whole conversation with the customer, and the case's details beside it. Opening it marks the customer's messages as read." },
+      { "type": "h", "text": "Reading the conversation" },
+      { "type": "list", "items": [
+        "Customer messages are on the left, your team's replies on the right.",
+        "**Internal notes** have an amber background — the customer never sees them.",
+        "Small centred lines show events such as a change of status."
+      ] },
+      { "type": "h", "text": "Replying or leaving a note" },
+      { "type": "steps", "items": [
+        "In the box at the bottom, choose **reply** (to the customer) or **note** (for your team only).",
+        "Use **Insert a saved reply…** to drop in a ready-made answer.",
+        "Optionally set the status as you send: Pending customer, Open, Resolved or Closed.",
+        "Send."
+      ] },
+      { "type": "callout", "tone": "warning", "text": "Check you're on **reply** before sending something meant for the customer, and on **note** for anything that's only for your team." },
+      { "type": "h", "text": "The case's details" },
+      { "type": "p", "text": "On the right you can change the **Status**, **Assignee**, **Priority** and **Mailbox** — each saves as soon as you pick it. Type a tag name to add a tag; remove one with its ✕. You'll also see the customer's contact details, their vehicle if one is linked, attachments, and their other cases." },
+      { "type": "callout", "tone": "info", "text": "If someone else changed the case while you were writing, your reply isn't sent and you're asked to refresh first — so two people never overwrite each other." }
+    ]
+  },
+  {
+    "slug": "helpdesk-settings",
+    "title": "Help desk settings: mailboxes, saved replies and tags",
+    "summary": "Set up help desk mailboxes with their own email address, signature and auto-reply, ready-made replies, and tags.",
+    "category": "comms",
+    "audience": "managers",
+    "keywords": ["help desk", "settings", "mailbox", "inbox address", "auto-reply", "saved reply", "tags", "signature"],
+    "body": [
+      { "type": "p", "text": "**Settings → Help desk** sets up the mailboxes, saved replies and tags your team uses on customer cases. You need permission to manage cases." },
+      { "type": "h", "text": "Mailboxes" },
+      { "type": "p", "text": "A mailbox is a separate queue — for example \"Support\" and \"Workshop\" — each with its own colour, signature and email address." },
+      { "type": "steps", "items": [
+        "Press **New mailbox**.",
+        "Enter a name and pick a colour.",
+        "Optionally enter an **Inbox address**: email sent to that address becomes a case in this mailbox. Point that address at the inbox connected under **Settings → Email**.",
+        "Optionally add a **Signature**, added to replies from this mailbox.",
+        "Tick **Send an auto-reply when a new ticket arrives by email** and write the message if you'd like customers to get an acknowledgement.",
+        "Keep **Active** ticked and save."
+      ] },
+      { "type": "callout", "tone": "info", "text": "The auto-reply goes once per new emailed case, never to automatic or no-reply senders, with the mailbox signature added." },
+      { "type": "h", "text": "Saved replies" },
+      { "type": "steps", "items": [
+        "Press **New reply**.",
+        "Give it a title, choose which mailbox it's for (or **All mailboxes**) and write the reply.",
+        "Save. It appears under **Insert a saved reply…** on cases."
+      ] },
+      { "type": "h", "text": "Tags" },
+      { "type": "p", "text": "Tags are made on the spot while working a case. This page lists them all, so you can remove any you no longer use." }
+    ]
+  }
+]
