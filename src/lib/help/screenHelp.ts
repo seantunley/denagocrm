@@ -9,6 +9,7 @@
 const SCREENS: ReadonlyArray<readonly [pattern: string, slug: string]> = [
   ["/", "home-screen"],
   ["/today", "today-who-to-contact-next"],
+  ["/work", "my-work"],
   ["/assistant", "assistant-ask-the-crm"],
   ["/search", "search-and-command-menu"],
   ["/notifications", "admin-notifications"],

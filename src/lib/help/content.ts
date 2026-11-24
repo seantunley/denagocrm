@@ -4,6 +4,7 @@ import { isArticleEnabled } from "./modules";
 import { HELP_CATEGORIES } from "./categories";
 import { gettingStartedArticles } from "./articles/getting-started";
 import { homeArticles } from "./articles/home";
+import { myWorkArticles } from "./articles/my-work";
 import { dashboardArticles } from "./articles/dashboards";
 import { tenantOnboardingArticles } from "./articles/tenant-onboarding";
 import { xAndAttentionArticles } from "./articles/x-and-attention";
@@ -87,6 +88,7 @@ const generated = (articles: unknown) => (articles as HelpArticle[]).filter((art
 export const HELP_ARTICLES: HelpArticle[] = [
   ...gettingStartedArticles,
   ...homeArticles,
+  ...myWorkArticles,
   ...dashboardArticles,
   ...tenantOnboardingArticles,
   ...emailSignatureArticles,
