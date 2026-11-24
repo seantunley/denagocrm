@@ -61,7 +61,9 @@ test("the board, the leads list, contacts and quotes opt in; the deal ones name 
   assert.match(board, /data-nav-stage=""/);
   assert.match(board, /useSensor\(KeyboardSensor, \{ keyboardCodes: \{ start: \["Space"\], cancel: \["Escape"\], end: \["Space", "Enter"\] \} \}\)/, "Enter opens a card; Space drags it");
   assert.match(src("src/app/(app)/leads/list/page.tsx"), /data-nav-row="" data-nav-href=\{`\/leads\/\$\{lead\.id\}`\} data-nav-lead=\{lead\.id\}/);
-  assert.match(src("src/app/(app)/contacts/page.tsx"), /data-nav-row="" data-nav-href=\{`\/contacts\/\$\{contact\.id\}`\}/);
+  // Contacts' list view is the shared data grid (W2-04): every grid row opts in, with the page's own href.
+  assert.match(src("src/components/grid/DataGrid.tsx"), /data-nav-row="" data-nav-href=\{href\}/);
+  assert.match(src("src/app/(app)/contacts/page.tsx"), /rowHref=\{\(contact\) => `\/contacts\/\$\{contact\.id\}`\}/);
   assert.match(src("src/app/(app)/quotes/page.tsx"), /data-nav-row="" data-nav-href=\{`\/quotes\/\$\{quote\.id\}`\} data-nav-lead=\{quote\.leadId \?\? undefined\}/);
   assert.match(src("src/app/(app)/layout.tsx"), /<ListKeyboard \/>/);
 });

@@ -37,7 +37,6 @@ const rawHeadingAllowlist = new Set([
 const horizontalTableAllowlist = new Set([
   "src/app/(app)/audit/page.tsx",
   "src/app/(app)/campaigns/[id]/page.tsx",
-  "src/app/(app)/contacts/page.tsx",
   "src/app/(app)/fleets/[id]/page.tsx",
   "src/app/(app)/forecast/page.tsx",
   "src/app/(app)/journeys/page.tsx",

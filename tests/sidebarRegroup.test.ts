@@ -38,7 +38,9 @@ test("every person sees exactly the links they saw before — none gained, none 
   for (const [name, persona] of Object.entries(PERSONAS)) {
     const after = allNavLinks(buildNav(persona.admin, persona.perms, persona.enabled)).map((link) => link.href).sort();
     // Plus /work (My Work module, 2026-11-24) for everyone, wherever the module is on.
-    const expected = persona.enabled ? BEFORE[name] : [...BEFORE[name], "/work"].sort();
+    // Plus /deals (the Deals Centre, 2026-11-24) for anyone who may see quotes — the door the deal page already had.
+    const seesQuotes = persona.admin || persona.perms.some((key) => key.startsWith("quotes.view"));
+    const expected = [...BEFORE[name], ...(persona.enabled ? [] : ["/work"]), ...(seesQuotes ? ["/deals"] : [])].sort();
     assert.deepEqual(after, expected, name);
   }
 });
@@ -48,7 +50,7 @@ test("pinned, then the groups in the order work happens", () => {
   assert.deepEqual(nav.topLinks.map((link) => link.label), ["Home", "My Work", "Today", "Inbox", "Help desk", "Calendar"]);
   assert.deepEqual(nav.groups.map((group) => group.key), ["sales", "customers", "service", "marketing", "insights", "automation", "admin"]);
   const labels = (key: string) => nav.groups.find((group) => group.key === key)?.links.map((link) => link.label);
-  assert.deepEqual(labels("sales"), ["Leads", "Quotes", "Test Drives", "Signatures", "Finance", "Deliveries", "Invoices", "Stock"]);
+  assert.deepEqual(labels("sales"), ["Leads", "Deals", "Quotes", "Test Drives", "Signatures", "Finance", "Deliveries", "Invoices", "Stock"]);
   assert.deepEqual(labels("customers"), ["Contacts", "Fleets", "Activities", "Customer Health", "Birthdays", "Documents"]);
   assert.deepEqual(labels("service"), ["Workshop calendar", "Job Cards", "Vehicles", "Service Due", "Warranty", "Parts"]);
   assert.deepEqual(labels("marketing"), ["Overview", "Campaigns", "Audiences", "Templates", "Calendar", "Surveys", "Survey insights", "Referrals"]);
