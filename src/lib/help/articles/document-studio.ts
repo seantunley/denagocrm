@@ -13,6 +13,19 @@ export const documentStudioArticles: HelpArticle[] = [
     keywords: ["document studio", "templates", "layout", "wording", "publish", "custom documents", "document editor"],
     body: [
       { type: "p", text: "**Document Studio** is the one place where your documents are designed. Each document has a single layout, and its design and its wording are edited together in the document editor. Your logo and company details come from your company profile, so you set them once." },
+      { type: "h", text: "Who can use it" },
+      { type: "p", text: "Document Studio is in the menu under **Admin → Document Studio**. You see it if your role may manage document templates, or view or edit document layouts. These permissions are in the **Documents** group under **Settings → Team & roles**:" },
+      {
+        type: "table",
+        headers: ["To do this", "Your role needs permission to"],
+        rows: [
+          ["See the whole Studio page and edit and publish its layouts", "Create and manage generated-document templates"],
+          ["See only the list of extra layouts and preview them", "View document layouts and their history"],
+          ["Open extra layouts in the editor, change and publish them, and save to the content library", "Create and edit document layouts and the content library"],
+          ["Make a custom document", "Rename, re-file, replace and delete documents"],
+        ],
+      },
+      { type: "p", text: "Someone who may only view or edit layouts sees just the **Document Builder layouts** part of the page. The emails section is shown only to the workspace owner." },
       { type: "h", text: "What is on the page" },
       {
         type: "table",
@@ -34,7 +47,18 @@ export const documentStudioArticles: HelpArticle[] = [
         ],
       },
       { type: "callout", tone: "info", text: "A card marked **Not published yet** is still printing its previous layout. Open it, check it, and press **Publish** to switch. Nothing changes for customers until you publish." },
-      { type: "callout", tone: "tip", text: "If a card says \"Editing needs Document Builder access\", ask the workspace owner to give your role Document Builder access." },
+      { type: "callout", tone: "tip", text: "If a card says \"Editing needs Document Builder access.\", your role can't edit layouts yet. Ask the workspace owner to give it permission to create and edit document layouts." },
+      { type: "h", text: "Related guides" },
+      {
+        type: "list",
+        items: [
+          "Editing a document's layout and wording",
+          "Finding your way around the document editor",
+          "Custom documents: proposals, letters and packs",
+          "Customer emails: one frame, one message each",
+          "Documents and templates: where everything lives",
+        ],
+      },
     ],
   },
   {
@@ -79,6 +103,24 @@ export const documentStudioArticles: HelpArticle[] = [
         ],
       },
       { type: "callout", tone: "warning", text: "Publishing changes what customers receive from that moment. Preview against a real record first — a long customer name or a quote with many lines shows problems that sample details do not." },
+      { type: "h", text: "If something goes wrong" },
+      {
+        type: "list",
+        items: [
+          "**Not published. Nothing changed on real documents; try again.**: the publish didn't go through. Your draft is safe; press **Publish** again.",
+          "**You can't open the editor**: your role may view layouts but not edit them.",
+          "**A warning appears after publishing**: the layout is published, but something is worth checking — wording that contradicts your quote settings, or a point from the design check. Fix it and publish again if needed.",
+        ],
+      },
+      { type: "h", text: "Related guides" },
+      {
+        type: "list",
+        items: [
+          "Finding your way around the document editor",
+          "The design check",
+          "Document Studio overview",
+        ],
+      },
     ],
   },
   {
@@ -127,6 +169,16 @@ export const documentStudioArticles: HelpArticle[] = [
       { type: "h", text: "The bottom bar" },
       { type: "p", text: "The bottom bar shows the number of pages, a button to **Show page thumbnails** or hide them, the zoom level with **−** and **+**, and whether your changes are saved." },
       { type: "callout", tone: "tip", text: "Merge fields are written in double curly brackets, for example {{customer.name}} or {{quote.total}}. They are replaced with the real details when the document is produced. The full list is at the bottom of the Document Studio page." },
+      { type: "h", text: "Related guides" },
+      {
+        type: "list",
+        items: [
+          "The blocks you can add to a document",
+          "Styling: the Design panel and document styles",
+          "Arranging: columns, free placement, lining up and grouping",
+          "Pages, margins, headers and footers",
+        ],
+      },
     ],
   },
   {
@@ -187,6 +239,16 @@ export const documentStudioArticles: HelpArticle[] = [
       { type: "p", text: "The showcase blocks — **Header band**, **Info strip**, **Vehicle showcase (bound)**, **Totals box**, **Acceptance card** and **Footer band** — make up the picture-led quotation layout. **Replace with showcase quotation layout** swaps every page of the document for that layout in one step. Undo brings the old layout back, and nothing changes for customers until you publish." },
       { type: "callout", tone: "info", text: "Amounts in a payment schedule that are typed stay exactly as typed. Subtotal rows in a plain table are typed too — the table does not add them up for you." },
       { type: "callout", tone: "warning", text: "A QR code needs a full link starting with https:// (or http://). Nothing is printed until it has one." },
+      { type: "h", text: "Related guides" },
+      {
+        type: "list",
+        items: [
+          "Pictures and tables",
+          "The content library: save and reuse content",
+          "Adding signing fields and recipients to a document",
+          "Managing the product catalogue",
+        ],
+      },
     ],
   },
   {
@@ -236,6 +298,15 @@ export const documentStudioArticles: HelpArticle[] = [
       },
       { type: "callout", tone: "info", text: "Changing Accent or Dark repaints every block drawn in the old colour. A block you coloured differently yourself is left alone. A ready-made style changes type only — it never changes your brand colours." },
       { type: "callout", tone: "info", text: "Cards, bands and tables keep their own designed text sizes. To change one, use that block's own **Text size**. A few blocks have a fixed size so that signing fields line up with them; they take weight and letter spacing but not spacing or a fill." },
+      { type: "h", text: "Related guides" },
+      {
+        type: "list",
+        items: [
+          "Finding your way around the document editor",
+          "Pictures and tables",
+          "Company profile and branding",
+        ],
+      },
     ],
   },
   {
@@ -280,6 +351,23 @@ export const documentStudioArticles: HelpArticle[] = [
       { type: "p", text: "The same **Table style** settings are available on the pricing table and on the bound **Line items** block." },
       { type: "h", text: "Line items columns" },
       { type: "p", text: "On the **Line items** block you choose which columns print, their headings, alignment and width. A column can carry a **Show if** condition so it appears only when it applies — for example a discount column only when the quote has a discount. Hiding a column never changes the other columns' sums." },
+      { type: "h", text: "If something goes wrong" },
+      {
+        type: "list",
+        items: [
+          "**A picture won't upload**: it must be a PNG, JPEG or WebP file of 5 MB or less.",
+          "**The design check says an image block has no picture**: upload one, or delete the empty block.",
+        ],
+      },
+      { type: "h", text: "Related guides" },
+      {
+        type: "list",
+        items: [
+          "The blocks you can add to a document",
+          "Pages, margins, headers and footers",
+          "The design check",
+        ],
+      },
     ],
   },
   {
@@ -327,6 +415,15 @@ export const documentStudioArticles: HelpArticle[] = [
       },
       { type: "callout", tone: "tip", text: "Drag one selected item and the rest follow. Every arranging step can be undone with Ctrl+Z." },
       { type: "callout", tone: "info", text: "Lining up, spacing and grouping work on freely placed blocks and signing fields. Blocks in rows are arranged by their row and column instead." },
+      { type: "h", text: "Related guides" },
+      {
+        type: "list",
+        items: [
+          "Finding your way around the document editor",
+          "Adding signing fields and recipients to a document",
+          "Pages, margins, headers and footers",
+        ],
+      },
     ],
   },
   {
@@ -381,6 +478,15 @@ export const documentStudioArticles: HelpArticle[] = [
           "Tick **Keep with the row after it** to keep a heading with what it heads.",
         ],
       },
+      { type: "h", text: "Related guides" },
+      {
+        type: "list",
+        items: [
+          "The design check",
+          "Arranging: columns, free placement, lining up and grouping",
+          "The blocks you can add to a document",
+        ],
+      },
     ],
   },
   {
@@ -415,6 +521,15 @@ export const documentStudioArticles: HelpArticle[] = [
       { type: "callout", tone: "info", text: "A library item is **copied** into the document. Changing or deleting the library item later never changes documents that already use it. That is deliberate: a published document cannot change underneath you." },
       { type: "p", text: "To remove an item, press the ✕ beside it and confirm. It goes to the Trash, and documents that already use it keep their copy." },
       { type: "callout", tone: "tip", text: "Your company profile has no banking fields, so the easiest way to keep banking details consistent is to fill in a **Banking details** block once and save it to the library." },
+      { type: "p", text: "Saving to the library needs permission to create and edit document layouts and the content library." },
+      { type: "h", text: "Related guides" },
+      {
+        type: "list",
+        items: [
+          "The blocks you can add to a document",
+          "Custom documents: proposals, letters and packs",
+        ],
+      },
     ],
   },
   {
@@ -445,6 +560,18 @@ export const documentStudioArticles: HelpArticle[] = [
         ],
       },
       { type: "callout", tone: "info", text: "These are things to check, not errors. You can save and publish regardless. The check does not look at image sharpness or colour contrast." },
+      { type: "h", text: "Wording that contradicts your quote settings" },
+      { type: "p", text: "On a quote layout, a yellow bar also appears under the design check when the wording you typed disagrees with **Settings → Quotes**: for example \"valid for 14 days\" when your quotes are valid for 30, or a VAT percentage that isn't your rate. The bar suggests the merge field to use instead, such as {{quote.validUntil}}, {{quote.validDays}} or {{quote.vatRate}}, so the document always shows the quote's own figures. Your wording is never changed for you." },
+      { type: "p", text: "When you publish, a short version of both checks pops up as a reminder. The layout is still published." },
+      { type: "h", text: "Related guides" },
+      {
+        type: "list",
+        items: [
+          "Editing a document's layout and wording",
+          "Adding signing fields and recipients to a document",
+          "Pages, margins, headers and footers",
+        ],
+      },
     ],
   },
   {
@@ -481,6 +608,15 @@ export const documentStudioArticles: HelpArticle[] = [
       { type: "callout", tone: "tip", text: "The showcase **Acceptance card** carries its signature and date with it when you move it, so they always stay on their lines." },
       { type: "callout", tone: "warning", text: "Signing fields sit at a fixed spot on the sheet. If you later add content above them, check that each field still sits where it should — the design check warns about fields that end up off the page or overlapping." },
       { type: "p", text: "Designing the layout does not send anything. A quote is sent for signature from the quote itself." },
+      { type: "h", text: "Related guides" },
+      {
+        type: "list",
+        items: [
+          "Sending a quote for signature",
+          "The design check",
+          "Arranging: columns, free placement, lining up and grouping",
+        ],
+      },
     ],
   },
   {
@@ -517,6 +653,28 @@ export const documentStudioArticles: HelpArticle[] = [
       { type: "p", text: "When the document is ready, press **Finalise** and confirm with **Finalise & file PDF**. The PDF is filed in the document repository against its customer and quote, and opens for you." },
       { type: "callout", tone: "warning", text: "A finalised document is locked and can no longer be edited. Check the preview before you finalise." },
       { type: "p", text: "Your latest custom documents are listed under **Recent custom documents** with their status. Click one to open it." },
+      { type: "h", text: "Who can do this" },
+      { type: "p", text: "The **2. Custom documents** section is on the full Studio page; see Document Studio overview for who sees it. Creating and finalising a document also needs permission to rename, re-file, replace and delete documents; without it, the **New document** form isn't offered. An owner sets these under **Settings → Team & roles**, in the **Documents** group." },
+      { type: "h", text: "If something goes wrong" },
+      {
+        type: "table",
+        headers: ["Message", "What to do"],
+        rows: [
+          ["This document is finalised and can't be edited.", "Finalised documents are locked. Create a new document instead."],
+          ["A message saying the template **can't be read — open it in the editor first**", "Open the template with **Edit**, check it and publish it, then try again."],
+          ["This document can't be read, so it was not finalised.", "Open the document in the editor, save it, and finalise again."],
+          ["The document changed while it was being finalised. Try again.", "Someone else saved it at the same moment. Try again."],
+        ],
+      },
+      { type: "h", text: "Related guides" },
+      {
+        type: "list",
+        items: [
+          "Finding your way around the document editor",
+          "The content library: save and reuse content",
+          "The document repository",
+        ],
+      },
     ],
   },
   {
@@ -527,7 +685,7 @@ export const documentStudioArticles: HelpArticle[] = [
     audience: "managers",
     keywords: ["generate", "pdf", "file", "job card", "quote", "extra layouts", "default layout", "merge fields"],
     body: [
-      { type: "p", text: "The **3. Document Builder layouts** section of Document Studio is for extra layouts beyond the standard set, and for producing a document against a record without opening the record. It is shown to people with Document Builder access." },
+      { type: "p", text: "The **3. Document Builder layouts** section of Document Studio is for extra layouts beyond the standard set, and for producing a document against a record without opening the record. It is shown to people whose role may view or edit document layouts; creating, editing and generating need permission to create and edit document layouts." },
       { type: "h", text: "Generate and file a document" },
       {
         type: "steps",
@@ -550,6 +708,27 @@ export const documentStudioArticles: HelpArticle[] = [
         ],
       },
       { type: "callout", tone: "info", text: "To send a quote for signature, use the quote itself. Generating here files a PDF; it does not send anything to a customer." },
+      { type: "h", text: "If something goes wrong" },
+      {
+        type: "table",
+        headers: ["Message", "What to do"],
+        rows: [
+          ["Choose a template.", "Pick a template before pressing **Generate & file**."],
+          ["Choose a valid record.", "The record isn't one you can see, or no longer exists. Search for it again."],
+          ["Choose either a quote or a job card, not both.", "A document is filed against one record only."],
+          ["Could not build that document — check the template.", "Open the template in the editor, check it and publish it, then try again."],
+          ["That kind of document isn't available in this workspace.", "That document type belongs to a feature your workspace doesn't use."],
+        ],
+      },
+      { type: "h", text: "Related guides" },
+      {
+        type: "list",
+        items: [
+          "Document Studio overview",
+          "The document repository",
+          "Sending a quote for signature",
+        ],
+      },
     ],
   },
   {
@@ -565,7 +744,7 @@ export const documentStudioArticles: HelpArticle[] = [
         type: "table",
         headers: ["Place", "What it is for", "Who sees it"],
         rows: [
-          ["Document Studio", "Designing and wording every document, the emails that send them, and custom templates.", "People whose role may manage document templates or has Document Builder access."],
+          ["Document Studio", "Designing and wording every document, the emails that send them, and custom templates.", "People whose role may manage document templates, or view or edit document layouts."],
           ["Documents", "The finished files: signed quotes, invoices, uploads, photos, and the Library of brochures, price lists and spec sheets.", "People whose role may see documents or the Library."],
         ],
       },
@@ -574,6 +753,16 @@ export const documentStudioArticles: HelpArticle[] = [
       { type: "h", text: "Documents" },
       { type: "p", text: "The Documents page is arranged like folders: **All**, **Recent**, **Unfiled**, the **Library**, **Customers** and **Other records**. A person with access to the Library only is taken straight to it." },
       { type: "callout", tone: "tip", text: "Logos, colours and company details on every document come from the company profile. Change them there once rather than in each layout." },
+      { type: "h", text: "Related guides" },
+      {
+        type: "list",
+        items: [
+          "Document Studio overview",
+          "The document repository",
+          "The document library",
+          "Roles and permissions",
+        ],
+      },
     ],
   },
 ];

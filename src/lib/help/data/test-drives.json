@@ -2,97 +2,229 @@
   {
     "slug": "test-drives-booking-and-statuses",
     "title": "Booking and managing a test drive",
-    "summary": "Create a dedicated test-drive booking, assign the customer, salesperson and demo vehicle, and manage confirmation, cancellation and no-shows.",
+    "summary": "Book a test drive for a customer, assign the salesperson and demo vehicle, and confirm, reschedule, cancel or mark a no-show.",
     "category": "workshop",
     "audience": "everyone",
-    "keywords": ["test drive", "booking", "demo vehicle", "confirmation", "no-show", "salesperson"],
+    "keywords": ["test drive", "booking", "demo vehicle", "confirmation", "no-show", "salesperson", "reschedule", "cancel"],
     "body": [
-      {"type": "p", "text": "The **Test drives** workspace is the source of truth for customer drives. Each booking is also linked to the existing activity calendar, so it remains visible alongside calls, meetings and follow-ups."},
-      {"type": "h", "text": "Create a booking"},
-      {"type": "steps", "items": [
-        "Choose **Book test drive**.",
-        "Select the customer and, where applicable, their open lead.",
-        "Set the branch or handover location, the requested model and the salesperson.",
-        "Assign an available demo vehicle now, or leave it unassigned until the vehicle is confirmed.",
-        "Set the start and expected-return times, then create the booking."
-      ]},
-      {"type": "h", "text": "Booking statuses"},
-      {"type": "table", "headers": ["Status", "Meaning"], "rows": [
-        ["Booked", "The appointment exists but has not yet been confirmed."],
-        ["Confirmed", "The customer has confirmed the appointment."],
-        ["Out on drive", "The customer and vehicle passed the handover controls and the vehicle is checked out."],
-        ["Completed", "The vehicle returned and the outcome was recorded."],
-        ["Cancelled", "The appointment was cancelled with a reason."],
-        ["No-show", "The customer did not attend; an optional reason or note is retained."]
-      ]},
-      {"type": "callout", "tone": "warning", "text": "The same demo vehicle cannot be booked for overlapping times. This is enforced both in the application and in the database, so simultaneous booking attempts cannot double-book it."}
+      { "type": "p", "text": "**Test Drives** (in the menu under **Sales**) is where every customer test drive is booked and run, from booking to the vehicle coming back. Each booking also puts an entry in the calendar, so it shows next to your other appointments." },
+      { "type": "h", "text": "Who can use it" },
+      { "type": "p", "text": "You need permission to view activities and calendars to see test drives, and permission to create, assign and complete activities to book and run them. An owner sets these under **Settings → Team & roles**, in the **CRM** group." },
+      { "type": "h", "text": "Booking a test drive" },
+      {
+        "type": "steps",
+        "items": [
+          "Click **Book test drive**. You can also start from a customer's page or a lead, which fills in the customer for you.",
+          "Choose the **Customer**, and the **Lead** if the drive belongs to one (or **No linked lead**).",
+          "Type the **Branch / location** where the vehicle is handed over. You must fill this in.",
+          "Choose the **Demo vehicle**, or **Assign later** if you don't know yet.",
+          "Choose the **Model**, or leave **Infer from lead or demo vehicle**.",
+          "Choose the **Salesperson** (you, unless you change it) and any **Accompanying salesperson**.",
+          "Set the **Start** and **Expected return** times and click **Create booking**."
+        ]
+      },
+      { "type": "p", "text": "The booking gets a reference starting with TD- and opens in **Booked**." },
+      { "type": "callout", "tone": "warning", "text": "A demo vehicle can't be booked for two drives at overlapping times, and a salesperson can't be booked while they are marked unavailable. Both are checked when you save." },
+      { "type": "h", "text": "Booking statuses" },
+      {
+        "type": "table",
+        "headers": ["Status", "What it means"],
+        "rows": [
+          ["**Booked**", "The appointment is in, but the customer hasn't confirmed it."],
+          ["**Confirmed**", "The customer has confirmed."],
+          ["**Out on drive**", "The driver checks were done and the vehicle has been checked out."],
+          ["**Completed**", "The vehicle is back and the return has been recorded."],
+          ["**Cancelled**", "The appointment was cancelled, with a reason."],
+          ["**No-show**", "The customer didn't arrive."]
+        ]
+      },
+      { "type": "h", "text": "Changing a booking" },
+      {
+        "type": "list",
+        "items": [
+          "**Confirm booking** marks a booked drive as confirmed.",
+          "To reschedule or change the vehicle or salesperson, edit **Booking and vehicle assignment** on the booking and click **Save booking**. This is possible until the vehicle is checked out.",
+          "**Mark no-show** records that the customer didn't come, with an optional note.",
+          "**Cancel booking** asks for a **Cancellation reason**, then cancels the booking and its calendar entry."
+        ]
+      },
+      { "type": "h", "text": "The Test drives page" },
+      { "type": "p", "text": "The **Booking ledger** lists bookings, with a filter for each status. Each row shows the reference, customer, vehicle, times, salesperson and status. Click a booking to open it." },
+      { "type": "h", "text": "If something goes wrong" },
+      {
+        "type": "table",
+        "headers": ["Message", "What to do"],
+        "rows": [
+          ["A message starting **The demo vehicle is already booked on TD-…**", "That vehicle is booked for an overlapping time. Choose another vehicle or time, or **Assign later**."],
+          ["That demo vehicle is not available", "The vehicle is in maintenance, unavailable or retired."],
+          ["A message saying the salesperson **is unavailable from … to …**", "They have blocked that time. Choose another time or salesperson."],
+          ["Expected return must be after the start time", "Fix the times."],
+          ["The selected lead belongs to a different customer", "Choose the lead that belongs to this customer, or no lead."],
+          ["Only upcoming test drives can be rescheduled", "The vehicle has already been checked out, or the booking is finished."]
+        ]
+      },
+      { "type": "h", "text": "Related guides" },
+      {
+        "type": "list",
+        "items": [
+          "Driver checks, vehicle handover and return",
+          "Demo-fleet availability and test-drive analytics",
+          "Booking a test drive from the board"
+        ]
+      }
     ]
   },
   {
     "slug": "test-drives-driver-handover-return",
     "title": "Driver checks, vehicle handover and return",
-    "summary": "Complete the safety gate, record the vehicle's condition and evidence, then capture the return, incidents and sales outcome.",
+    "summary": "Complete the driver checks and indemnity, check the vehicle out with its condition recorded, then record the return, any damage and the sales outcome.",
     "category": "workshop",
     "audience": "everyone",
-    "keywords": ["driver licence", "indemnity", "identity", "condition photos", "odometer", "battery", "incident", "return"],
+    "keywords": ["driver licence", "indemnity", "identity", "condition photos", "odometer", "battery", "incident", "return", "check out", "sales outcome"],
     "body": [
-      {"type": "p", "text": "A vehicle cannot be checked out until every readiness item is complete. The checklist on the booking shows exactly what is still missing."},
-      {"type": "h", "text": "Readiness gate"},
-      {"type": "list", "items": [
-        "An available demo vehicle is assigned",
-        "The driver's licence number and a current expiry date are captured",
-        "A licence or ID image/PDF is uploaded",
-        "Identity is marked verified",
-        "The indemnity is signed, waived or marked not required",
-        "An emergency contact name and phone number are captured",
-        "At least one start-condition photo is uploaded"
-      ]},
-      {"type": "h", "text": "Check the vehicle out"},
-      {"type": "steps", "items": [
-        "Record the start odometer and battery percentage.",
-        "Describe any existing damage and list the accessories supplied.",
-        "Capture the intended route or destination.",
-        "Choose **Check vehicle out**. The booking becomes Out on drive and the demo vehicle's latest odometer and battery state are updated."
-      ]},
-      {"type": "h", "text": "Complete the return"},
-      {"type": "steps", "items": [
-        "Record the return odometer and battery percentage.",
-        "Describe the return condition and any new damage.",
-        "Record an incident report where necessary and upload supporting evidence.",
-        "Flag cleaning or charging work required.",
-        "Capture the customer's feedback and the sales outcome, linking the resulting quote where applicable.",
-        "Complete the return. The linked calendar activity is completed automatically."
-      ]},
-      {"type": "callout", "tone": "info", "text": "Licence, identity and emergency-contact values are protected by record-level access controls. Licence and emergency-contact values are also redacted from audit JSON snapshots."}
+      { "type": "p", "text": "A vehicle can't leave on a test drive until every driver check is done. The **Readiness** list on the booking shows what is still missing." },
+      { "type": "h", "text": "The readiness checks" },
+      {
+        "type": "list",
+        "items": [
+          "**Demo vehicle assigned**",
+          "**Licence number captured**",
+          "**Licence is current** (the expiry date hasn't passed)",
+          "**Licence / ID evidence** (a photo or PDF uploaded)",
+          "**Identity verified**",
+          "**Indemnity complete** (signed, waived or not required)",
+          "**Emergency contact** (name and phone number)",
+          "**Condition photos** (at least one start-condition photo)"
+        ]
+      },
+      { "type": "h", "text": "Driver checks" },
+      {
+        "type": "steps",
+        "items": [
+          "Under **Driver controls**, fill in the **Driver's licence number**, **Licence expiry**, **Emergency contact** and **Emergency phone**.",
+          "Check the driver's ID against the person in front of you and tick **Identity verified**.",
+          "Set **Indemnity** to **Signed**, **Waived** or **Not required**. It starts as **Pending**.",
+          "Click **Save driver controls**.",
+          "Click **Upload licence or ID** to add a photo or scan of the licence or ID (PDF, JPG, PNG or WebP, up to 10 MB)."
+        ]
+      },
+      { "type": "h", "text": "Signing the indemnity on your device" },
+      { "type": "p", "text": "Click **Sign indemnity on this device** and hand the device to the driver to read and sign. When they finish, the booking is marked **Signed** by itself and **Open signed copy** shows the signed document. If signing was interrupted, click **Continue signing**, or **Start again**." },
+      { "type": "h", "text": "Checking the vehicle out" },
+      {
+        "type": "steps",
+        "items": [
+          "Click **Add start-condition photos** and photograph the vehicle.",
+          "Under **Vehicle handover**, type the **Start odometer (km)** and **Start battery (%)**.",
+          "Describe any **Existing damage**, the **Accessories supplied** (keys, charger, documents) and the **Route / destination**.",
+          "Click **Check vehicle out**. It stays greyed out until every readiness check is done."
+        ]
+      },
+      { "type": "p", "text": "The booking becomes **Out on drive**, and the demo vehicle's odometer and battery level are updated." },
+      { "type": "h", "text": "Recording the return" },
+      {
+        "type": "steps",
+        "items": [
+          "Under **Return and sales outcome**, type the **Return odometer (km)** and **Return battery (%)**.",
+          "Describe the **Return condition**, any **New damage** and, if something happened, the **Incident report**.",
+          "Tick **Cleaning required** or **Charging required** if the vehicle needs it.",
+          "Choose the **Sales outcome**: **Undecided**, **Follow-up required**, **Quote created**, **Sale won** or **No interest**. If there is a quote, choose it under **Converted quote**.",
+          "Add the **Customer feedback** and click **Complete return**.",
+          "Use **Add return-condition photos** and **Add incident evidence** for photos or documents."
+        ]
+      },
+      { "type": "p", "text": "The booking becomes **Completed**, its calendar entry is marked done, and the demo vehicle's odometer and battery are updated. Any new damage or incident shows in a red **Incident recorded** box on the booking." },
+      { "type": "h", "text": "If something goes wrong" },
+      {
+        "type": "table",
+        "headers": ["Message", "What to do"],
+        "rows": [
+          ["The driver's licence has expired", "The driver can't take the vehicle on this licence."],
+          ["Complete or waive the indemnity before check-out", "Get the indemnity signed, or set it to waived or not required."],
+          ["Upload the driver's licence or ID before check-out", "Upload a photo or scan of the licence or ID."],
+          ["Add at least one start-condition photo before check-out", "Photograph the vehicle with **Add start-condition photos**."],
+          ["Start odometer cannot be lower than the demo vehicle odometer", "Check the reading. It can't be less than the vehicle's last recorded reading."],
+          ["Return odometer cannot be lower than the start odometer", "Check the reading."],
+          ["Driver controls are locked after check-out", "Driver details can't be changed once the vehicle has left."],
+          ["Files must be 10 MB or smaller", "Use a smaller file."]
+        ]
+      },
+      { "type": "h", "text": "Related guides" },
+      {
+        "type": "list",
+        "items": [
+          "Booking and managing a test drive",
+          "Demo-fleet availability and test-drive analytics"
+        ]
+      }
     ]
   },
   {
     "slug": "test-drives-demo-fleet-and-analytics",
     "title": "Demo-fleet availability and test-drive analytics",
-    "summary": "Maintain dealership demo vehicles and interpret booking, attendance, conversion, utilisation and incident metrics.",
+    "summary": "Keep your demo vehicles and their availability up to date, and understand the booking, attendance, conversion, utilisation and incident figures.",
     "category": "workshop",
     "audience": "managers",
-    "keywords": ["demo fleet", "utilisation", "booking rate", "attendance", "conversion", "incident rate", "analytics"],
+    "keywords": ["demo fleet", "utilisation", "booking rate", "attendance", "conversion", "incident rate", "analytics", "maintenance"],
     "body": [
-      {"type": "h", "text": "Demo fleet"},
-      {"type": "p", "text": "The **Demo fleet** page records each dealership vehicle's model, stock-unit link, branch, registration, VIN, odometer, battery state and availability."},
-      {"type": "table", "headers": ["Vehicle status", "Use"], "rows": [
-        ["Active", "Available to assign to new bookings."],
-        ["Maintenance", "Temporarily unavailable while work is performed."],
-        ["Unavailable", "Not bookable for another operational reason."],
-        ["Retired", "No longer part of the active demo fleet."]
-      ]},
-      {"type": "callout", "tone": "warning", "text": "A vehicle that is currently out on a drive cannot be moved to maintenance, unavailable or retired until it returns."},
-      {"type": "h", "text": "Analytics definitions"},
-      {"type": "table", "headers": ["Metric", "Calculation"], "rows": [
-        ["Booking rate", "Unique new leads with a non-cancelled test-drive booking divided by accessible new leads in the period."],
-        ["Attendance rate", "Drives that started divided by non-cancelled bookings."],
-        ["No-show rate", "No-shows divided by non-cancelled bookings."],
-        ["Quote conversion", "Attended drives linked to a quote or marked quote/sale outcome divided by attended drives."],
-        ["Sale conversion", "Attended drives marked Sale won divided by attended drives."],
-        ["Demo utilisation", "Scheduled drive hours divided by available active-demo operating hours."],
-        ["Incident rate", "Attended drives with new damage or an incident report divided by attended drives."]
-      ]}
+      { "type": "h", "text": "The demo fleet" },
+      { "type": "p", "text": "Click **Demo fleet** on the Test drives page to see the vehicles you lend for test drives. The figures at the top show how many are **Active**, **Out now**, in **Maintenance**, and the **Average battery**. Each vehicle shows its branch, odometer, battery, whether it is **Out on test drive**, and its next booking." },
+      { "type": "p", "text": "Adding and editing demo vehicles needs permission to manage vehicles." },
+      {
+        "type": "steps",
+        "items": [
+          "Click **Add demo vehicle**.",
+          "Type the **Display name** your team will recognise. You must fill this in.",
+          "Link the **Product / model** and, if the vehicle is one of your stock units, the **Stock unit**.",
+          "Fill in the **VIN / serial**, **Registration**, **Colour**, **Branch**, **Odometer (km)**, **Battery (%)** and **Notes**.",
+          "Click **Add to demo fleet**."
+        ]
+      },
+      { "type": "p", "text": "To change a vehicle, click **Edit vehicle** on it, change the details or the status, and click **Save vehicle**." },
+      {
+        "type": "table",
+        "headers": ["Vehicle status", "Use it when"],
+        "rows": [
+          ["**Active**", "The vehicle can be booked."],
+          ["**Maintenance**", "It is being worked on and can't be booked."],
+          ["**Unavailable**", "It can't be booked for another reason."],
+          ["**Retired**", "It is no longer part of the demo fleet."]
+        ]
+      },
+      { "type": "callout", "tone": "warning", "text": "A vehicle with any upcoming or current booking (booked, confirmed or out on a drive) can't be moved out of **Active**. Move or cancel those bookings first." },
+      { "type": "h", "text": "The test-drive figures" },
+      { "type": "p", "text": "The figures on the Test drives page cover the last 30 days, ignore cancelled bookings, and count only leads and bookings you can see." },
+      {
+        "type": "table",
+        "headers": ["Figure", "How it is worked out"],
+        "rows": [
+          ["**Bookings · 30 days**", "Bookings in the period. Underneath: the share of leads created in the period that have a test drive booked."],
+          ["**Attendance**", "Drives that actually started, as a share of bookings, with the numbers attended and no-shows."],
+          ["**Quote conversion**", "Attended drives with a linked quote or an outcome of **Quote created** or **Sale won**, as a share of attended drives. Underneath: the share that became sales (**Sale won**)."],
+          ["**Incidents**", "Attended drives with new damage or an incident report, and that as a share of attended drives."],
+          ["**Fleet readiness**", "Demo utilisation: hours booked as a share of the hours your active demo vehicles were available (counted as 8 hours a day)."],
+          ["**New leads booked** and **Booked hours**", "How many new leads were booked, and the total hours booked."]
+        ]
+      },
+      { "type": "h", "text": "If something goes wrong" },
+      {
+        "type": "table",
+        "headers": ["Message", "What to do"],
+        "rows": [
+          ["A message ending **has a live booking on this vehicle**", "The named booking is still upcoming or out. Finish, move or cancel it before changing the status."],
+          ["That stock unit is already in the demo fleet", "Each stock unit can be linked to one demo vehicle."],
+          ["The selected product does not match the stock unit", "Choose the product the stock unit belongs to."]
+        ]
+      },
+      { "type": "h", "text": "Related guides" },
+      {
+        "type": "list",
+        "items": [
+          "Booking and managing a test drive",
+          "Driver checks, vehicle handover and return",
+          "Stock operations overview"
+        ]
+      }
     ]
   }
 ]
