@@ -34,13 +34,15 @@ const BEFORE: Record<string, string[]> = {
 test("every person sees exactly the links they saw before — none gained, none lost", () => {
   for (const [name, persona] of Object.entries(PERSONAS)) {
     const after = allNavLinks(buildNav(persona.admin, persona.perms, persona.enabled)).map((link) => link.href).sort();
-    assert.deepEqual(after, BEFORE[name], name);
+    // Plus /work (My Work module, 2026-11-24) for everyone, wherever the module is on.
+    const expected = persona.enabled ? BEFORE[name] : [...BEFORE[name], "/work"].sort();
+    assert.deepEqual(after, expected, name);
   }
 });
 
 test("pinned, then the groups in the order work happens", () => {
   const nav = buildNav(true, []);
-  assert.deepEqual(nav.topLinks.map((link) => link.label), ["Home", "Today", "Inbox", "Help desk", "Calendar"]);
+  assert.deepEqual(nav.topLinks.map((link) => link.label), ["Home", "My Work", "Today", "Inbox", "Help desk", "Calendar"]);
   assert.deepEqual(nav.groups.map((group) => group.key), ["sales", "customers", "service", "marketing", "insights", "automation", "admin"]);
   const labels = (key: string) => nav.groups.find((group) => group.key === key)?.links.map((link) => link.label);
   assert.deepEqual(labels("sales"), ["Leads", "Quotes", "Test Drives", "Signatures", "Finance", "Deliveries", "Invoices", "Stock"]);

@@ -38,6 +38,7 @@ import {
   Hammer,
   Sun,
   Cake,
+  ListTodo,
   type LucideIcon,
 } from "lucide-react";
 import { isPathEnabled } from "@/lib/modules/registry";
@@ -80,6 +81,8 @@ export function buildNav(
    * word, and tests/sidebarRegroup.test.ts holds the before/after link sets per role.
    */
   const topLinks: NavLink[] = [{ href: "/", label: "Home", icon: House, keywords: ["start", "do next", "overview"] }];
+  // Everyone's own list (My Work module); each source inside it checks its own permission.
+  topLinks.push({ href: "/work", label: "My Work", icon: ListTodo, keywords: ["my tasks", "to do", "queue", "assigned to me"] });
   if (can("leads.view_all", "leads.view_owned")) topLinks.push({ href: "/today", label: "Today", icon: Sun, keywords: ["lead score", "who to call", "next"] });
   // Public comments are the inbox's Comments tab (one inbox, batch 6).
   if (can("inbox.view", "inbox.reply")) topLinks.push({ href: "/inbox", label: "Inbox", icon: MessageSquare, keywords: ["social", "messages", "whatsapp", "facebook"] });
