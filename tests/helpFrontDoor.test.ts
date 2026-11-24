@@ -179,3 +179,11 @@ test("only a page showing one guide anchors its headings", () => {
   assert.match(code("src/app/(app)/help/[slug]/page.tsx"), /<ArticleBody body=\{article\.body\} anchors \/>/);
   assert.doesNotMatch(code("src/app/(print)/manual/page.tsx"), /anchors/);
 });
+
+test("a guide with no outline keeps no empty column for one", () => {
+  const page = code("src/app/(app)/help/[slug]/page.tsx");
+  assert.match(page, /const outline = headings\.length >= MIN_OUTLINE \? headings : null;/);
+  assert.match(page, /<div className=\{outline \? "grid gap-10 xl:grid-cols-\[minmax\(0,1fr\)_14rem\]" : undefined\}>/);
+  assert.match(page, /!outline && "mx-auto"/);
+  assert.match(page, /\{outline && \(\s*<aside/);
+});
