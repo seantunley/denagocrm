@@ -13,7 +13,7 @@ import { CardEmpty, CardRow, CentreCards, CentreHeader, CentreMain, Panel, StatR
 import WorkItemMenu from "@/components/WorkItemMenu";
 import { DoneList, SnoozedList, TeamTable } from "@/components/myWork/WorkViews";
 import { applyDispositions, DISMISSABLE_SOURCES } from "@/lib/myWork/dispositions";
-import { myDispositions, myDoneToday, teamWorkload } from "@/lib/myWork/extras";
+import { myDispositions, myDoneToday, suggestionFeedback, teamWorkload } from "@/lib/myWork/extras";
 
 export const metadata = { title: "My Work" };
 
@@ -32,13 +32,14 @@ export default async function MyWorkPage({ searchParams }: { searchParams: Promi
   const { area, view: viewParam } = await searchParams;
   const only = WORK_AREAS.find((a) => a === area) as WorkArea | undefined;
   const now = new Date();
-  const [all, atRisk, regional, dispositions, done, team] = await Promise.all([
+  const [all, atRisk, regional, dispositions, done, team, feedback] = await Promise.all([
     loadMyWork(user, now),
     myDealsAtRisk(user, now),
     getRegionalSettings(),
     myDispositions(user, now),
     myDoneToday(user, now),
     teamWorkload(user, now),
+    suggestionFeedback(user, now),
   ]);
   // My snoozes and dismissals (brief §6). They hide items from MY list only; the records are untouched.
   const { shown, snoozed } = applyDispositions(rankWork(all, now), dispositions, now);
@@ -65,7 +66,7 @@ export default async function MyWorkPage({ searchParams }: { searchParams: Promi
       <CentreHeader
         title="My Work"
         description="Everything waiting on you, in one place."
-        note="Ranked by how late, how urgent and when it is due"
+        note={`Ranked by how late, how urgent and when it is due · as of ${time.format(now)}`}
         actions={<Link href="/calendar" className="btn-primary btn-sm"><CalendarDays className="size-4" />Calendar</Link>}
       />
 
@@ -121,7 +122,7 @@ export default async function MyWorkPage({ searchParams }: { searchParams: Promi
           ) : view === "done" ? (
             <DoneList items={done} time={time} />
           ) : view === "team" && team ? (
-            <TeamTable rows={team} />
+            <TeamTable rows={team} feedback={feedback} />
           ) : rows.length === 0 ? (
             <EmptyState icon={ListTodo} title="Nothing waiting on you." description="No deal, task, delivery, job card, case or approval is on you right now." />
           ) : (
@@ -174,7 +175,14 @@ export default async function MyWorkPage({ searchParams }: { searchParams: Promi
                           </StatusPill>
                         </td>
                         <td><StatusPill tone={PRIORITY_TONE[priority]}>{priority}</StatusPill></td>
-                        <td className="max-w-80 text-xs text-muted-foreground">{item.reason}</td>
+                        <td className="max-w-80 text-xs text-muted-foreground">
+                          {item.reason}
+                          {item.evidence && (
+                            <Link href={item.evidence.href} className="mt-0.5 block text-primary hover:underline" title="The record this reason was read from">
+                              Evidence: {item.evidence.label}
+                            </Link>
+                          )}
+                        </td>
                         <td className="whitespace-nowrap text-right">
                           <span className="inline-flex items-center gap-1.5">
                             <Link href={item.href} className="btn-secondary btn-sm">{ACTION_LABEL[item.source.type]}<ArrowRight className="size-3.5" /></Link>

@@ -49,9 +49,10 @@ export function DoneList({ items, time }: { items: DoneItem[]; time: Intl.DateTi
   );
 }
 
-export function TeamTable({ rows }: { rows: TeamRow[] }) {
+export function TeamTable({ rows, feedback }: { rows: TeamRow[]; feedback?: { kind: string; dismissed: number; snoozed: number }[] | null }) {
   if (rows.length === 0) return <CardEmpty>No colleagues in this workspace.</CardEmpty>;
   return (
+    <div className="space-y-4">
     <ResponsiveEntityTable>
       <table className="table-base">
         <thead>
@@ -76,5 +77,26 @@ export function TeamTable({ rows }: { rows: TeamRow[] }) {
         </tbody>
       </table>
     </ResponsiveEntityTable>
+    {feedback && (
+      <div>
+        <h3 className="text-sm font-semibold">How suggestions land — last 30 days</h3>
+        <p className="mb-2 text-xs text-muted-foreground">How often people dismissed or snoozed each kind of item on their lists. Many dismissals of one kind means its rule is noisy.</p>
+        {feedback.length === 0 ? (
+          <CardEmpty>Nobody has dismissed or snoozed anything yet.</CardEmpty>
+        ) : (
+          <ResponsiveEntityTable>
+            <table className="table-base">
+              <thead><tr><th>Kind</th><th className="text-right">Dismissed</th><th className="text-right">Snoozed</th></tr></thead>
+              <tbody>
+                {feedback.map((row) => (
+                  <tr key={row.kind}><td>{row.kind}</td><td className="text-right tabular-nums">{row.dismissed}</td><td className="text-right tabular-nums">{row.snoozed}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          </ResponsiveEntityTable>
+        )}
+      </div>
+    )}
+    </div>
   );
 }

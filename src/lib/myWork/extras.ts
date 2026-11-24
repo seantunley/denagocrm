@@ -45,6 +45,43 @@ export async function myDoneToday(user: PermissionUser, now: Date): Promise<Done
   ].sort((a, b) => b.at.getTime() - a.at.getTime());
 }
 
+/**
+ * How suggestions land (brief §7: "measure … dismissal rates"): over the last 30 days, across the workspace, how
+ * often each kind of item was dismissed or snoozed. Owner only, counts only — nobody's customer is named. A high
+ * dismissal count for a kind says its rule is noisy.
+ *
+ * ponytail: counts the CHOICES people made, not every suggestion shown — a shown-log would be a write per page view.
+ * Add one (or sample) if resolution rates per rule are wanted.
+ */
+export async function suggestionFeedback(user: PermissionUser, now: Date) {
+  if (user.role !== "owner") return null;
+  const rows = await prisma.workDisposition.findMany({
+    where: { updatedAt: { gte: new Date(now.getTime() - 30 * DAY) } },
+    select: { itemKey: true, action: true, fingerprint: true },
+    take: 5000,
+  });
+  const out = new Map<string, { kind: string; dismissed: number; snoozed: number }>();
+  for (const row of rows) {
+    // Stuck-deal suggestions carry a "stuck:" fingerprint; the rest are named by their source.
+    const kind = row.fingerprint?.startsWith("stuck:") ? "Stuck deals" : SOURCE_NAME[row.itemKey.split(":")[0]] ?? "Other";
+    const t = out.get(kind) ?? { kind, dismissed: 0, snoozed: 0 };
+    if (row.action === "dismissed") t.dismissed += 1;
+    else t.snoozed += 1;
+    out.set(kind, t);
+  }
+  return [...out.values()].sort((a, b) => b.dismissed - a.dismissed || b.snoozed - a.snoozed);
+}
+
+const SOURCE_NAME: Record<string, string> = {
+  lead: "Deals worth contacting",
+  quote: "Quotes waiting to be signed",
+  activity: "Planned tasks",
+  delivery: "Deliveries",
+  jobcard: "Job cards",
+  case: "Cases",
+  approval: "Approvals",
+};
+
 export type TeamRow = { id: string; name: string; overdue: number; today: number; cases: number; jobs: number };
 
 /**

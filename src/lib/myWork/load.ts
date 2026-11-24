@@ -12,6 +12,7 @@ import {
   type PermissionUser,
 } from "@/lib/permissions";
 import { pendingApprovalsFor } from "@/lib/signing/access";
+import { myStuckDeals } from "@/lib/assistantStuckDeals";
 import { stageMeta } from "@/lib/workshop-constants";
 import type { WorkItem } from "./rules";
 
@@ -35,6 +36,8 @@ const PERSON = { select: { firstName: true, lastName: true, company: true, isCom
 export async function loadMyWork(user: PermissionUser, now: Date = new Date()): Promise<WorkItem[]> {
   const modules = await getEnabledModuleIds();
   const lists = await Promise.all([
+    // First, so a deal that is both stuck and worth contacting keeps the stuck reason and its evidence (one row per deal).
+    stuckSuggestions(user, now),
     salesDeals(user, now),
     myActivities(user, now),
     quotesAwaitingSignature(user),
@@ -44,6 +47,31 @@ export async function loadMyWork(user: PermissionUser, now: Date = new Date()): 
     myApprovals(user),
   ]);
   return lists.flat();
+}
+
+/** A deal this far past its stage's limit is urgent, not just late. */
+const STUCK_URGENT_DAYS = 7;
+
+/**
+ * My deals stuck past their stage's time limit (brief §7, Phase 6) — the assistant's own `stuck_deals` detection
+ * (assistantStuckDeals.myStuckDeals), as suggestions: what is holding each up, and the dated record it was read from.
+ */
+async function stuckSuggestions(user: PermissionUser, now: Date): Promise<WorkItem[]> {
+  const deals = await myStuckDeals(user, now);
+  return deals.map((deal) => ({
+    area: "Sales",
+    source: { type: "lead", id: deal.id },
+    kind: "suggestion",
+    title: deal.name,
+    reason: `${deal.over === 0 ? "At" : `${deal.over} days past`} ${deal.stage}'s time limit${deal.reason ? ` · ${deal.reason.why}` : ""}`,
+    // Held against the stage and the reason, not the day count: one more day stuck is not a new suggestion.
+    fingerprint: `stuck:${deal.stage}:${deal.reason?.why ?? ""}`,
+    evidence: deal.reason ? { label: [deal.reason.title ?? "the record", deal.reason.date].filter(Boolean).join(" · "), href: deal.reason.link } : undefined,
+    due: now,
+    allDay: true,
+    urgent: deal.over >= STUCK_URGENT_DAYS,
+    href: deal.link,
+  }));
 }
 
 /** Today's own ranking of my deals — the same list /today shows under "Mine". */
