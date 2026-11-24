@@ -106,6 +106,14 @@ const SCREENS: ReadonlyArray<readonly [pattern: string, slug: string]> = [
   ["/settings/backup-recovery", "admin-backup-recovery"],
   ["/settings/queues", "background-queues"],
   ["/settings/documents", "admin-documents-templates"],
+  // Screens whose guides came with the help review (articles/screens.ts).
+  ["/invoices", "invoices-overview"],
+  ["/birthdays", "birthdays"],
+  ["/data-quality", "data-quality"],
+  ["/settings/vendors", "suppliers"],
+  ["/settings/public-holidays", "public-holidays"],
+  ["/settings/plan", "plan-and-billing"],
+  ["/settings/clock-weather", "clock-and-weather"],
 ];
 
 /** The tabs of the main Settings page that have a guide of their own. */
@@ -126,14 +134,7 @@ const SETTINGS_TABS: Readonly<Record<string, string>> = {
 export const SCREENS_WITHOUT_HELP: Readonly<Record<string, string>> = {
   "/help": "the Help Centre itself",
   "/d": "a short link that redirects",
-  "/comments": "no guide yet",
-  "/birthdays": "no guide yet",
-  "/data-quality": "no guide yet",
-  "/invoices": "no guide of its own yet (the Deliveries guide covers payments)",
-  "/settings/plan": "no guide yet",
-  "/settings/public-holidays": "no guide yet",
-  "/settings/clock-weather": "no guide yet",
-  "/settings/vendors": "no guide yet",
+  "/comments": "redirects to the inbox's Comments tab",
   "/settings/modules": "platform owner only",
   "/settings/integration-overrides": "platform owner only",
 };

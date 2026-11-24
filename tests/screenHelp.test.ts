@@ -43,6 +43,10 @@ test("the right guide for the screen", () => {
   assert.equal(helpSlugForScreen("/settings", "?tab=nonsense"), "admin-settings-overview");
   // A record's sub-page falls back to the screen above it — never to the Home guide.
   assert.equal(helpSlugForScreen("/jobcards/abc/print"), "jobcards-workflow-stages");
+  // The screens whose guides came with the help review.
+  assert.equal(helpSlugForScreen("/invoices"), "invoices-overview");
+  assert.equal(helpSlugForScreen("/settings/vendors"), "suppliers");
+  assert.equal(helpSlugForScreen("/settings/clock-weather"), "clock-and-weather");
   assert.equal(helpSlugForScreen("/help/welcome"), null);
   assert.equal(helpSlugForScreen("/no-such-screen"), null);
 });
