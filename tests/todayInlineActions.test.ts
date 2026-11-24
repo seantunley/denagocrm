@@ -90,7 +90,9 @@ test("Today's loader drops handled rows; our touch is what WE sent or logged", (
 });
 
 test("the row writes only through the existing guarded actions, and only on a click", () => {
-  const row = src("src/components/TodayRow.tsx");
+  // The composer moved into its own component so the record drawer runs the same one (wave 2, W2-02).
+  assert.match(src("src/components/TodayRow.tsx"), /<ContactComposer/);
+  const row = src("src/components/records/ContactComposer.tsx");
   for (const action of ["addCommunication(form)", "sendWhatsAppMessage(undefined, form)", "sendEmailAction(undefined, form)", "scheduleFollowUp("]) {
     assert.ok(row.includes(action), `uses ${action}`);
   }
@@ -107,7 +109,7 @@ test("WhatsApp's 24-hour window reads only customers the viewer may open", () =>
 });
 
 test("a WhatsApp leaves Today only once it is confirmed sent — queued keeps the row and says so", () => {
-  const row = src("src/components/TodayRow.tsx");
+  const row = src("src/components/records/ContactComposer.tsx");
   const confirmed = /const WHATSAPP_SENT = "([^"]+)";/.exec(row)?.[1];
   assert.ok(confirmed, "the row names the confirmed answer");
   assert.ok(
@@ -115,5 +117,6 @@ test("a WhatsApp leaves Today only once it is confirmed sent — queued keeps th
     "…and it is the delivery code's own",
   );
   assert.match(row, /if \(channel === "whatsapp" && result\.ok !== WHATSAPP_SENT\) \{\s+setNotice\(/);
-  assert.doesNotMatch(row.slice(row.indexOf("setNotice(`"), row.indexOf("const did =")), /setDone\(true\)/);
+  // Queued is not done: neither Today's row nor the drawer is told it happened.
+  assert.doesNotMatch(row.slice(row.indexOf("setNotice(`"), row.indexOf("const did =")), /onDone\(\)/);
 });

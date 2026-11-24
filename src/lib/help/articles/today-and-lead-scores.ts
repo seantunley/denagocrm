@@ -14,10 +14,10 @@ export const todayAndLeadScoreArticles: HelpArticle[] = [
       { type: "h", text: "Reading a row" },
       { type: "list", items: [
         "**The number** is the lead score, out of 100. The higher it is, the more the deal deserves your next call.",
-        "**The name** opens the lead. The stage and the deal value are shown beside it.",
+        "**The name** opens the deal in a panel beside the list, so you don't lose your place (see below). Ctrl-click (Cmd-click on a Mac) opens the full lead page instead. The stage and the deal value are shown beside it.",
         "**The reasons** are listed underneath, strongest first — for example \"Wrote yesterday — waiting on our reply\" or \"Opened the quote today\".",
         "**The owner** of the deal is shown at the bottom of the row, or **Unassigned**.",
-        "**The button on the right** names the suggested next step, such as **Reply to their message** or **Call while the quote is fresh**. It opens the lead so you can do it.",
+        "**The button on the right** names the suggested next step, such as **Reply to their message** or **Call while the quote is fresh**. It opens a panel under the row to log the call or send the message, and book the next step.",
       ] },
       { type: "h", text: "Whose deals you see" },
       { type: "list", items: [
@@ -27,10 +27,21 @@ export const todayAndLeadScoreArticles: HelpArticle[] = [
       { type: "h", text: "How to work it" },
       { type: "steps", items: [
         "Start at the top row and read its first reason.",
-        "Press the button on the right to open the lead and take the step.",
+        "Press the button on the right and take the step there — or click the name to work the deal in the side panel.",
         "Record what you did — a call, a message or a new follow-up. The deal's score drops as its reasons are dealt with, so it moves down or leaves the list.",
         "Move on to the next row.",
       ] },
+      { type: "h", text: "Working a deal without leaving the list" },
+      { type: "p", text: "Click a deal's name and it opens in a panel on the right; the list stays where it was underneath. The panel shows:" },
+      { type: "list", items: [
+        "**Why now** — the same reasons as the row, and the suggested step.",
+        "**Up next** — the deal's planned activities, soonest first, with overdue ones marked. **Mark done** completes one, the same as on the Activities page: something dated for a later day can't be marked done early. **Book the next step** adds a follow-up.",
+        "**Contact** — log a call, or send a WhatsApp or email, and book the next step, exactly like the button on the row. Nothing is sent until you press **Send**.",
+        "**Deal** — move the stage or change the owner, if your role allows it. Mark won or lost, and stages that start a workflow (such as a test drive), are on the full record.",
+        "**Recently done** — the last few completed activities.",
+      ] },
+      { type: "p", text: "Once something is done, the panel says so and offers **Next deal**. **Previous** and **Next** at the top step through the list in the order it was shown; **Open full record** goes to the lead page. Press **Esc**, the close button or your browser's Back button to close the panel. The panel's address can be shared: a colleague who opens it sees the same deal, if they're allowed to." },
+      { type: "callout", tone: "info", text: "The panel only offers what your role allows, and every change is checked again when you make it. On a phone it fills the screen." },
       { type: "callout", tone: "info", text: "Only deals with a reason to contact appear. A deal that is open but has nothing pressing is left off. If nothing qualifies you see **Nothing to chase right now.**" },
       { type: "list", items: [
         "The page shows the top 50 deals — a day's worth of calls, not the whole pipeline.",
