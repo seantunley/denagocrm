@@ -82,7 +82,13 @@ test("the loader reads the quote list's own scope and the canonical money rules"
   // RBAC + search + current revisions only (supersededAt: null) — the quotes list's own filter.
   assert.match(loader, /const \{ where: scope \} = await quoteListFilter\(user, \{ q \}\)/);
   // Every in-play view, count and card is a cut of ONE read, under the quote list's scope.
-  assert.match(loader, /const inPlay = await readRows\(\{ AND: \[scope, IN_PLAY\] \}, financeByQuote\)/);
+  assert.match(loader, /const inPlay = await readRows\(\{ AND: \[scope, IN_PLAY\] \}, financeOn\)/);
+  // Finance and payments are read only for the quotes this person may see, in the acting workspace —
+  // never a platform-wide read (review of #1228: enforcement may be off).
+  assert.match(loader, /prisma\.dealFinance\.findMany\(\{\s*where: \{ tenantId, quoteId: \{ in: ids \} \}/);
+  assert.match(loader, /prisma\.quotePayment\.findMany\(\{ where: \{ tenantId, quoteId: \{ in: ids \} \}/);
+  assert.match(loader, /const tenantId = ids\.length \? await actingTenantId\(\) : ""/);
+  assert.equal(loader.match(/dealFinance\.findMany/g)?.length, 1, "no other finance read");
   assert.match(loader, /const IN_PLAY: Prisma\.QuoteWhereInput = \{ status: \{ in: \["sent", "accepted"\] \}, deliveredAt: null \}/);
   assert.match(loader, /prisma\.quote\.count\(\{ where: scope \}\)/);
   assert.match(loader, /Math\.round\(payableTotalCents\(quote\)\)/);

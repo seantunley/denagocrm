@@ -28,6 +28,9 @@ import { formatTotals, totalsByCurrency } from "@/lib/currencyRules";
 import { midSentence } from "@/lib/recordLabels";
 import { getRecordLabels } from "@/lib/recordLabelsServer";
 import { getRegionalSettings } from "@/lib/settings";
+import { redirect } from "next/navigation";
+import { leadsViewPreference } from "@/lib/leadsViewPreference";
+import { switchLeadsView } from "@/app/actions/leadsView";
 
 type PlannedActivityRow = {
   leadId: string;
@@ -56,6 +59,8 @@ export default async function LeadsPage({
   // until they signed out and back in. The page guard is the authoritative
   // boundary; the edge table is a pre-filter in front of it.
   const currentUser = await requireAnyPermission("leads.view_all", "leads.view_owned");
+  // Someone who chose the list gets the list; the board stays everyone else's default.
+  if ((await leadsViewPreference(currentUser.id)) === "list") redirect("/leads/list");
   const [
     accessibleLeadIds,
     accessibleContactIds,
@@ -426,12 +431,12 @@ export default async function LeadsPage({
             </a>
           </Button>
         )}
-        <Button asChild variant="outline" size="sm">
-          <Link href="/leads/list">
+        <form action={switchLeadsView.bind(null, "list")}>
+          <Button type="submit" variant="outline" size="sm" title="Show the deals as a worklist. The list opens for you from now on.">
             <List className="size-4" />
             List view
-          </Link>
-        </Button>
+          </Button>
+        </form>
         <ModalTrigger
           label={
             <>

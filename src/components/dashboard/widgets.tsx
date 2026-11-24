@@ -71,7 +71,8 @@ export function StaggerItem({ children, className }: { children: React.ReactNode
 export type SparkStat = {
   label: string;
   value: number;
-  display?: "int" | "zar";
+  /** "pct": the value is already a whole percentage (a ratio the context line names). */
+  display?: "int" | "zar" | "pct";
   currencyMark?: string;
   delta: number | null; // % vs same days last month
   href: string;
@@ -92,7 +93,12 @@ const moneyCompact = (mark = "R") => (n: number) =>
 export function StatSparkCard({ stat, icon }: { stat: SparkStat; icon: React.ReactNode }) {
   const up = (stat.delta ?? 0) >= 0;
   const data = stat.spark.map((v, i) => ({ i, v }));
-  const fmt = stat.display === "zar" ? moneyCompact(stat.currencyMark) : undefined;
+  const fmt =
+    stat.display === "zar"
+      ? moneyCompact(stat.currencyMark)
+      : stat.display === "pct"
+        ? (n: number) => `${Math.round(n)}%`
+        : undefined;
   const reduced = useReducedMotion();
   const cardRef = useRef<HTMLAnchorElement>(null);
   // Subtle 3D tilt toward the cursor — pure transform, zero re-renders

@@ -38,6 +38,7 @@ import {
   Hammer,
   Sun,
   Cake,
+  ListTodo,
   Briefcase,
   type LucideIcon,
 } from "lucide-react";
@@ -81,6 +82,8 @@ export function buildNav(
    * word, and tests/sidebarRegroup.test.ts holds the before/after link sets per role.
    */
   const topLinks: NavLink[] = [{ href: "/", label: "Home", icon: House, keywords: ["start", "do next", "overview"] }];
+  // Everyone's own list (My Work module); each source inside it checks its own permission.
+  topLinks.push({ href: "/work", label: "My Work", icon: ListTodo, keywords: ["my tasks", "to do", "queue", "assigned to me"] });
   if (can("leads.view_all", "leads.view_owned")) topLinks.push({ href: "/today", label: "Today", icon: Sun, keywords: ["lead score", "who to call", "next"] });
   // Public comments are the inbox's Comments tab (one inbox, batch 6).
   if (can("inbox.view", "inbox.reply")) topLinks.push({ href: "/inbox", label: "Inbox", icon: MessageSquare, keywords: ["social", "messages", "whatsapp", "facebook"] });
@@ -154,6 +157,8 @@ export function buildNav(
   // moving them off the home screen did not move them out of sight.
   insightLinks.push({ href: "/d/home", label: "Dashboards", icon: LayoutDashboard, keywords: ["dashboard", "charts", "cards", "widgets"] });
   if (can("reports.view", "reports.view_all", "reports.view_team")) {
+    // The management template (lib/dashboard/templates.ts) — offered on the same permissions.
+    insightLinks.push({ href: "/d/command-centre", label: "Command Centre", icon: LayoutDashboard, keywords: ["command centre", "command center", "overview", "kpi", "management"] });
     insightLinks.push({ href: "/reports", label: "Reports", icon: ChartColumnIncreasing });
     insightLinks.push({ href: "/targets", label: "Targets", icon: Target });
   }

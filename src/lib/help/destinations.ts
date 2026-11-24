@@ -21,6 +21,7 @@ const EXACT: Record<string, HelpDestination> = {
   "activities-queue": { href: "/activities", label: "Activities" },
   "customer-health": { href: "/health", label: "Customer health" },
   "today-who-to-contact-next": { href: "/today", label: "Today" },
+  "my-work": { href: "/work", label: "My Work" },
   "deals-centre": { href: "/deals", label: "Deals" },
   "email-signatures": { href: "/email-signatures", label: "Email signatures" },
   "helpdesk-settings": { href: "/settings/helpdesk", label: "Help desk settings" },

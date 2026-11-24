@@ -40,6 +40,7 @@ const SLUG_MODULE: Record<string, ModuleId> = {
   "warranty-claims-recalls": "warranty", // /warranty — its own module since 2026-11-21
   "invoices-overview": "automotive", // /invoices, with /deliveries
   suppliers: "suppliers", // Settings → Suppliers
+  "my-work": "work", // /work
 };
 
 // Slug-prefix overrides: whole article families that split out of a mixed

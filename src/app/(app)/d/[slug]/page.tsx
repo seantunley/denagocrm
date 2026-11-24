@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import DashboardScreen from "@/components/dashboard/DashboardScreen";
-import { DEFAULT_DASHBOARD_SLUG, dashboardBySlug, defaultDashboard } from "@/lib/dashboard/store";
+import { DEFAULT_DASHBOARD_SLUG, dashboardBySlug, defaultDashboard, offeredTemplateDashboard } from "@/lib/dashboard/store";
 
 /**
  * A named dashboard.
@@ -15,6 +15,9 @@ import { DEFAULT_DASHBOARD_SLUG, dashboardBySlug, defaultDashboard } from "@/lib
  * has never customised it has no stored row, and gets the generated default —
  * exactly what "/" showed them before the home screen became the "do next"
  * page. Nothing anybody built is lost; it has an address of its own now.
+ *
+ * The role templates (Command Centre, Team, Sales, Operations — see
+ * lib/dashboard/templates.ts) resolve the same way: generated, until edited.
  */
 export default async function NamedDashboardPage({
   params,
@@ -25,7 +28,10 @@ export default async function NamedDashboardPage({
 }) {
   const { slug } = await params;
   const { tab } = await searchParams;
-  const dashboard = (await dashboardBySlug(slug)) ?? (slug === DEFAULT_DASHBOARD_SLUG ? defaultDashboard() : null);
+  const dashboard =
+    (await dashboardBySlug(slug)) ??
+    (slug === DEFAULT_DASHBOARD_SLUG ? defaultDashboard() : null) ??
+    (await offeredTemplateDashboard(slug));
   if (!dashboard) notFound();
   return <DashboardScreen dashboard={dashboard} tab={tab} />;
 }
