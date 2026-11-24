@@ -679,7 +679,6 @@ export function showcaseQuoteTemplate(): DocumentModel {
     "Quote valid until {{quote.validUntil}}.",
     "50% deposit to secure build slot; balance on delivery.",
     "Prices are recommended retail, including {{quote.vatRate}} VAT, and subject to change without notice.",
-    "Denago EVs are Low-Speed Vehicles for private-property use and are not road registered.",
     "E & O.E.",
   ]);
   if (quoteTerms.type === "terms") quoteTerms.look = "showcase";

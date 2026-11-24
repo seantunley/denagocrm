@@ -80,7 +80,7 @@ export default async function PlatformTenantsPage() {
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
                 <label className="label">Tenant name</label>
-                <input name="name" className="input" required autoFocus placeholder="e.g. Denago Johannesburg" />
+                <input name="name" className="input" required autoFocus placeholder="e.g. Acme Motors Johannesburg" />
               </div>
               <div>
                 <label className="label">Slug</label>
