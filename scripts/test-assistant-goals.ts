@@ -177,7 +177,7 @@ async function main() {
   {
     await setSetting(proactivePersonKey(rep.id), "off");
     const off = await scoped(() => startDeliveryGoal(rep, `Q-${NUM.anna}`));
-    check("off until the person switches proactive DAX on for themselves", !off.ok && /switch proactive DAX on/.test(off.error), JSON.stringify(off));
+    check("off until the person switches proactive DAX on for themselves", !off.ok && /switch those on for yourself/.test(off.error), JSON.stringify(off));
     await setSetting(proactivePersonKey(rep.id), "on");
     const draft = await scoped(() => startDeliveryGoal(rep, `Q-${NUM.draft}`));
     check("a quote not accepted yet is refused", !draft.ok && /isn't accepted yet/.test(draft.error), JSON.stringify(draft));

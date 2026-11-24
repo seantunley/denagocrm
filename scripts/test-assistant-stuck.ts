@@ -260,7 +260,7 @@ async function main() {
     const mine = await catchUp(A, repOwn);
     const whats = mine.items.map((i) => i.what);
     const has = (re: RegExp) => mine.items.find((i) => re.test(i.what));
-    check("since their last question (WhatsApp) — not the scheduled run after it", mine.since === stamp(lastAsked) && mine.sinceBasis === "their last question to DAX", `${mine.since} / ${mine.sinceBasis}`);
+    check("since their last question (WhatsApp) — not the scheduled run after it", mine.since === stamp(lastAsked) && mine.sinceBasis === "their last question to the assistant", `${mine.since} / ${mine.sinceBasis}`);
     const annaNews = has(new RegExp(`^Anna Stuck${SFX} wrote a message \\(whatsapp\\)$`));
     check("Anna's new message, its words, and that nobody has answered", annaNews?.latest === `Is Friday possible for delivery? ${SFX}` && annaNews?.replied === "not yet" && annaNews?.link === `/leads/${annaLead.id}`, JSON.stringify(annaNews));
     check("Cara opened her quote again — twice; the approver's visit is not hers", !!has(new RegExp(`^Cara Stuck${SFX} opened Q-${qc.number} again \\(2 times\\)$`)), JSON.stringify(whats));
