@@ -175,7 +175,8 @@ test("the server pages do nothing but resolve the brand and render", () => {
   // wrappers exist to call one total function and pass a prop.
   for (const file of ["src/app/login/page.tsx", "src/app/portal/login/page.tsx"]) {
     const code = shipped(file);
-    assert.match(code, /await loginBrand\(\)/, `${file} must resolve the brand`);
+    // The staff page passes the workspace its sign-in link names (?w=); still one total call.
+    assert.match(code, /await loginBrand\((await signInWorkspaceFrom\(searchParams\))?\)/, `${file} must resolve the brand`);
     assert.doesNotMatch(code, /prisma|basePrisma/, `${file} must not query anything itself`);
     assert.doesNotMatch(code, /throw |redirect\(|notFound\(/, `${file} must have no failure path`);
   }

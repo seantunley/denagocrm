@@ -13,6 +13,7 @@ import { SettingsWorkspace } from "@/components/settings-workspace";
 import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
 import { brandForTenant, brandLogoUrl } from "@/lib/tenantBrand";
 import { parseLoginLook } from "@/lib/loginLook";
+import { signInLinkFor } from "@/lib/signInWorkspace";
 
 export const dynamic = "force-dynamic";
 
@@ -37,6 +38,8 @@ export default async function CompanyProfilePage() {
     basePrisma.tenant.findUnique({ where: { id: tenantId }, select: { loginJson: true } }),
   ]);
   const logo = brandLogoUrl(brand) ?? (profile.logoUrl || null);
+  const slug = (await basePrisma.tenant.findUnique({ where: { id: tenantId }, select: { slug: true } }))?.slug;
+  const signInLink = slug ? await signInLinkFor({ id: tenantId, slug }) : null;
 
   return (
     <SettingsWorkspace
@@ -95,6 +98,12 @@ export default async function CompanyProfilePage() {
             <p className="mt-1 text-xs text-muted-foreground">
               The page your team signs in on. Change any of the wording, use your own background photo, and choose what goes in the card&apos;s place. Your logo, name and colour are used automatically.
             </p>
+            {signInLink && (
+              <p className="mt-2 text-xs">
+                Your team&apos;s sign-in link:{" "}
+                <a href={signInLink} className="font-mono text-primary hover:underline" target="_blank" rel="noreferrer">{signInLink}</a>
+              </p>
+            )}
           </div>
           <LoginLookEditor
             action={saveMyLoginLookAction}
