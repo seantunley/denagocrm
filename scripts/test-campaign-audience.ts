@@ -7,8 +7,8 @@
  *  - saving a draft keeps only a live saved audience of the SAME workspace (another workspace's or an archived one
  *    is dropped), and the label becomes the audience's name;
  *  - the pre-launch check fails without one;
- *  - queueing refuses no audience, an archived one and another workspace's, and with a valid one freezes exactly
- *    the matching, opted-in contacts of this workspace.
+ *  - queueing refuses no audience and an archived one (another workspace's can't be attached: the database's
+ *    composite key refuses it), and with a valid one freezes exactly the matching, opted-in contacts of this workspace.
  *
  *   npm run test:campaign-audience      (DATABASE_URL = a disposable, migrated, seeded database)
  */
@@ -82,10 +82,11 @@ async function refuses(fn: () => Promise<unknown>, message: RegExp, label: strin
       await refuses(queue, /Choose a saved audience/, "no audience: refused, not sent to everyone");
       await force(archived);
       await refuses(queue, /no longer exists/, "an archived audience: refused");
-      await force(foreign);
-      await refuses(queue, /no longer exists/, "another workspace's audience: refused");
+      // Another workspace's audience can't even be attached: the composite key Campaign(tenantId, segmentId) →
+      // Segment(tenantId, id) refuses it, so no campaign can ever point there.
+      await refuses(() => force(foreign), /Campaign_tenantId_segmentId_fkey/, "the database refuses another workspace's audience");
       assert.equal(await basePrisma.campaignRecipient.count({ where: { campaignId: id } }), 0, "nothing was queued by any refusal");
-      ok("queueing refuses no audience, an archived one and another workspace's — and queues nobody");
+      ok("queueing refuses no audience and an archived one; another workspace's can't be attached at all — nobody queued");
 
       await force(live);
       const result = await queue();
