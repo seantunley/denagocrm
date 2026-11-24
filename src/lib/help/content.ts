@@ -17,6 +17,7 @@ import { assistantArticles } from "./articles/assistant";
 import { chatbotArticles } from "./articles/chatbot";
 import { todayAndLeadScoreArticles } from "./articles/today-and-lead-scores";
 import { dealWorkspaceArticles } from "./articles/deal-workspace";
+import { dealsCentreArticles } from "./articles/deals-centre";
 import { customerEmailArticles } from "./articles/customer-emails";
 import { administrationArticles } from "./articles/administration";
 import crm from "./data/crm.json";
@@ -122,6 +123,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
   ...chatbotArticles,
   ...todayAndLeadScoreArticles,
   ...dealWorkspaceArticles,
+  ...dealsCentreArticles,
   ...customerEmailArticles,
   ...administrationArticles,
   ...companyProfileArticles,
