@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
 import { Toaster } from "@/components/ui/sonner";
+import { PLATFORM_NAME } from "@/lib/platformIdentity";
 
 export const metadata: Metadata = {
-  title: "Platform Console — Denago",
+  title: `Platform Console — ${PLATFORM_NAME}`,
 };
 
 /**

@@ -151,7 +151,7 @@ function SidebarInner({ user, inboxWaiting = 0, casesWaiting = 0, activitiesOver
         <div className="flex min-w-0 flex-1 items-center">
           <BrandLogo
             logoUrl={brand?.logoUrl ?? null}
-            alt={brand?.displayName ?? "Denago Cape Town"}
+            alt={brand?.displayName ?? "Logo"}
             className="h-8 w-auto max-w-full object-contain"
           />
         </div>
@@ -307,7 +307,7 @@ export default function AppShell({
         <div className="flex min-w-0 shrink justify-center overflow-hidden">
           <BrandLogo
             logoUrl={brand?.logoUrl ?? null}
-            alt={brand?.displayName ?? "Denago Cape Town"}
+            alt={brand?.displayName ?? "Logo"}
             className="h-6 w-auto max-w-full object-contain"
             wordmarkClassName="text-xs"
           />

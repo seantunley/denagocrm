@@ -31,12 +31,8 @@ const COMPANY_LITERALS =
  */
 const ALLOWED: Record<string, string> = {
   // Staff-only screens: example placeholders and the platform's own webhook URLs.
-  "src/app/(app)/settings/helpdesk/page.tsx": "staff — example placeholder",
-  "src/app/(app)/settings/page.tsx": "staff — SMTP/IMAP example placeholders and the platform's webhook URLs",
   "src/components/settings/WorkspaceIntegrationRows.tsx": "staff (platform owner only) — the platform's webhook URLs on Settings → Integrations",
-  "src/components/AppShell.tsx": "staff — logo alt fallback, pinned by appShellBranding.test.ts",
   "src/components/KanbanBoard.tsx": "staff — 16px lead-SOURCE glyph on the pipeline board (see appShellBranding.test.ts)",
-  "src/components/quotes/QuoteEditorDialog.tsx": "staff — in-editor preview header (the printed quote reads the profile)",
   "src/lib/help/data/admin.json": "staff — help centre",
   "src/lib/help/data/channels.json": "staff — help centre (platform webhook URLs)",
   "src/lib/help/data/marketing.json": "staff — help centre",
