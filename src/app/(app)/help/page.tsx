@@ -67,10 +67,8 @@ export default async function HelpHomePage() {
   return (
     <div className="space-y-10">
       <header className="relative overflow-hidden rounded-3xl border border-border bg-sidebar px-5 py-12 text-center depth-card sm:px-8 sm:py-16">
-        {/* Decoration: three still planes behind the search, at three heights. */}
-        <div aria-hidden className="pointer-events-none absolute -left-16 -top-14 hidden h-56 w-72 -rotate-[9deg] rounded-[40px] bg-blue-400/[0.13] depth-key sm:block" />
-        <div aria-hidden className="pointer-events-none absolute -right-14 top-16 hidden h-60 w-72 rotate-[8deg] rounded-[44px] bg-primary/[0.16] depth-key sm:block" />
-        <div aria-hidden className="pointer-events-none absolute right-56 -top-12 hidden size-28 rotate-[16deg] rounded-[30px] bg-emerald-400/[0.14] depth-key lg:block" />
+        {/* Decoration: one soft glow behind the search. (Three coloured planes stood here and read as stray blocks.) */}
+        <div aria-hidden className="pointer-events-none absolute inset-x-0 -top-24 mx-auto h-64 max-w-2xl rounded-full bg-primary/[0.09] blur-3xl" />
         <div className="relative flex flex-col items-center gap-4">
           <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-primary">Help centre</p>
           {/* `!`: the workspace sets every page h1 to one compact size; this hero is the one heading meant to be large. */}

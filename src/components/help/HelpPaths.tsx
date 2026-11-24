@@ -53,7 +53,7 @@ export default function HelpPaths({ paths, storageKey, beside }: { paths: HelpPa
               <p className="mt-1.5 text-xs text-muted-foreground">{mainProgress.done} of {mainProgress.total} read</p>
             </div>
             {mainNext && (
-              <Link href={`/help/${mainNext.slug}`} className="btn-primary mt-auto max-w-full self-start">
+              <Link href={`/help/${mainNext.slug}`} className="btn-primary mt-2 max-w-full self-start">
                 <span className="truncate">{mainProgress.done === 0 ? "Start" : "Continue"}: {mainNext.title}</span>
                 <ArrowRight className="size-4 shrink-0" aria-hidden />
               </Link>

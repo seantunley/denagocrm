@@ -2,6 +2,7 @@ import { Fragment, type ReactNode } from "react";
 import { Lightbulb, TriangleAlert, Info } from "lucide-react";
 import type { HelpBlock } from "@/lib/help/types";
 import { cn } from "@/lib/utils";
+import { headingAnchor } from "@/lib/help/outline";
 
 function decodeEntities(text: string): string {
   return text
@@ -59,14 +60,23 @@ const THEME = {
 const ICON = { tip: Lightbulb, warning: TriangleAlert, info: Info } as const;
 const CALLOUT_ICON_CLS = { tip: "text-emerald-500", warning: "text-amber-500", info: "text-sky-500" } as const;
 
-export default function ArticleBody({ body, variant = "app" }: { body: HelpBlock[]; variant?: Variant }) {
+export default function ArticleBody({
+  body,
+  variant = "app",
+  anchors = false,
+}: {
+  body: HelpBlock[];
+  variant?: Variant;
+  /** Give each heading an anchor for an "On this page" outline. Only where ONE guide is on the page — the printed manual has them all. */
+  anchors?: boolean;
+}) {
   const t = THEME[variant];
   return (
     <div className="space-y-4">
       {body.map((block, i) => {
         switch (block.type) {
           case "h":
-            return <h3 key={i} className={cn("pt-2 text-base font-semibold", t.h)}>{inline(block.text, t.strong)}</h3>;
+            return <h3 key={i} id={anchors ? headingAnchor(i) : undefined} className={cn("scroll-mt-24 pt-2 text-base font-semibold", t.h)}>{inline(block.text, t.strong)}</h3>;
           case "p":
             return <p key={i} className={cn("text-[15px] leading-relaxed", t.p)}>{inline(block.text, t.strong)}</p>;
           case "steps":

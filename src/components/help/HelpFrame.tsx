@@ -12,9 +12,9 @@ import { usePathname } from "next/navigation";
  */
 export default function HelpFrame({ nav, children }: { nav: ReactNode; children: ReactNode }) {
   const pathname = usePathname();
-  if (pathname === "/help") return <div className="mx-auto w-full max-w-6xl">{children}</div>;
+  if (pathname === "/help") return <div className="mx-auto w-full max-w-7xl">{children}</div>;
   return (
-    <div className="grid gap-8 lg:grid-cols-[288px_minmax(0,1fr)]">
+    <div className="mx-auto grid w-full max-w-7xl gap-8 lg:grid-cols-[15rem_minmax(0,1fr)]">
       <aside className="hidden lg:sticky lg:top-6 lg:block lg:max-h-[calc(100dvh-3rem)] lg:self-start lg:overflow-y-auto lg:pr-1">{nav}</aside>
       <div className="min-w-0">{children}</div>
     </div>

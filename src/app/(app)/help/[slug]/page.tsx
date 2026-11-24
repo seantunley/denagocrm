@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ChevronLeft, ChevronRight, ArrowLeft, ArrowUpRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, ArrowLeft, ArrowUpRight, Clock } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import ArticleBody from "@/components/help/ArticleBody";
 import { getArticle, articlesInCategory, HELP_ARTICLES } from "@/lib/help/content";
@@ -13,6 +13,8 @@ import { readKey } from "@/lib/help/readStore";
 import { requireUser } from "@/lib/auth";
 import { HelpAreaTag } from "@/components/help/HelpAreaIcon";
 import MarkHelpRead from "@/components/help/MarkHelpRead";
+import HelpOutline from "@/components/help/HelpOutline";
+import { MIN_OUTLINE, outlineOf, readingMinutes } from "@/lib/help/outline";
 
 export function generateStaticParams() {
   return HELP_ARTICLES.map((a) => ({ slug: a.slug }));
@@ -47,15 +49,20 @@ export default async function HelpArticlePage({ params }: { params: Promise<{ sl
   const user = await requireUser();
   // "Take me there": the screen this guide is about, when it is about one (lib/help/destinations.ts).
   const destination = destinationFor(article.slug);
+  const outline = outlineOf(article.body);
+  const minutes = readingMinutes(article.body);
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+    // The guide, with its outline beside it on a wide screen (the canvas board "Help centre — article").
+    <div className="grid gap-10 xl:grid-cols-[minmax(0,1fr)_14rem]">
+    <div className="min-w-0 max-w-3xl space-y-6">
+      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
         <Link href="/help" className="inline-flex items-center gap-1 hover:text-foreground lg:hidden">
           <ArrowLeft className="size-3.5" /> Help
         </Link>
 <HelpAreaTag area={article.category} label={CATEGORY_LABEL[article.category] ?? article.category} />
-        <span className={`ml-auto rounded-full px-2 py-0.5 text-[11px] font-medium ${aud.cls}`}>{aud.label}</span>
+        <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${aud.cls}`}>{aud.label}</span>
+        <span className="inline-flex items-center gap-1"><Clock className="size-3.5" aria-hidden /> {minutes} min read</span>
       </div>
 
       <PageHeader title={article.title} description={article.summary} />
@@ -76,7 +83,7 @@ export default async function HelpArticlePage({ params }: { params: Promise<{ sl
       )}
 
       <article className="rounded-2xl border border-border bg-card p-6 sm:p-8">
-        <ArticleBody body={article.body} />
+        <ArticleBody body={article.body} anchors />
       </article>
 
       <div className="grid gap-3 sm:grid-cols-2">
@@ -99,6 +106,12 @@ export default async function HelpArticlePage({ params }: { params: Promise<{ sl
           </Link>
         )}
       </div>
+    </div>
+      {outline.length >= MIN_OUTLINE && (
+        <aside className="hidden xl:block">
+          <div className="sticky top-6"><HelpOutline items={outline} /></div>
+        </aside>
+      )}
     </div>
   );
 }
