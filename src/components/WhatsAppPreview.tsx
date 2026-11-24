@@ -163,7 +163,7 @@ function ListChoice({
           >
             <div className="flex items-center justify-between px-4 py-3">
               <p className="text-[15px] font-medium" style={{ color: INK.text }}>Choose</p>
-              <button type="button" onClick={() => setOpen(false)} style={{ color: INK.meta }}>
+              <button type="button" onClick={() => setOpen(false)} style={{ color: INK.meta }} title="Close the list" aria-label="Close the list">
                 <ChevronDown className="size-5" />
               </button>
             </div>

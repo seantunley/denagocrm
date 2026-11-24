@@ -55,6 +55,7 @@ export default function TriageBoard({ run }: { run: Run | null }) {
             type="button"
             className="btn-primary btn-sm"
             disabled={pending || chosen.length === 0}
+          title={!pending && chosen.length === 0 ? "Tick at least one deal first" : undefined}
             onClick={() => start(async () => { say(await runTriageAction(run.id, chosen)); setTicked(new Set()); })}
           >
             {pending ? "Working…" : chosen.length ? `Do the ${chosen.length} ticked` : "Do the ticked"}

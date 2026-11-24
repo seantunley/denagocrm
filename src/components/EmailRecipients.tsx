@@ -19,7 +19,7 @@ export default function EmailRecipients({ label, name, value, onChange, required
     <div className="flex min-h-10 flex-wrap items-center gap-1.5 rounded-lg border border-border bg-background/40 px-2 py-1.5 focus-within:border-primary">
       {chips.map((email, index) => <span key={`${email}-${index}`} className={`inline-flex max-w-full items-center gap-1 rounded-md px-2 py-1 text-xs ${isReplyToAddress(email) ? "bg-muted text-foreground" : "bg-red-500/10 text-red-300"}`}>
         <span className="break-all">{email}</span>
-        <button type="button" disabled={disabled} aria-label={`Remove ${email} from ${label}`} onClick={() => onChange([...chips.filter((_, i) => i !== index), input].join(", "))} className="rounded p-0.5 focus-visible:ring-2 focus-visible:ring-primary"><X className="size-3" /></button>
+        <button type="button" disabled={disabled} aria-label={`Remove ${email} from ${label}`} title={`Remove ${email}`} onClick={() => onChange([...chips.filter((_, i) => i !== index), input].join(", "))} className="rounded p-0.5 focus-visible:ring-2 focus-visible:ring-primary"><X className="size-3" /></button>
       </span>)}
       <input id={id} type="text" inputMode="email" autoComplete="off" spellCheck={false} value={input} required={required && chips.length === 0} disabled={disabled} aria-invalid={!parsed.ok || undefined} aria-describedby={!parsed.ok ? `${id}-error` : undefined}
         onChange={(e) => onChange([...chips, e.target.value].join(", "))} onBlur={commit}

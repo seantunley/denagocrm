@@ -26,7 +26,7 @@ export default function ResearchButton({
       <form action={formAction} className="inline">
         {leadId && <input type="hidden" name="leadId" value={leadId} />}
         {contactId && <input type="hidden" name="contactId" value={contactId} />}
-        <button className="btn-secondary btn-sm gap-1.5" disabled={pending} title="AI web research: company + person synopsis, including LinkedIn">
+        <button className="btn-secondary btn-sm gap-1.5" disabled={pending} title="Look up this person and their company on the web, including LinkedIn">
           {pending ? <LoaderCircle className="size-3.5 animate-spin" /> : <Search className="size-3.5" />}
           {pending ? "Researching…" : "Research"}
         </button>

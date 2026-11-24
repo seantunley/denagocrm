@@ -140,6 +140,7 @@ export default function TwoFactorPanel({ enabled }: { enabled: boolean }) {
             <button
               type="button"
               disabled={starting || replaceCode.length !== 6}
+              title={!starting && replaceCode.length !== 6 ? "Enter the 6-digit code from your app first" : undefined}
               className="btn-secondary"
               onClick={async () => {
                 setStarting(true);

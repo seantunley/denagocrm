@@ -227,7 +227,7 @@ export default async function BotBuilderPage() {
                 )}
                 {!f.active && !keep && (
                   <ConfirmActionDialog
-                    trigger={<button type="button" className="btn-secondary btn-sm text-red-400" aria-label={`Delete ${f.name}`}><Trash2 className="size-3.5" /></button>}
+                    trigger={<button type="button" className="btn-secondary btn-sm text-red-400" aria-label={`Delete ${f.name}`} title={`Delete ${f.name}`}><Trash2 className="size-3.5" /></button>}
                     title={`Delete “${f.name}”?`}
                     description="The flow and its draft are deleted for good. A flow that has ever been published is kept as history and can't be deleted."
                     confirmLabel="Delete flow"

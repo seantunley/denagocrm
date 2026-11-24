@@ -479,7 +479,7 @@ function FilterRow({
       <button
         type="button"
         onClick={onRemove}
-        aria-label="Remove this filter"
+        aria-label="Remove this filter" title="Remove this filter"
         className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
       >
         <X className="size-3.5" />

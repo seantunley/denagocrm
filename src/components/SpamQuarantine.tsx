@@ -77,13 +77,13 @@ export default function SpamQuarantine({ rows, canReview }: { rows: QuarantineRo
                 onChange={(e) => setPicked(e.target.checked ? new Set(shown.map((r) => r.id)) : new Set())} />
               Select this page
             </label>
-            {shown.some(restorable) && <button type="button" className="btn-secondary btn-sm" disabled={pending || restoreIds.length === 0} onClick={() => run(() => restoreSpam(restoreIds))}>
+            {shown.some(restorable) && <button type="button" className="btn-secondary btn-sm" disabled={pending || restoreIds.length === 0} title={!pending && restoreIds.length === 0 ? "Tick the messages to restore first" : undefined} onClick={() => run(() => restoreSpam(restoreIds))}>
               Not spam — restore{restoreIds.length ? ` (${restoreIds.length})` : ""}
             </button>}
-            {shown.some((r) => r.observed) && <button type="button" className="btn-secondary btn-sm" disabled={pending || observedIds.length === 0} onClick={() => run(() => correctObservedSpam(observedIds))}>
+            {shown.some((r) => r.observed) && <button type="button" className="btn-secondary btn-sm" disabled={pending || observedIds.length === 0} title={!pending && observedIds.length === 0 ? "Tick the messages to correct first" : undefined} onClick={() => run(() => correctObservedSpam(observedIds))}>
               Not spam{observedIds.length ? ` (${observedIds.length})` : ""}
             </button>}
-            <button type="button" className="btn-secondary btn-sm" disabled={pending || pickedShown.length === 0} onClick={() => run(() => confirmSpam(pickedShown))}>
+            <button type="button" className="btn-secondary btn-sm" disabled={pending || pickedShown.length === 0} title={!pending && pickedShown.length === 0 ? "Tick some messages first" : undefined} onClick={() => run(() => confirmSpam(pickedShown))}>
               Confirm spam{pickedShown.length ? ` (${pickedShown.length})` : ""}
             </button>
           </div>

@@ -200,6 +200,7 @@ export default function SegmentBuilder({ tags, regions }: { tags: Tag[]; regions
           type="button"
           onClick={save}
           disabled={saving || !name.trim()}
+          title={!saving && !name.trim() ? "Name the audience first" : undefined}
           className="btn-primary"
         >
           <Save className="size-4" />

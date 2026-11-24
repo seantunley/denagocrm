@@ -136,7 +136,7 @@ export function MarkWonForm({
       {error && <p className="text-sm text-destructive">{error}</p>}
       <div className="flex justify-end gap-2">
         <Button type="button" variant="outline" onClick={onCancel} disabled={pending}>Cancel</Button>
-        <Button type="button" onClick={submit} disabled={pending || (hasQuotes && !picked)}>
+        <Button type="button" onClick={submit} disabled={pending || (hasQuotes && !picked)} title={!pending && hasQuotes && !picked ? "Choose which quote was won first" : undefined}>
           {pending ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
           Mark won
         </Button>

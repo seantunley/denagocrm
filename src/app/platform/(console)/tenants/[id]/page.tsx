@@ -274,6 +274,7 @@ export default async function TenantProfilePage({
                   pendingLabel="Activating…"
                   className="btn-primary btn-sm"
                   disabled={!tenantEnforcing()}
+                  title={tenantEnforcing() ? undefined : "Workspaces can only be switched on once each one is kept separate"}
                 >
                   Activate
                 </SaveButton>
@@ -727,7 +728,7 @@ export default async function TenantProfilePage({
                       ) : (
                         <span
                           className="text-xs text-muted-foreground"
-                          title="A tenant must keep at least one member"
+                          title="A workspace must keep at least one member"
                         >
                           Last member
                         </span>
@@ -755,6 +756,7 @@ export default async function TenantProfilePage({
                     pendingLabel="Adding…"
                     className="btn-secondary btn-sm"
                     disabled={addableUsers.length === 0}
+                    title={addableUsers.length === 0 ? "Everyone who could be added is already a member" : undefined}
                   >
                     Add
                   </SaveButton>

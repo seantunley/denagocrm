@@ -128,8 +128,8 @@ export default async function PlatformTenantsPage() {
           }`}
           title={
             enforcing
-              ? "Tenant isolation is enforced. Tenants can be activated."
-              : "No cross-tenant data isolation yet. New tenants are created inert and cannot be activated — activating one now would expose existing data to it."
+              ? "Each workspace sees only its own data. New workspaces can be switched on."
+              : "Workspaces are not kept apart yet. New workspaces stay switched off — switching one on now would show it everyone's data."
           }
         >
           <Lock className="size-3.5" />

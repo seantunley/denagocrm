@@ -1182,7 +1182,7 @@ export function QuoteEditorDialog({
                         </div>
                         {editable && (
                           <div className="flex flex-wrap gap-2">
-                            <Button type="button" variant="outline" size="sm" onClick={addProductLine} disabled={products.length === 0}><Plus />Product line</Button>
+                            <Button type="button" variant="outline" size="sm" onClick={addProductLine} disabled={products.length === 0} title={products.length === 0 ? "Your catalogue has no products yet — add them under Products" : undefined}><Plus />Product line</Button>
                             <Button type="button" variant="ghost" size="sm" onClick={addCustomLine}><Plus />Custom line</Button>
                           </div>
                         )}
@@ -1258,7 +1258,7 @@ export function QuoteEditorDialog({
                                 <input id={`${line.key}-discount`} className="input" inputMode="decimal" placeholder="0" value={line.discount} disabled={!editable} onChange={(event) => updateLine(line.key, { discount: event.target.value })} />
                               </div>
                               {editable && (
-                                <Button type="button" variant="ghost" size="icon" className="text-muted-foreground hover:text-red-300" onClick={() => removeLine(line.key)} aria-label={`Remove line ${index + 1}`}>
+                                <Button type="button" variant="ghost" size="icon" className="text-muted-foreground hover:text-red-300" onClick={() => removeLine(line.key)} aria-label={`Remove line ${index + 1}`} title="Remove this line">
                                   <Trash2 />
                                 </Button>
                               )}
@@ -1304,7 +1304,7 @@ export function QuoteEditorDialog({
                                 <input id={`${fee.key}-amount`} className="input tabular-nums" inputMode="decimal" value={fee.amount} disabled={!editable} onChange={(event) => updateFee(fee.key, { amount: event.target.value })} />
                               </div>
                               {editable && (
-                                <Button type="button" variant="ghost" size="icon" className="text-muted-foreground hover:text-red-300" onClick={() => removeFee(fee.key)} aria-label="Remove fee"><Trash2 /></Button>
+                                <Button type="button" variant="ghost" size="icon" className="text-muted-foreground hover:text-red-300" onClick={() => removeFee(fee.key)} aria-label="Remove fee" title="Remove this fee"><Trash2 /></Button>
                               )}
                             </div>
                           ))}
@@ -1624,7 +1624,7 @@ export function QuoteEditorDialog({
             </div>
             <div className="flex gap-2">
               <Button type="button" variant="outline" className="flex-1 sm:flex-none" onClick={() => requestOpenChange(false)}>Close</Button>
-              {editable && <Button type="button" className="flex-1 sm:flex-none" onClick={() => save("draft")} disabled={isPending || !dirty}><Save />{isPending ? "Saving…" : savedQuote ? "Save changes" : "Save draft"}</Button>}
+              {editable && <Button type="button" className="flex-1 sm:flex-none" onClick={() => save("draft")} disabled={isPending || !dirty} title={!isPending && !dirty ? "No changes to save" : undefined}><Save />{isPending ? "Saving…" : savedQuote ? "Save changes" : "Save draft"}</Button>}
             </div>
           </footer>
         </ResponsiveDialogContent>

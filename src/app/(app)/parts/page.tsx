@@ -111,7 +111,7 @@ export default async function PartsPage() {
                   <td data-label="Location" className="text-slate-400">{p.location ?? "—"}</td>
                   <td data-label="In stock" className="text-right">
                     <span className={low ? "text-amber-400 font-semibold" : ""}>{p.stockQty}</span>
-                    {low && <span title="At/below reorder level"> ⚠</span>}
+                    {low && <span title="At or below the reorder level" aria-label="At or below the reorder level"> ⚠</span>}
                   </td>
                   <td data-label="Sell" className="text-right">{formatZAR(p.priceCents, moneyFmt)}</td>
                   <td data-actions className="text-right">

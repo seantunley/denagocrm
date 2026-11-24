@@ -125,7 +125,7 @@ export default function ContainerContents({
               type="button"
               onClick={() => actions.onMove(child.id, -1)}
               disabled={index === 0}
-              aria-label={`Move ${cardLabel(child)} earlier`}
+              aria-label={`Move ${cardLabel(child)} earlier`} title="Move earlier"
               className="flex size-6 items-center justify-center rounded text-muted-foreground hover:text-foreground disabled:opacity-30"
             >
               <ChevronUp className="size-3.5" />
@@ -134,7 +134,7 @@ export default function ContainerContents({
               type="button"
               onClick={() => actions.onMove(child.id, 1)}
               disabled={index === cards.length - 1}
-              aria-label={`Move ${cardLabel(child)} later`}
+              aria-label={`Move ${cardLabel(child)} later`} title="Move later"
               className="flex size-6 items-center justify-center rounded text-muted-foreground hover:text-foreground disabled:opacity-30"
             >
               <ChevronDown className="size-3.5" />
@@ -151,7 +151,7 @@ export default function ContainerContents({
             <button
               type="button"
               onClick={() => actions.onConfigure(child.id)}
-              aria-label={`Settings for ${cardLabel(child)}`}
+              aria-label={`Settings for ${cardLabel(child)}`} title="Card settings"
               className="flex size-6 items-center justify-center rounded text-muted-foreground hover:text-foreground"
             >
               <Settings2 className="size-3.5" />
@@ -159,7 +159,7 @@ export default function ContainerContents({
             <button
               type="button"
               onClick={() => actions.onRemove(child.id)}
-              aria-label={`Remove ${cardLabel(child)}`}
+              aria-label={`Remove ${cardLabel(child)}`} title="Remove this card"
               className="flex size-6 items-center justify-center rounded text-muted-foreground hover:text-destructive"
             >
               <X className="size-3.5" />

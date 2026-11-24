@@ -252,6 +252,7 @@ export default function StageRulesEditor({
               <button
                 type="button"
                 aria-label="Remove condition"
+                title="Remove this condition"
                 className="text-muted-foreground hover:text-red-300"
                 onClick={() => setRows(rows.filter((_, i) => i !== index))}
               >
@@ -265,6 +266,7 @@ export default function StageRulesEditor({
               type="button"
               className="btn-secondary btn-sm"
               disabled={rows.length >= MAX_STAGE_CRITERIA}
+            title={rows.length >= MAX_STAGE_CRITERIA ? `A stage can have up to ${MAX_STAGE_CRITERIA} conditions` : undefined}
               onClick={() =>
                 setRows([
                   ...rows,

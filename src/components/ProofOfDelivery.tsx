@@ -58,6 +58,7 @@ export default function ProofOfDelivery({ quoteId, signing }: {
               <h2 className="text-lg font-bold text-white">Proof of delivery</h2>
               <button
                 onClick={() => setOpen(false)}
+                title="Close"
                 className="text-slate-400 hover:text-white text-2xl leading-none"
                 aria-label="Close"
               >

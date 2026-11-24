@@ -133,7 +133,7 @@ export default function AssistantBubble({ unseen = 0 }: { unseen?: number }) {
               <Link href={data?.conversation && data.conversation !== "new" ? `/assistant?c=${data.conversation}` : "/assistant"} className="rounded p-1 text-muted-foreground hover:text-foreground" title="Open the full page" aria-label="Open the full page" onClick={() => setOpen(false)}>
                 <Maximize2 className="size-4" />
               </Link>
-              <button type="button" onClick={() => setOpen(false)} className="rounded p-1 text-muted-foreground hover:text-foreground" aria-label="Close">
+              <button type="button" onClick={() => setOpen(false)} className="rounded p-1 text-muted-foreground hover:text-foreground" aria-label="Close" title="Close">
                 <X className="size-4" />
               </button>
             </div>

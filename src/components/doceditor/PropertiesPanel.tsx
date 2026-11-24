@@ -234,7 +234,7 @@ function TableProps({ block }: { block: Extract<DocumentBlock, { type: "table" }
         ))}
       </ul>
       <div className="mb-3 flex gap-1.5">
-        <button type="button" className="flex-1 rounded-md border border-slate-300 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-40" disabled={columns.length >= 8} onClick={() => set({ columns: [...columns, { header: "", align: "left", widthPct: 20 }], rows: block.rows.map((r) => ({ ...r, cells: [...columns.map((_, ci) => r.cells[ci] ?? { value: "" }), { value: "" }] })) })}>+ Column</button>
+        <button type="button" className="flex-1 rounded-md border border-slate-300 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-40" disabled={columns.length >= 8} title={columns.length >= 8 ? "A table can have up to 8 columns" : undefined} onClick={() => set({ columns: [...columns, { header: "", align: "left", widthPct: 20 }], rows: block.rows.map((r) => ({ ...r, cells: [...columns.map((_, ci) => r.cells[ci] ?? { value: "" }), { value: "" }] })) })}>+ Column</button>
         <button type="button" className="flex-1 rounded-md border border-slate-300 py-1 text-xs text-slate-700 hover:bg-slate-50" onClick={() => set({ rows: [...block.rows, emptyRow()] })}>+ Row</button>
         <button type="button" className="flex-1 rounded-md border border-slate-300 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-40" disabled={block.rows.length === 0} title="Remove the last row" onClick={() => set({ rows: block.rows.slice(0, -1) })}>− Row</button>
       </div>
@@ -320,7 +320,7 @@ function SaveToLibrary({ block, floating }: { block: DocumentBlock; floating: bo
         </div>
       ) : null}
       <div className="flex gap-1.5">
-        <button type="button" disabled={busy || !name.trim()} onClick={() => void save()} className="flex-1 rounded-md bg-slate-900 py-1.5 text-sm text-white hover:bg-slate-800 disabled:opacity-40">{busy ? "Saving…" : "Save"}</button>
+        <button type="button" disabled={busy || !name.trim()} title={!busy && !name.trim() ? "Name it first" : undefined} onClick={() => void save()} className="flex-1 rounded-md bg-slate-900 py-1.5 text-sm text-white hover:bg-slate-800 disabled:opacity-40">{busy ? "Saving…" : "Save"}</button>
         <button type="button" onClick={() => setOpen(false)} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50">Cancel</button>
       </div>
     </div>
@@ -741,7 +741,7 @@ function TermsProps({ block }: { block: TermsBlock }) {
         {block.items.map((it, i) => (
           <div key={i} className="flex gap-1">
             <input className={inp} value={it.text} onChange={(e) => set(block.items.map((x, j) => (j === i ? { text: e.target.value } : x)))} />
-            <button type="button" className="px-1 text-red-500" onClick={() => set(block.items.filter((_, j) => j !== i))}>✕</button>
+            <button type="button" className="px-1 text-red-500" onClick={() => set(block.items.filter((_, j) => j !== i))} title="Remove this item" aria-label="Remove this item">✕</button>
           </div>
         ))}
         <button type="button" className="w-full rounded-md border border-dashed border-slate-300 py-1 text-xs text-slate-500 hover:border-orange-300 hover:text-orange-600" onClick={() => set([...block.items, { text: "New term" }])}>＋ Add term</button>
@@ -778,7 +778,7 @@ function FooterProps({ block }: { block: FooterBlock }) {
             {block.lines.map((l, i) => (
               <div key={i} className="flex gap-1">
                 <input className={inp} value={l.text} onChange={(e) => set(block.lines.map((x, j) => (j === i ? { text: e.target.value } : x)))} />
-                <button type="button" className="px-1 text-red-500" onClick={() => set(block.lines.filter((_, j) => j !== i))}>✕</button>
+                <button type="button" className="px-1 text-red-500" onClick={() => set(block.lines.filter((_, j) => j !== i))} title="Remove this line" aria-label="Remove this line">✕</button>
               </div>
             ))}
             <button type="button" className="w-full rounded-md border border-dashed border-slate-300 py-1 text-xs text-slate-500 hover:border-orange-300 hover:text-orange-600" onClick={() => set([...block.lines, { text: "New line" }])}>＋ Add line</button>

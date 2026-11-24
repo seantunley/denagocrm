@@ -972,6 +972,7 @@ export default function CalendarWorkspace({
                   size="icon-sm"
                   onClick={() => navigateWeek(-1)}
                   aria-label="Previous week"
+                  title="Previous week"
                 >
                   <ChevronLeft className="size-4" />
                 </Button>
@@ -984,6 +985,7 @@ export default function CalendarWorkspace({
                   size="icon-sm"
                   onClick={() => navigateWeek(1)}
                   aria-label="Next week"
+                  title="Next week"
                 >
                   <ChevronRight className="size-4" />
                 </Button>
@@ -994,6 +996,7 @@ export default function CalendarWorkspace({
                   <Link
                     href={`${basePath}?m=${previousMonth}`}
                     aria-label="Previous month"
+                    title="Previous month"
                   >
                     <ChevronLeft className="size-4" />
                   </Link>
@@ -1005,6 +1008,7 @@ export default function CalendarWorkspace({
                   <Link
                     href={`${basePath}?m=${nextMonth}`}
                     aria-label="Next month"
+                    title="Next month"
                   >
                     <ChevronRight className="size-4" />
                   </Link>
@@ -1183,6 +1187,7 @@ export default function CalendarWorkspace({
                           onClick={() => createActivity(day.key)}
                           className="grid size-6 place-items-center rounded-md text-muted-foreground opacity-0 transition hover:bg-accent hover:text-foreground group-hover/day:opacity-100 focus:opacity-100"
                           aria-label={`Schedule activity on ${day.label}`}
+                          title={`Schedule an activity on ${day.label}`}
                         >
                           <CalendarPlus className="size-3.5" />
                         </button>
@@ -1541,6 +1546,7 @@ export default function CalendarWorkspace({
                         variant="outline"
                         onClick={rescheduleSelected}
                         disabled={isPending || !rescheduleValue}
+                        title={!isPending && !rescheduleValue ? "Pick the new date and time first" : undefined}
                       >
                         <Clock4 className="size-4" />
                         Move

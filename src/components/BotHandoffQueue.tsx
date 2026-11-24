@@ -94,7 +94,7 @@ function HandoffCard({ item, staff, canAct }: { item: HandoffQueueItem; staff: S
             run(() => assignConversation(item.conversationId, next || null));
           }}><option value="">Nobody</option>{staff.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select>
         </label>
-        <button type="button" className="btn-primary btn-sm min-h-11" disabled={!canAct || pending} onClick={() => run(() => setConversationBotMode(item.conversationId, "human"))}><UserRound className="size-3.5" aria-hidden="true" />{pending ? "Saving…" : "Take over"}</button>
+        <button type="button" className="btn-primary btn-sm min-h-11" disabled={!canAct || pending} title={canAct ? undefined : "Your role can't take over conversations"} onClick={() => run(() => setConversationBotMode(item.conversationId, "human"))}><UserRound className="size-3.5" aria-hidden="true" />{pending ? "Saving…" : "Take over"}</button>
       </div>
     </article>
   );

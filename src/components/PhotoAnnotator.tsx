@@ -287,10 +287,10 @@ function AnnotatorModal({
           ))}
         </div>
         <div className="mx-1 h-6 w-px bg-white/10" />
-        <button type="button" onClick={() => setShapes((s) => s.slice(0, -1))} disabled={!shapes.length} className="btn-secondary btn-sm disabled:opacity-40">
+        <button type="button" onClick={() => setShapes((s) => s.slice(0, -1))} disabled={!shapes.length} title={shapes.length ? undefined : "Nothing drawn yet"} className="btn-secondary btn-sm disabled:opacity-40">
           Undo
         </button>
-        <button type="button" onClick={() => setShapes([])} disabled={!shapes.length} className="btn-secondary btn-sm disabled:opacity-40">
+        <button type="button" onClick={() => setShapes([])} disabled={!shapes.length} title={shapes.length ? undefined : "Nothing drawn yet"} className="btn-secondary btn-sm disabled:opacity-40">
           Clear
         </button>
         <div className="ml-auto flex items-center gap-2">

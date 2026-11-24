@@ -109,7 +109,7 @@ export default function SignatureDesignEditor({
               : "Generate the panel from your logo — the dark slanted panel with a stripe in your colour — or upload your own image (PNG or JPG, up to 1 MB; 960 × 300 looks sharpest)."}
           </p>
           <div className="flex flex-wrap gap-2">
-            <button type="button" className="btn-primary btn-sm" disabled={!!busy || !company.logoUrl} onClick={generate}>
+            <button type="button" className="btn-primary btn-sm" disabled={!!busy || !company.logoUrl} title={!busy && !company.logoUrl ? "Upload your logo first (Settings → Company profile)" : undefined} onClick={generate}>
               {busy === "generate" ? "Generating…" : "Generate from my logo"}
             </button>
             <button type="button" className="btn-secondary btn-sm" disabled={!!busy} onClick={() => uploadRef.current?.click()}>

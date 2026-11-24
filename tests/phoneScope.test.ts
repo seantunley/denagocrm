@@ -79,6 +79,6 @@ test("on a phone nothing offers a desktop page: Search, the account menu, the ge
   assert.match(account, /<DropdownMenuItem asChild className="max-md:hidden">\s*<Link href="\/settings">/);
   assert.match(account, /<DropdownMenuItem asChild className="max-md:hidden">\s*<Link href="\/trash">/);
   assert.match(readFileSync("src/components/SidebarHelpSettings.tsx", "utf8"), /className=\{compact \? `\$\{triggerClass\} max-md:hidden` : triggerClass\} aria-label=\{compact \? "Settings" : undefined\}/);
-  assert.match(readFileSync("src/components/AppShell.tsx", "utf8"), /aria-label="Search"\s+className="[^"]*md:hidden"/);
+  assert.match(readFileSync("src/components/AppShell.tsx", "utf8"), /aria-label="Search"\s+(?:title="Search"\s+)?className="[^"]*md:hidden"/);
   assert.match(readFileSync("src/components/MobileCompanionNav.tsx", "utf8"), /<Link href="\/documents" className="[^"]*max-md:hidden">/);
 });

@@ -320,7 +320,7 @@ function BlockWrapper({ block, hint }: { block: DocumentBlock; hint: Hint }) {
       <button
         ref={setActivatorNodeRef} {...listeners} {...attributes}
         className={`absolute -left-6 top-1 z-20 h-6 w-5 cursor-grab rounded text-slate-400 opacity-0 hover:bg-slate-100 group-hover:opacity-100 ${block.locked ? "cursor-not-allowed" : ""}`}
-        title={block.locked ? "Locked" : "Drag to move"} type="button" onMouseDown={(e) => e.stopPropagation()}
+        title={block.locked ? "Locked — unlock it to move it" : "Drag to move"} type="button" onMouseDown={(e) => e.stopPropagation()}
       >⠿</button>
 
       {selected && (

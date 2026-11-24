@@ -72,6 +72,7 @@ export default function AddPasskeyPrompt({ email }: { email: string }) {
         type="button"
         onClick={() => setShow(false)}
         aria-label="Close"
+        title="Close"
         className="absolute right-2 top-2 rounded-md p-1 text-slate-500 outline-none transition hover:text-slate-200 focus-visible:ring-2 focus-visible:ring-primary/40"
       >
         <X className="size-4" />

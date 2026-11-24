@@ -103,7 +103,7 @@ export default function QuoteEmailDialog({
               </div>
               <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
                 <Button type="button" variant="outline" onClick={() => setOpen(false)} disabled={sending}>Cancel</Button>
-                <Button type="button" onClick={send} disabled={sending || !draft.to.trim()}>
+                <Button type="button" onClick={send} disabled={sending || !draft.to.trim()} title={!sending && !draft.to.trim() ? "Add who it goes to first" : undefined}>
                   {sending ? <Loader2 className="animate-spin" /> : <Send />}{sending ? "Sending…" : "Send"}
                 </Button>
               </div>

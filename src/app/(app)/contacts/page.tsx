@@ -359,7 +359,7 @@ function ContactTable({
                   {automotiveOn && <td className="px-4 py-3.5 text-center font-medium tabular-nums">{contact._count.vehicles}</td>}
                   <td className="px-4 py-3.5 text-center"><span className={cn("inline-flex min-w-6 justify-center rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums", contact._count.leads ? "bg-orange-400/10 text-orange-300" : "text-muted-foreground")}>{contact._count.leads}</span></td>
                   <td className="whitespace-nowrap px-4 py-3.5 text-xs text-muted-foreground">{formatDate(contact.createdAt)}</td>
-                  <td className="pr-4"><Link href={`/contacts/${contact.id}`} aria-label={`Open ${name}`} className="flex size-7 items-center justify-center rounded-md text-muted-foreground opacity-0 transition hover:bg-accent hover:text-foreground group-hover:opacity-100 focus:opacity-100"><ArrowRight className="size-3.5" /></Link></td>
+                  <td className="pr-4"><Link href={`/contacts/${contact.id}`} aria-label={`Open ${name}`} title={`Open ${name}`} className="flex size-7 items-center justify-center rounded-md text-muted-foreground opacity-0 transition hover:bg-accent hover:text-foreground group-hover:opacity-100 focus:opacity-100"><ArrowRight className="size-3.5" /></Link></td>
                 </tr>
                 </RecordContextMenu>
               );

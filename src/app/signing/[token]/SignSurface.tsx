@@ -480,9 +480,9 @@ export function SignSurface({ token, title, recipientName, sheets, fields, stamp
       {(fit < 0.9 || zoom > 1) && (
         <div style={{ position: "sticky", top: 8, zIndex: 20, display: "flex", justifyContent: "flex-end", pointerEvents: "none", marginBottom: -8 }}>
           <div style={{ pointerEvents: "auto", display: "flex", alignItems: "center", gap: 2, background: "#1e293bf2", border: "1px solid #475569", borderRadius: 999, padding: 3, boxShadow: "0 4px 14px rgba(0,0,0,.35)" }}>
-            <button type="button" aria-label="Zoom out" disabled={zoom === ZOOMS[0]} onClick={() => zoomTo(ZOOMS[ZOOMS.indexOf(zoom) - 1])} style={{ ...zoomButton, opacity: zoom === ZOOMS[0] ? 0.4 : 1 }}>−</button>
+            <button type="button" aria-label="Zoom out" title="Zoom out" disabled={zoom === ZOOMS[0]} onClick={() => zoomTo(ZOOMS[ZOOMS.indexOf(zoom) - 1])} style={{ ...zoomButton, opacity: zoom === ZOOMS[0] ? 0.4 : 1 }}>−</button>
             <span style={{ fontSize: 12, color: "#cbd5e1", minWidth: 44, textAlign: "center" }}>{zoom === 1 ? "Zoom" : `${zoom}×`}</span>
-            <button type="button" aria-label="Zoom in" disabled={zoom === ZOOMS[ZOOMS.length - 1]} onClick={() => zoomTo(ZOOMS[ZOOMS.indexOf(zoom) + 1])} style={{ ...zoomButton, opacity: zoom === ZOOMS[ZOOMS.length - 1] ? 0.4 : 1 }}>+</button>
+            <button type="button" aria-label="Zoom in" title="Zoom in" disabled={zoom === ZOOMS[ZOOMS.length - 1]} onClick={() => zoomTo(ZOOMS[ZOOMS.indexOf(zoom) + 1])} style={{ ...zoomButton, opacity: zoom === ZOOMS[ZOOMS.length - 1] ? 0.4 : 1 }}>+</button>
           </div>
         </div>
       )}

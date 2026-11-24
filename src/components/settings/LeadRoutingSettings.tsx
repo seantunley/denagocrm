@@ -138,7 +138,7 @@ export default function LeadRoutingSettings({
       </section>
 
       <div className="border-t border-border/60 pt-4">
-        <button type="button" onClick={save} disabled={!dirty || saving} className="btn btn-primary disabled:opacity-50">
+        <button type="button" onClick={save} disabled={!dirty || saving} title={!dirty && !saving ? "No changes to save" : undefined} className="btn btn-primary disabled:opacity-50">
           {saving ? "Saving…" : "Save lead routing"}
         </button>
       </div>

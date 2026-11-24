@@ -911,6 +911,7 @@ export default function ChecklistRunner({
                 type="button"
                 onClick={goBack}
                 disabled={step === 0 || busy !== null}
+                title={busy === null && step === 0 ? "This is the first step" : undefined}
                 className="btn-secondary min-h-11 flex-1"
               >
                 <ChevronLeft className="size-4" aria-hidden="true" />
@@ -920,6 +921,7 @@ export default function ChecklistRunner({
                 type="button"
                 onClick={() => void saveProgress()}
                 disabled={busy !== null || !session}
+                title={busy === null && !session ? "Still getting the checklist ready — a moment" : undefined}
                 className="btn-secondary min-h-11 flex-1"
               >
                 Save for later
@@ -929,6 +931,7 @@ export default function ChecklistRunner({
               type="button"
               onClick={() => (onLastStep ? void finish() : goNext())}
               disabled={busy !== null || total === 0}
+              title={busy === null && total === 0 ? "This checklist has no steps" : undefined}
               className="btn-primary min-h-14 w-full text-base"
             >
               {busy ? (
@@ -1078,7 +1081,7 @@ function Step({
                   <button
                     type="button"
                     onClick={() => onDropServerPhoto(photo.id)}
-                    aria-label={`Remove this photo from ${entry.labelSnapshot}`}
+                    aria-label={`Remove this photo from ${entry.labelSnapshot}`} title="Remove this photo"
                     className="absolute -right-1.5 -top-1.5 grid size-6 place-items-center rounded-full border border-border bg-card text-muted-foreground hover:text-destructive"
                   >
                     <X className="size-3" aria-hidden="true" />
@@ -1098,7 +1101,7 @@ function Step({
                   <button
                     type="button"
                     onClick={() => onDropCapture(capture.id)}
-                    aria-label={`Remove this photo from ${entry.labelSnapshot}`}
+                    aria-label={`Remove this photo from ${entry.labelSnapshot}`} title="Remove this photo"
                     className="absolute -right-1.5 -top-1.5 grid size-6 place-items-center rounded-full border border-border bg-card text-muted-foreground hover:text-destructive"
                   >
                     <X className="size-3" aria-hidden="true" />

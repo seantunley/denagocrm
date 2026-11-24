@@ -114,7 +114,7 @@ export default function AssistantActionCard({
           {reason && <p className="mt-1 text-xs text-muted-foreground">{reason}</p>}
         </div>
         {state === "open" && (
-          <button type="button" onClick={dismiss} disabled={pending} className="text-muted-foreground hover:text-foreground disabled:opacity-40" aria-label="Dismiss">
+          <button type="button" onClick={dismiss} disabled={pending} className="text-muted-foreground hover:text-foreground disabled:opacity-40" aria-label="Dismiss" title="Dismiss">
             <X className="size-4" />
           </button>
         )}
@@ -188,6 +188,7 @@ export default function AssistantActionCard({
                 type="button"
                 onClick={send}
                 disabled={pending || !draft.to || !body.trim() || (draft.channel === "email" && !subject.trim())}
+                title={pending ? undefined : !draft.to ? "There's no one to send it to" : !body.trim() ? "Write the message first" : draft.channel === "email" && !subject.trim() ? "Add a subject first" : undefined}
                 className="btn-primary btn-sm inline-flex items-center gap-1"
               >
                 {pending ? <Loader2 className="size-3.5 animate-spin" /> : <Send className="size-3.5" />} Send {draft.channel === "whatsapp" ? "WhatsApp" : "email"}

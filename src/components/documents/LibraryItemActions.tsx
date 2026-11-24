@@ -105,7 +105,7 @@ export default function LibraryItemActions({
               <a
                 href={`/api/library/${v.id}`}
                 className="btn-secondary btn-sm"
-                aria-label={`Download version ${v.version}`}
+                aria-label={`Download version ${v.version}`} title={`Download version ${v.version}`}
               >
                 <Download className="size-3.5" />
               </a>

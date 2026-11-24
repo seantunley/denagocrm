@@ -150,7 +150,7 @@ export function IdentityGate({ token, initial }: { token: string; initial: Ident
               style={{ width: "100%", boxSizing: "border-box", marginTop: 7, background: "#0f172a", color: "#fff", border: "1px solid #475569", borderRadius: 9, padding: "13px 14px", fontSize: 22, letterSpacing: 6, textAlign: "center" }}
             />
           </label>
-          <button type="button" onClick={verify} disabled={busy || code.length !== 6}
+          <button type="button" onClick={verify} disabled={busy || code.length !== 6} title={!busy && code.length !== 6 ? "Enter the 6-digit code we sent you" : undefined}
             style={{ ...primaryButton, opacity: busy || code.length !== 6 ? .55 : 1, cursor: busy ? "wait" : "pointer" }}>
             {busy ? "Verifying…" : "Verify and continue"}
           </button>

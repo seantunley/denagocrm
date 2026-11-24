@@ -223,7 +223,7 @@ function ConditionRow({
         <button
           type="button"
           onClick={onRemove}
-          aria-label="Remove this rule"
+          aria-label="Remove this rule" title="Remove this rule"
           className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
         >
           <X className="size-3.5" />
@@ -571,7 +571,7 @@ function TagListBody({
           placeholder={placeholder}
           className="h-8 text-xs"
         />
-        <Button type="submit" size="sm" variant="secondary" disabled={!draft.trim()}>
+        <Button type="submit" size="sm" variant="secondary" disabled={!draft.trim()} title={draft.trim() ? undefined : "Type a value first"}>
           Add
         </Button>
       </form>
@@ -752,7 +752,7 @@ function ComposeTagInput({
           placeholder={COMPOSE_PLACEHOLDER[kind]}
           className="h-8 text-xs"
         />
-        <Button type="submit" size="sm" disabled={!draft.trim()}>
+        <Button type="submit" size="sm" disabled={!draft.trim()} title={draft.trim() ? undefined : "Type a value first"}>
           Add
         </Button>
         <Button type="button" size="sm" variant="ghost" onClick={onCancel}>

@@ -171,7 +171,7 @@ export default function JourneyTestRun({
               {result ? "Close" : "Cancel"}
             </button>
           </DialogClose>
-          <button type="button" className="btn-primary" onClick={run} disabled={pending || !leadId}>
+          <button type="button" className="btn-primary" onClick={run} disabled={pending || !leadId} title={!pending && !leadId ? "Choose a lead to test with first" : undefined}>
             {pending && <Loader2 className="size-4 animate-spin" />}
             {result ? "Run again" : "Run it for real"}
           </button>

@@ -40,7 +40,7 @@ export default function FlowReplayPanel({ flowId, nodeLabel, onSteps, onFocus, o
     <aside className="w-96 shrink-0 overflow-y-auto border-l border-white/[0.08] bg-[#111614] max-lg:fixed max-lg:inset-x-0 max-lg:bottom-0 max-lg:z-[81] max-lg:max-h-[78dvh] max-lg:w-auto max-lg:rounded-t-3xl max-lg:border-t">
       <div className="sticky top-0 z-10 flex items-center justify-between border-b border-white/[0.08] bg-[#111614]/95 px-4 py-3 backdrop-blur">
         <div><p className="text-sm font-semibold text-white">Replay a conversation</p><p className="text-xs text-slate-400">See the path a real customer took, and why</p></div>
-        <button type="button" onClick={onClose} className="grid size-10 place-items-center rounded-lg text-slate-400 hover:bg-white/5 hover:text-white"><X className="size-4" /><span className="sr-only">Close replay</span></button>
+        <button type="button" onClick={onClose} className="grid size-10 place-items-center rounded-lg text-slate-400 hover:bg-white/5 hover:text-white" title="Close replay"><X className="size-4" /><span className="sr-only">Close replay</span></button>
       </div>
       <div className="space-y-4 p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
         {list === null ? (

@@ -172,7 +172,7 @@ function LegalLine({ initial }: { initial: string }) {
           placeholder="e.g. Example Motors (Pty) Ltd · Reg. no. 2019/123456/07 · VAT no. 4123456789"
           className="input min-w-0 flex-1 basis-96"
         />
-        <button type="submit" className="btn-secondary btn-sm" disabled={saving || value.trim() === initial.trim()}>{saving ? "Saving…" : "Save legal line"}</button>
+        <button type="submit" className="btn-secondary btn-sm" disabled={saving || value.trim() === initial.trim()} title={!saving && value.trim() === initial.trim() ? "No changes to save" : undefined}>{saving ? "Saving…" : "Save legal line"}</button>
       </form>
     </section>
   );
@@ -419,7 +419,7 @@ function BannerDialog({ editing, staff, teams, onClose }: { editing: BannerView 
 
           <div className="flex justify-end gap-2 pt-1">
             <button type="button" className="btn-secondary btn-sm" disabled={saving} onClick={onClose}>Cancel</button>
-            <button type="submit" className="btn-primary btn-sm" disabled={saving || Boolean(imageError)}>{saving ? "Saving…" : banner ? "Save banner" : "Add banner"}</button>
+            <button type="submit" className="btn-primary btn-sm" disabled={saving || Boolean(imageError)} title={!saving && imageError ? imageError : undefined}>{saving ? "Saving…" : banner ? "Save banner" : "Add banner"}</button>
           </div>
         </form>
       </ResponsiveDialogContent>

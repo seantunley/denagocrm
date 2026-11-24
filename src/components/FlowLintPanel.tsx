@@ -47,7 +47,7 @@ export default function FlowLintPanel({
         <ul className="space-y-2">
           {issues.map((item, index) => (
             <li key={`${item.code}-${item.nodeId ?? "flow"}-${item.channel ?? "all"}-${index}`}>
-              <button type="button" disabled={!item.nodeId || !onSelectIssue} onClick={() => onSelectIssue?.(item)} className="flex w-full gap-2 rounded-lg px-2 py-1 text-left text-xs leading-5 text-slate-300 enabled:hover:bg-white/5 disabled:cursor-default">
+              <button type="button" disabled={!item.nodeId || !onSelectIssue} title={item.nodeId && onSelectIssue ? "Show this step" : "This applies to the whole flow, not one step"} onClick={() => onSelectIssue?.(item)} className="flex w-full gap-2 rounded-lg px-2 py-1 text-left text-xs leading-5 text-slate-300 enabled:hover:bg-white/5 disabled:cursor-default">
               <span className={item.severity === "error" ? "text-red-400" : "text-amber-400"}>{item.severity === "error" ? "Error" : "Warning"}</span>
               <span>
                 {item.message}

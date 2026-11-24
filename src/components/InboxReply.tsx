@@ -410,7 +410,7 @@ ${el.value.slice(end)}`;
       )}
       {channel === "x" && (
         <div className="mb-2 flex items-center gap-2">
-          <button type="button" className="btn-secondary btn-sm" onClick={suggestWithGrok} disabled={grokPending || missingConversation}>
+          <button type="button" className="btn-secondary btn-sm" onClick={suggestWithGrok} disabled={grokPending || missingConversation} title={!grokPending && missingConversation ? "This conversation couldn't be found — refresh the page" : undefined}>
             {grokPending ? "Grok is drafting…" : "Draft with Grok"}
           </button>
           {grokError ? <span className="text-xs text-red-400">{grokError}</span> : null}
@@ -463,7 +463,7 @@ ${el.value.slice(end)}`;
             </button>
           </>
         )}
-        <button className="btn-primary btn-sm" disabled={missingConversation}>Send</button>
+        <button className="btn-primary btn-sm" disabled={missingConversation} title={missingConversation ? "This conversation couldn't be found — refresh the page" : undefined}>Send</button>
       </div>
 
       <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">

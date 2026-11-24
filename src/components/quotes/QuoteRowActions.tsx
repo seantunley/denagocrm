@@ -89,7 +89,7 @@ export default function QuoteRowActions({
       )}
       <Popover>
         <PopoverTrigger asChild>
-          <button type="button" className={buttonVariants({ variant: "ghost", size: "sm" })} aria-label={`More actions for Q-${number}`}>
+          <button type="button" className={buttonVariants({ variant: "ghost", size: "sm" })} aria-label={`More actions for Q-${number}`} title="More actions">
             <MoreHorizontal />
           </button>
         </PopoverTrigger>

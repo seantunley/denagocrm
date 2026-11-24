@@ -397,7 +397,7 @@ export default async function IntegrationsPage({ searchParams }: { searchParams?
                           <form action={clearTenantCredentialOverride.bind(null, field.key)}>
                             <button
                               className="btn-secondary"
-                              title={`Clear this workspace's own ${field.label} — it goes back to its original settings, if there are any`}
+                              title={`Remove this workspace's ${field.label}`}
                             >
                               Clear
                             </button>

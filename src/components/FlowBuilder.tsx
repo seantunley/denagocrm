@@ -974,7 +974,7 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
                 <div className="sticky top-0 z-10 border-b border-white/[0.08] bg-[#111614]/95 p-3 backdrop-blur">
                   <div className="flex items-center justify-between gap-3 px-1 pb-3">
                     <div><p className="text-sm font-semibold text-white">Node palette</p><p className="text-xs text-slate-400">Drag onto the canvas or click to add</p></div>
-                    <button type="button" onClick={() => setPaletteOpen(false)} className="grid size-10 place-items-center rounded-lg text-slate-400 hover:bg-white/5 hover:text-white"><X className="size-4" /><span className="sr-only">Close node palette</span></button>
+                    <button type="button" onClick={() => setPaletteOpen(false)} className="grid size-10 place-items-center rounded-lg text-slate-400 hover:bg-white/5 hover:text-white" title="Close the step palette"><X className="size-4" /><span className="sr-only">Close node palette</span></button>
                   </div>
                   <label className="relative block">
                     <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-500" />
@@ -1024,7 +1024,7 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
                             if (e.key === "Enter" && hits[0]) jumpTo(hits[0].nodeId);
                           }}
                         />
-                        <button type="button" onClick={() => setFindOpen(false)} className="grid size-9 place-items-center rounded-lg text-slate-400 hover:bg-white/5 hover:text-white"><X className="size-4" /><span className="sr-only">Close find</span></button>
+                        <button type="button" onClick={() => setFindOpen(false)} className="grid size-9 place-items-center rounded-lg text-slate-400 hover:bg-white/5 hover:text-white" title="Close find"><X className="size-4" /><span className="sr-only">Close find</span></button>
                       </div>
                       {findQuery.trim() && (
                         <div className="mt-2 max-h-72 overflow-y-auto">
@@ -1142,7 +1142,7 @@ export default function FlowBuilder({ flowId, initial, journeys = [], flows = []
 
             {inspectorOpen && (
               <aside className="w-80 shrink-0 overflow-y-auto border-l border-white/[0.08] bg-[#111614] max-lg:fixed max-lg:inset-x-0 max-lg:bottom-0 max-lg:z-[81] max-lg:max-h-[78dvh] max-lg:w-auto max-lg:rounded-t-3xl max-lg:border-t max-lg:shadow-[0_-24px_70px_rgba(0,0,0,.55)]">
-                <div className="sticky top-0 z-10 flex items-center justify-between border-b border-white/[0.08] bg-[#111614]/95 px-4 py-3 backdrop-blur"><div><p className="text-sm font-semibold text-white">Inspector</p><p className="text-xs text-slate-400">Configure the selected node</p></div><button type="button" onClick={() => setInspectorOpen(false)} className="grid size-10 place-items-center rounded-lg text-slate-400 hover:bg-white/5 hover:text-white"><X className="size-4" /><span className="sr-only">Close inspector</span></button></div>
+                <div className="sticky top-0 z-10 flex items-center justify-between border-b border-white/[0.08] bg-[#111614]/95 px-4 py-3 backdrop-blur"><div><p className="text-sm font-semibold text-white">Inspector</p><p className="text-xs text-slate-400">Configure the selected node</p></div><button type="button" onClick={() => setInspectorOpen(false)} className="grid size-10 place-items-center rounded-lg text-slate-400 hover:bg-white/5 hover:text-white" title="Close the inspector"><X className="size-4" /><span className="sr-only">Close inspector</span></button></div>
                 <div className="space-y-5 p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
                   {!selected ? <p className="text-sm leading-6 text-slate-400">Select a node to edit it. Drag from a node&apos;s output handle to another node to create a connection.</p> : <><NodeIssues issues={selectedIssues} /><NodePanel key={selected.id} node={selected} isStart={selected.id === start} nodeOptions={nodeOptions.filter((option) => option.id !== selected.id)} variables={knownVariables} journeys={journeys} flows={flows} documents={documents} staff={staff} connections={connections} crmTags={crmTags} stages={stages} onChange={(next) => patch(selected.id, () => next)} onDelete={() => removeNode(selected.id)} onDuplicate={() => duplicateNode(selected.id)} onMakeStart={() => markStart(selected.id)} isFallback={onFailure === selected.id} onMakeFallback={(on) => markFallback(on ? selected.id : undefined)} /></>}
                   <VariablesPanel variables={knownVariables} />
@@ -1269,7 +1269,7 @@ function DocumentFilesField({ node, documents, onChange }: {
           <button type="button" className="btn-secondary btn-sm" onClick={() => setMore(more.filter((_, i) => i !== at))} aria-label={`Remove file ${at + 2}`}>Remove</button>
         </div>
       ))}
-      <button type="button" className="btn-secondary btn-sm" disabled={!node.documentId || more.length + 1 >= MAX_DOCUMENTS_PER_STEP} onClick={() => setMore([...more, { documentId: "" }])}>+ Add another file</button>
+      <button type="button" className="btn-secondary btn-sm" disabled={!node.documentId || more.length + 1 >= MAX_DOCUMENTS_PER_STEP} title={!node.documentId ? "Choose the first file first" : more.length + 1 >= MAX_DOCUMENTS_PER_STEP ? `A step can send up to ${MAX_DOCUMENTS_PER_STEP} files` : undefined} onClick={() => setMore([...more, { documentId: "" }])}>+ Add another file</button>
       {more.length + 1 >= MAX_DOCUMENTS_PER_STEP && <p className="text-xs text-slate-500">Up to {MAX_DOCUMENTS_PER_STEP} files per step.</p>}
     </div>
   );
@@ -1283,7 +1283,7 @@ function NodePanel({ node, isStart, nodeOptions, variables, journeys, flows, doc
       <div className="flex items-start justify-between gap-3">
         <span className="flex items-center gap-2 text-sm font-semibold"><Icon className="size-4 text-primary" />{meta.label}</span>
         <div className="flex items-center gap-1">
-          <button type="button" onClick={onDuplicate} className="grid size-9 place-items-center rounded-lg text-slate-400 hover:bg-white/5 hover:text-white" title="Duplicate node"><Copy className="size-4" /><span className="sr-only">Duplicate node</span></button>
+          <button type="button" onClick={onDuplicate} className="grid size-9 place-items-center rounded-lg text-slate-400 hover:bg-white/5 hover:text-white" title="Duplicate this step"><Copy className="size-4" /><span className="sr-only">Duplicate this step</span></button>
           {!isStart && !isAnnotation(node) && <button type="button" onClick={onMakeStart} className="min-h-9 rounded-lg px-2 text-xs text-orange-400 hover:bg-orange-500/10">Set start</button>}
         </div>
       </div>

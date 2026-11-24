@@ -132,7 +132,7 @@ function ComparisonProps({ block }: { block: ComparisonBlock }) {
             >✕</button>
           </div>
         ))}
-        <button type="button" className={add} disabled={options.length >= 5} onClick={() => set({ options: [...options, { name: "", highlight: false }] })}>＋ Add an option</button>
+        <button type="button" className={add} disabled={options.length >= 5} title={options.length >= 5 ? "Up to five options" : undefined} onClick={() => set({ options: [...options, { name: "", highlight: false }] })}>＋ Add an option</button>
       </div>
       <label className={lbl}>Rows</label>
       <div className="space-y-2">
@@ -227,7 +227,7 @@ function GalleryProps({ block }: { block: GalleryBlock }) {
             </div>
           );
         })}
-        <button type="button" className={add} disabled={block.images.length >= 24} onClick={() => set({ images: [...block.images, { src: "", alt: "", caption: "" }] })}>＋ Add a picture</button>
+        <button type="button" className={add} disabled={block.images.length >= 24} title={block.images.length >= 24 ? "Up to 24 pictures" : undefined} onClick={() => set({ images: [...block.images, { src: "", alt: "", caption: "" }] })}>＋ Add a picture</button>
       </div>
       <p className="mt-2 text-[11px] text-slate-400">PNG, JPEG or WebP, up to 5 MB each. Every picture is cropped to the one shape, from its centre.</p>
     </Section>

@@ -72,8 +72,8 @@ export function ArrangePanel({ ids }: { ids: string[] }) {
       </div>
       <label className={lbl}>Space evenly{ids.length < 3 ? " — needs three or more" : ""}</label>
       <div className="mb-3 flex gap-1">
-        <button type="button" className={btn} disabled={ids.length < 3} onClick={() => arrange((d) => movePlaced(d, distributeRects(rectsOf(d, ids), "across")))}>Across</button>
-        <button type="button" className={btn} disabled={ids.length < 3} onClick={() => arrange((d) => movePlaced(d, distributeRects(rectsOf(d, ids), "down")))}>Down</button>
+        <button type="button" className={btn} disabled={ids.length < 3} title={ids.length < 3 ? "Select at least three blocks to space out" : undefined} onClick={() => arrange((d) => movePlaced(d, distributeRects(rectsOf(d, ids), "across")))}>Across</button>
+        <button type="button" className={btn} disabled={ids.length < 3} title={ids.length < 3 ? "Select at least three blocks to space out" : undefined} onClick={() => arrange((d) => movePlaced(d, distributeRects(rectsOf(d, ids), "down")))}>Down</button>
         <button type="button" className={btn} title="Give them all the width of the widest" onClick={() => arrange((d) => matchWidths(d, ids))}>Same width</button>
       </div>
       <div className="mb-3 flex gap-1">

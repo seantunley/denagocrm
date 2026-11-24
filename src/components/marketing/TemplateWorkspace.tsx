@@ -349,7 +349,7 @@ export default function TemplateWorkspace({ templates }: { templates: Template[]
                 </details>
               )}
 
-              <div className="flex flex-wrap gap-2 border-t border-border pt-5"><button type="button" className="btn-primary" onClick={save} disabled={saving || !canSave}><Save className="size-4" /> {saving ? "Saving…" : draft.id ? "Save new version" : "Save draft"}</button><button type="button" className="btn-secondary" onClick={closeEditor}>Cancel</button></div>
+              <div className="flex flex-wrap gap-2 border-t border-border pt-5"><button type="button" className="btn-primary" onClick={save} disabled={saving || !canSave} title={saving || canSave ? undefined : !draft.name.trim() ? "Name the template first" : isEmail && !draft.subject.trim() ? "Add a subject first" : "Write the content first"}><Save className="size-4" /> {saving ? "Saving…" : draft.id ? "Save new version" : "Save draft"}</button><button type="button" className="btn-secondary" onClick={closeEditor}>Cancel</button></div>
               {error && <p role="alert" className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
             </div>
 

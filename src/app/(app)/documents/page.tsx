@@ -825,6 +825,7 @@ export default async function DocumentsPage({
                     href={here({ view: undefined })}
                     className={cn("rounded px-2 py-1", view === "grid" ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground")}
                     aria-label="Grid view"
+                    title="Grid view"
                     aria-current={view === "grid" ? "true" : undefined}
                   >
                     <LayoutGrid className="size-4" />
@@ -833,6 +834,7 @@ export default async function DocumentsPage({
                     href={here({ view: "list" })}
                     className={cn("rounded px-2 py-1", view === "list" ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground")}
                     aria-label="List view"
+                    title="List view"
                     aria-current={view === "list" ? "true" : undefined}
                   >
                     <List className="size-4" />

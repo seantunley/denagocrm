@@ -118,7 +118,7 @@ export default function EmailRibbon({
         <Tool title="Bold (Ctrl+B)" active={at.bold} onClick={() => run().toggleBold().run()}><Bold className="size-4" /></Tool>
         <Tool title="Italic (Ctrl+I)" active={at.italic} onClick={() => run().toggleItalic().run()}><Italic className="size-4" /></Tool>
         <span className="mx-1 h-5 w-px bg-white/10" />
-        <Popover><PopoverTrigger asChild><button type="button" aria-label="Text colour and highlight" className="grid size-9 place-items-center rounded-md text-slate-200 hover:bg-white/10 focus-visible:ring-2 focus-visible:ring-primary"><Palette className="size-4" /></button></PopoverTrigger><PopoverContent className="w-64 space-y-3" align="start"><p className="text-xs font-medium">Text colour & highlight</p>
+        <Popover><PopoverTrigger asChild><button type="button" aria-label="Text colour and highlight" title="Text colour and highlight" className="grid size-9 place-items-center rounded-md text-slate-200 hover:bg-white/10 focus-visible:ring-2 focus-visible:ring-primary"><Palette className="size-4" /></button></PopoverTrigger><PopoverContent className="w-64 space-y-3" align="start"><p className="text-xs font-medium">Text colour & highlight</p>
         <span className="flex items-center gap-0.5" title="Text colour">
           {TEXT_COLOURS.map((colour) => (
             <button key={colour} type="button" aria-label={`Text colour ${colour}`} onMouseDown={(event) => event.preventDefault()} onClick={() => run().setColor(colour).run()} className="size-6 rounded-sm border border-white/20" style={{ backgroundColor: colour }} />

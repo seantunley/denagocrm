@@ -322,6 +322,7 @@ function CommentRow({
                   className="btn-primary btn-sm"
                   onClick={send}
                   disabled={pending || !text.trim()}
+                  title={!pending && !text.trim() ? "Write a reply first" : undefined}
                 >
                   {pending ? "Sending…" : mode === "public" ? "Post reply" : "Send private reply"}
                 </button>

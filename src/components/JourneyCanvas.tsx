@@ -444,7 +444,7 @@ function Canvas({ steps, onChange, renderEditor, saveButton }: CanvasProps) {
             <div className="sticky top-0 z-10 border-b border-white/[0.08] bg-[#111614]/95 p-3 backdrop-blur">
               <div className="flex items-center justify-between gap-3 px-1 pb-3">
                 <div><p className="text-sm font-semibold text-white">Step palette</p><p className="text-xs text-slate-400">Drag onto a step or wire, or click to add{at ? " after the selected step" : " at the end"}</p></div>
-                <button type="button" onClick={() => setPaletteOpen(false)} className="grid size-10 place-items-center rounded-lg text-slate-400 hover:bg-white/5 hover:text-white"><X className="size-4" /><span className="sr-only">Close step palette</span></button>
+                <button type="button" onClick={() => setPaletteOpen(false)} className="grid size-10 place-items-center rounded-lg text-slate-400 hover:bg-white/5 hover:text-white" title="Close the step palette"><X className="size-4" /><span className="sr-only">Close step palette</span></button>
               </div>
               <label className="relative block">
                 <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-500" />
@@ -501,7 +501,7 @@ function Canvas({ steps, onChange, renderEditor, saveButton }: CanvasProps) {
                       if (e.key === "Enter") { e.preventDefault(); if (hits[0]) jumpTo(hits[0].id); }
                     }}
                   />
-                  <button type="button" onClick={() => setFindOpen(false)} className="grid size-9 place-items-center rounded-lg text-slate-400 hover:bg-white/5 hover:text-white"><X className="size-4" /><span className="sr-only">Close find</span></button>
+                  <button type="button" onClick={() => setFindOpen(false)} className="grid size-9 place-items-center rounded-lg text-slate-400 hover:bg-white/5 hover:text-white" title="Close find"><X className="size-4" /><span className="sr-only">Close find</span></button>
                 </div>
                 {findQuery.trim() && (
                   <div className="mt-2 max-h-72 overflow-y-auto">
@@ -557,7 +557,7 @@ function Canvas({ steps, onChange, renderEditor, saveButton }: CanvasProps) {
         {inspectorOpen && (
           // w-96, not FlowBuilder's w-80: a Journey condition row (field, operator, value) needs the room.
           <aside className="w-96 shrink-0 overflow-y-auto border-l border-white/[0.08] bg-[#111614] max-lg:fixed max-lg:inset-x-0 max-lg:bottom-0 max-lg:z-[81] max-lg:max-h-[78dvh] max-lg:w-auto max-lg:rounded-t-3xl max-lg:border-t max-lg:shadow-[0_-24px_70px_rgba(0,0,0,.55)]">
-            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-white/[0.08] bg-[#111614]/95 px-4 py-3 backdrop-blur"><div><p className="text-sm font-semibold text-white">Inspector</p><p className="text-xs text-slate-400">Configure the selected step</p></div><button type="button" onClick={() => setInspectorOpen(false)} className="grid size-10 place-items-center rounded-lg text-slate-400 hover:bg-white/5 hover:text-white"><X className="size-4" /><span className="sr-only">Close inspector</span></button></div>
+            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-white/[0.08] bg-[#111614]/95 px-4 py-3 backdrop-blur"><div><p className="text-sm font-semibold text-white">Inspector</p><p className="text-xs text-slate-400">Configure the selected step</p></div><button type="button" onClick={() => setInspectorOpen(false)} className="grid size-10 place-items-center rounded-lg text-slate-400 hover:bg-white/5 hover:text-white" title="Close the inspector"><X className="size-4" /><span className="sr-only">Close inspector</span></button></div>
             <div className="space-y-5 p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
               {!at ? (
                 <p className="text-sm leading-6 text-slate-400">Select a step to edit it. Add steps from the Nodes palette. Drag from a step&apos;s output handle — or a branch&apos;s — onto another step to move that step there.</p>
@@ -571,8 +571,8 @@ function Canvas({ steps, onChange, renderEditor, saveButton }: CanvasProps) {
                   <div className="grid grid-cols-2 gap-2 border-t border-white/[0.08] pt-4">
                     <button type="button" className="btn-secondary btn-sm" onClick={() => add("wait", { list: at.list, index: at.index })}><Plus className="size-3.5" />Step before</button>
                     <button type="button" className="btn-secondary btn-sm" onClick={() => add("wait", { list: at.list, index: at.index + 1 })}><Plus className="size-3.5" />Step after</button>
-                    <button type="button" className="btn-secondary btn-sm" disabled={at.index === 0} onClick={() => apply(moveStep(steps, at.step.id, at.list, at.index - 1))}><ArrowUp className="size-3.5" />Earlier</button>
-                    <button type="button" className="btn-secondary btn-sm" disabled={at.index === siblings.length - 1} onClick={() => apply(moveStep(steps, at.step.id, at.list, at.index + 2))}><ArrowDown className="size-3.5" />Later</button>
+                    <button type="button" className="btn-secondary btn-sm" disabled={at.index === 0} title={at.index === 0 ? "Already the first step" : undefined} onClick={() => apply(moveStep(steps, at.step.id, at.list, at.index - 1))}><ArrowUp className="size-3.5" />Earlier</button>
+                    <button type="button" className="btn-secondary btn-sm" disabled={at.index === siblings.length - 1} title={at.index === siblings.length - 1 ? "Already the last step" : undefined} onClick={() => apply(moveStep(steps, at.step.id, at.list, at.index + 2))}><ArrowDown className="size-3.5" />Later</button>
                   </div>
                   <button
                     type="button"
