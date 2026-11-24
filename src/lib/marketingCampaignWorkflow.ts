@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { basePrisma } from "./db";
 import { assertCampaignTransition, isCampaignLaunchable, parseCampaignStatus } from "./campaignLifecycle";
-import { readCampaignDraftRecord } from "./marketingCampaignDrafts";
+import { campaignAudienceFor, readCampaignDraftRecord } from "./marketingCampaignDrafts";
 import { resolveContacts, newToken, type SegmentCriteria } from "./campaigns";
 import { evaluateAudience, validateAudienceTree, type AudienceGroup } from "./marketingAudiences";
 // Every refusal below is something the reviewer/sender can act on (approving your
@@ -44,7 +44,8 @@ export async function campaignQa(id: string, tenantId: string | null): Promise<C
   if (campaign.channel === "email" && !campaign.subject?.trim()) issues.push({ code: "subject", message: "Email campaigns require a subject", severity: "error" });
   const content = campaign.channel === "email" ? campaign.htmlBody ?? campaign.body : campaign.body;
   if (!content.trim()) issues.push({ code: "content", message: "Campaign content cannot be blank", severity: "error" });
-  if (!campaign.audience.trim() || campaign.audience === "Audience not selected") issues.push({ code: "audience", message: "Choose a valid audience", severity: "error" });
+  // A SAVED audience, still there and not archived — a label alone used to pass, and the send then went to everyone.
+  if (!(await campaignAudienceFor(campaign.segmentId, tenantId)).segmentId) issues.push({ code: "audience", message: "Choose a saved audience", severity: "error" });
   if (!validUrl(campaign.landingPageUrl)) issues.push({ code: "landing_url", message: "Landing page URL is invalid", severity: "error" });
   if (!validUrl(campaign.primaryCtaUrl)) issues.push({ code: "cta_url", message: "CTA URL is invalid", severity: "error" });
   for (const variable of mergeVariables(`${campaign.subject ?? ""}\n${campaign.body}\n${campaign.htmlBody ?? ""}`)) {
@@ -217,8 +218,11 @@ async function resolveCampaignAudience(args: { campaignId: string; tenantId: str
   const campaign = campaigns[0];
   if (!campaign) throw new ActionRefusal("Campaign not found");
 
+  // No saved audience → refused. This used to fall back to the campaign's own (empty) snapshot, which resolved as no
+  // rules at all: every contact who accepts marketing on the channel.
+  if (!campaign.segmentId) throw new ActionRefusal("Choose a saved audience for this campaign before it is scheduled or queued");
   let definition: AudienceDefinition;
-  if (campaign.segmentId) {
+  {
     const segments = await basePrisma.$queryRaw<Array<{ criteria: unknown; ruleTree: unknown; latestVersion: number | null }>>`
       SELECT s."criteria", s."ruleTree",
         (SELECT MAX(v."version") FROM "MarketingAudienceVersion" v
@@ -239,19 +243,14 @@ async function resolveCampaignAudience(args: { campaignId: string; tenantId: str
       const criteria = parseJson(segment.criteria);
       definition = { kind: "legacy", segmentId: campaign.segmentId, definition: (criteria && typeof criteria === "object" ? criteria : {}) as SegmentCriteria, version: segment.latestVersion };
     }
-  } else {
-    const snapshot = parseJson(campaign.audienceSnapshot);
-    if (isAudienceGroup(snapshot)) {
-      validateAudienceTree(snapshot);
-      definition = { kind: "advanced", segmentId: null, definition: snapshot };
-    } else {
-      definition = { kind: "legacy", segmentId: null, definition: (snapshot && typeof snapshot === "object" ? snapshot : {}) as SegmentCriteria };
-    }
   }
 
+  // The workspace named explicitly, not taken from the ambient scope: a legacy audience resolves to nothing without one.
   const contacts = definition.kind === "advanced"
     ? await evaluateAudience(definition.definition as AudienceGroup, args.channel, args.tenantId)
-    : await resolveContacts(definition.definition as SegmentCriteria, args.channel);
+    : args.tenantId
+      ? await resolveContacts(args.tenantId, definition.definition as SegmentCriteria, args.channel)
+      : [];
   return { definition, contacts };
 }
 

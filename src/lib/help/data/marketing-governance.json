@@ -74,7 +74,7 @@
         "rows": [
           ["**1. Brief**", "**Campaign name**, **Objective**, **Offer**, **Landing page**, **CTA label** and **CTA URL** (the button), **Budget**, **Target leads**, **Target revenue**, **Success metric** and **Internal notes**. Budget and target revenue are typed in cents."],
           ["**2. Tracking and attribution**", "The tracking tags added to your links (**UTM source**, **medium**, **campaign**, **content**, **term**) and the **Attribution window (days)**. Missing tags are filled in for you when someone clicks."],
-          ["**3. Audience**", "The **Audience label**. The exact list of recipients is worked out and fixed when the approved campaign is scheduled or queued."],
+          ["**3. Audience**", "**Who receives it** — choose one of your saved audiences (build them under **Marketing → Audiences**). A campaign without a saved audience can't pass the check or be scheduled. The exact list of recipients is worked out and fixed when the approved campaign is scheduled or queued."],
           ["**4. Content**", "For email: **Subject**, **Preheader**, the email itself and a **Plain-text fallback**. For SMS: the **Message**."]
         ]
       },

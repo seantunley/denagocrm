@@ -43,7 +43,9 @@ function toForm(value: CampaignDraftEditorValue) {
   return form;
 }
 
-export default function CampaignDraftEditor({ initial }: { initial: CampaignDraftEditorValue }) {
+export type CampaignAudienceOption = { id: string; name: string; count: number | null };
+
+export default function CampaignDraftEditor({ initial, audiences }: { initial: CampaignDraftEditorValue; audiences: CampaignAudienceOption[] }) {
   const [value, setValue] = useState(initial);
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const first = useRef(true);
@@ -126,8 +128,27 @@ export default function CampaignDraftEditor({ initial }: { initial: CampaignDraf
 
       <section className="card space-y-4">
         <h2 className="font-semibold">3. Audience</h2>
-        <label className="space-y-1 block"><span className="label">Audience label</span><input className="input" value={value.audience} onChange={(e) => set("audience", e.target.value)} /></label>
-        <p className="text-xs text-muted-foreground">The exact resolved audience is frozen when the approved campaign is scheduled or queued.</p>
+        {/* A saved audience, never a typed label: a label with no audience behind it used to send to everyone. */}
+        <label className="space-y-1 block">
+          <span className="label">Who receives it</span>
+          <select
+            className="input"
+            value={value.segmentId ?? ""}
+            onChange={(e) => {
+              const picked = audiences.find((a) => a.id === e.target.value);
+              setValue((current) => ({ ...current, segmentId: picked?.id ?? null, audience: picked?.name ?? "" }));
+            }}
+          >
+            <option value="">Choose a saved audience…</option>
+            {audiences.map((a) => (
+              <option key={a.id} value={a.id}>{a.name}{a.count !== null ? ` (${a.count.toLocaleString()} last counted)` : ""}</option>
+            ))}
+          </select>
+        </label>
+        <p className="text-xs text-muted-foreground">
+          {audiences.length === 0 ? "You have no saved audiences yet. " : ""}
+          Build or change audiences under <a href="/marketing/audiences" className="text-primary hover:underline">Audiences</a>. Only people who accept marketing are included, and the exact list is fixed when the approved campaign is scheduled or queued.
+        </p>
       </section>
 
       <section className="card space-y-4">
