@@ -285,7 +285,8 @@ export function DashboardEditorProvider({
         // Materialise a generated dashboard before its first write. Once, and
         // only for a dashboard that has never been stored.
         if (!materialised.current) {
-          const claimed = await takeControl();
+          // By address: Home, or the role template being looked at.
+          const claimed = await takeControl(slug);
           if (claimed?.error) return { ok: false, message: claimed.error };
           materialised.current = true;
           // The row did not exist a moment ago, so this is the only revision

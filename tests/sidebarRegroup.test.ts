@@ -19,15 +19,18 @@ const PERSONAS: Record<string, { admin: boolean; perms: string[]; enabled?: Set<
   salesNoModules: { admin: false, perms: SALES, enabled: new Set() },
 };
 
-/** What buildNav on main (d9ae92b5) showed each persona, before the regroup — plus /finance (2026-11-16) for anyone with leads. */
+/**
+ * What buildNav on main (d9ae92b5) showed each persona, before the regroup — plus /finance (2026-11-16) for anyone with leads,
+ * and /d/command-centre (2026-11-24, the Command Centre template) for anyone who can open Reports.
+ */
 const BEFORE: Record<string, string[]> = {
-  owner: ["/", "/activities", "/assistant", "/audit", "/birthdays", "/bot-builder", "/calendar", "/cases", "/chatbot", "/competitors", "/contacts", "/d/home", "/data-quality", "/deliveries", "/document-studio", "/documents", "/email-signatures", "/finance", "/fleets", "/forecast", "/health", "/inbox", "/invoices", "/jobcards", "/jobcards/insights", "/journeys", "/leads", "/marketing/audiences", "/marketing/calendar", "/marketing/campaigns", "/marketing/overview", "/marketing/surveys", "/marketing/surveys/insights", "/marketing/templates", "/parts", "/quotes", "/referrals", "/repairs", "/reports", "/service-due", "/signatures", "/stock", "/targets", "/test-drives", "/today", "/vehicles", "/warranty", "/workshop-calendar"],
+  owner: ["/", "/activities", "/assistant", "/audit", "/birthdays", "/bot-builder", "/calendar", "/cases", "/chatbot", "/competitors", "/contacts", "/d/command-centre", "/d/home", "/data-quality", "/deliveries", "/document-studio", "/documents", "/email-signatures", "/finance", "/fleets", "/forecast", "/health", "/inbox", "/invoices", "/jobcards", "/jobcards/insights", "/journeys", "/leads", "/marketing/audiences", "/marketing/calendar", "/marketing/campaigns", "/marketing/overview", "/marketing/surveys", "/marketing/surveys/insights", "/marketing/templates", "/parts", "/quotes", "/referrals", "/repairs", "/reports", "/service-due", "/signatures", "/stock", "/targets", "/test-drives", "/today", "/vehicles", "/warranty", "/workshop-calendar"],
   sales: ["/", "/activities", "/assistant", "/birthdays", "/calendar", "/contacts", "/d/home", "/data-quality", "/documents", "/finance", "/health", "/inbox", "/leads", "/quotes", "/signatures", "/test-drives", "/today"],
   workshop: ["/", "/activities", "/assistant", "/calendar", "/cases", "/d/home", "/jobcards", "/jobcards/insights", "/parts", "/service-due", "/test-drives", "/vehicles", "/warranty", "/workshop-calendar"],
   marketing: ["/", "/d/home", "/documents", "/marketing/audiences", "/marketing/calendar", "/marketing/campaigns", "/marketing/overview", "/marketing/surveys", "/marketing/surveys/insights", "/marketing/templates", "/referrals"],
-  manager: ["/", "/assistant", "/audit", "/d/home", "/deliveries", "/document-studio", "/finance", "/fleets", "/forecast", "/invoices", "/journeys", "/leads", "/reports", "/stock", "/targets", "/today"],
+  manager: ["/", "/assistant", "/audit", "/d/command-centre", "/d/home", "/deliveries", "/document-studio", "/finance", "/fleets", "/forecast", "/invoices", "/journeys", "/leads", "/reports", "/stock", "/targets", "/today"],
   nobody: ["/", "/d/home"],
-  ownerNoModules: ["/", "/activities", "/audit", "/birthdays", "/calendar", "/contacts", "/d/home", "/data-quality", "/document-studio", "/documents", "/forecast", "/health", "/leads", "/quotes", "/repairs", "/reports", "/signatures", "/targets", "/today"],
+  ownerNoModules: ["/", "/activities", "/audit", "/birthdays", "/calendar", "/contacts", "/d/command-centre", "/d/home", "/data-quality", "/document-studio", "/documents", "/forecast", "/health", "/leads", "/quotes", "/repairs", "/reports", "/signatures", "/targets", "/today"],
   salesNoModules: ["/", "/activities", "/birthdays", "/calendar", "/contacts", "/d/home", "/data-quality", "/documents", "/health", "/leads", "/quotes", "/signatures", "/today"],
 };
 
@@ -47,7 +50,7 @@ test("pinned, then the groups in the order work happens", () => {
   assert.deepEqual(labels("customers"), ["Contacts", "Fleets", "Activities", "Customer Health", "Birthdays", "Documents"]);
   assert.deepEqual(labels("service"), ["Workshop calendar", "Job Cards", "Vehicles", "Service Due", "Warranty", "Parts"]);
   assert.deepEqual(labels("marketing"), ["Overview", "Campaigns", "Audiences", "Templates", "Calendar", "Surveys", "Survey insights", "Referrals"]);
-  assert.deepEqual(labels("insights"), ["Dashboards", "Reports", "Targets", "Forecast", "Workshop Insights", "Competitors", "Ask the CRM"]);
+  assert.deepEqual(labels("insights"), ["Dashboards", "Command Centre", "Reports", "Targets", "Forecast", "Workshop Insights", "Competitors", "Ask the CRM"]);
   assert.deepEqual(labels("automation"), ["Journeys", "Chatbot", "Flow builder"]);
   // "Email signatures": the Email signatures pack's page, owner only (2026-11-20).
   assert.deepEqual(labels("admin"), ["Document Studio", "Data quality", "Audit log", "Email signatures", "System repairs"]);

@@ -404,6 +404,8 @@ const EDGE_EXEMPT_NAV_ROUTES = new Set([
   "/audit",
   // Ask the CRM: page + action both requireAnyPermission on the link's keys.
   "/assistant",
+  // The Command Centre template: its page requireAnyPermission on the template's (= the link's) keys.
+  "/d/command-centre",
 ]);
 
 /**

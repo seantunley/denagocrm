@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { LayoutGrid } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { dashboardsForViewer, type LoadedDashboard } from "@/lib/dashboard/store";
+import { switcherEntries, type LoadedDashboard } from "@/lib/dashboard/store";
 import { viewerConditionContext } from "@/lib/dashboard/viewer";
 import { isTenantOwner } from "@/lib/auth";
 import { renderViewSlots, visibleViews } from "./DashboardView";
@@ -68,7 +68,8 @@ export default async function DashboardScreen({
    * view of either the role or the workspace.
    */
   const canPublish = await isTenantOwner();
-  const dashboards = await dashboardsForViewer();
+  // Stored dashboards plus the generated ones (Home, role templates) — see store.ts.
+  const dashboards = await switcherEntries();
   const views = visibleViews(dashboard.config, ctx);
 
   // No visible views at all is not an error — every tab may legitimately be

@@ -79,6 +79,11 @@ const SCREENS: ReadonlyArray<readonly [pattern: string, slug: string]> = [
   ["/cases/*", "cases-working-a-ticket"],
 
   // Oversight
+  ["/d/*", "dashboards-overview"],
+  ["/d/command-centre", "command-centre"],
+  ["/d/team", "command-centre"],
+  ["/d/sales-dashboard", "command-centre"],
+  ["/d/operations", "command-centre"],
   ["/reports", "reports-sales-dashboard"],
   ["/audit", "audit-event-log"],
   ["/trash", "trash-recycle-bin"],

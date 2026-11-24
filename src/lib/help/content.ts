@@ -5,6 +5,7 @@ import { HELP_CATEGORIES } from "./categories";
 import { gettingStartedArticles } from "./articles/getting-started";
 import { homeArticles } from "./articles/home";
 import { dashboardArticles } from "./articles/dashboards";
+import { commandCentreArticles } from "./articles/command-centre";
 import { tenantOnboardingArticles } from "./articles/tenant-onboarding";
 import { xAndAttentionArticles } from "./articles/x-and-attention";
 import { journeysArticles } from "./articles/journeys";
@@ -88,6 +89,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
   ...gettingStartedArticles,
   ...homeArticles,
   ...dashboardArticles,
+  ...commandCentreArticles,
   ...tenantOnboardingArticles,
   ...emailSignatureArticles,
   ...signatureBannerArticles,
