@@ -13,7 +13,7 @@ import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { basePrisma, prisma } from "@/lib/db";
 import { listActingTenantStaff } from "@/lib/tenantActor";
-import AssistantLearnedReview, { type LearnedNote } from "@/components/AssistantLearnedReview";
+import AssistantLearnedReview, { needsAttention, type LearnedNote } from "@/components/AssistantLearnedReview";
 import SectionTabs from "@/components/SectionTabs";
 import { TIDY_LAST_KEY, TIDY_SUMMARY_KEY } from "@/lib/assistantTidy";
 import { isExpired } from "@/lib/assistantMemory";
@@ -189,7 +189,7 @@ export default async function AssistantSettingsPage() {
       <SectionTabs
         label="Assistant settings"
         tabs={[
-          { id: "learned", label: "What it has learned", count: learned.filter((n) => n.status !== "approved").length },
+          { id: "learned", label: "What it has learned", count: learned.filter(needsAttention).length },
           { id: "personality", label: "Personality" },
           { id: "reach", label: "Reaching people" },
           { id: "results", label: "How it's doing" },

@@ -12,6 +12,8 @@ test("the address decides the tab, and anything unknown opens the first", () => 
   assert.equal(tabFromHash("#learned", IDS, "learned"), "learned", "links written before the tabs still land");
   assert.equal(tabFromHash("#nonsense", IDS, "learned"), "learned");
   assert.equal(tabFromHash("#%20advanced", IDS, "learned"), "advanced");
+  // A malformed fragment is a bad link, not a crash (review of #1223).
+  for (const bad of ["#%E0%A4%A", "#%", "#%zz", "#advanced%"]) assert.equal(tabFromHash(bad, IDS, "learned"), "learned", bad);
 });
 
 test("arrow keys move between tabs and wrap; other keys do nothing", () => {
@@ -29,7 +31,10 @@ test("every panel stays in the page, so a form in a hidden tab still saves", () 
   assert.match(tabs, /hidden=\{tab\.id !== active\}/);
   assert.match(tabs, /\{panels\[tab\.id\]\}/);
   assert.doesNotMatch(tabs, /tab\.id === active &&|active === tab\.id \?/, "panels are hidden, never unmounted");
-  assert.match(tabs, /window\.history\.replaceState\(null, "", `#\$\{id\}`\)/, "changing tab doesn't scroll the page");
+  // Each tab is its own history entry, so Back and Forward step through them; nothing scrolls (review of #1223).
+  assert.match(tabs, /if \(id !== active\) window\.history\.pushState\(null, "", `#\$\{id\}`\);/);
+  assert.doesNotMatch(tabs, /replaceState/);
+  assert.match(tabs, /window\.addEventListener\("popstate", onChange\);/);
 });
 
 test("the assistant settings page is five tabs, and every section it had is in one of them", () => {
@@ -62,6 +67,9 @@ test("the assistant settings page is five tabs, and every section it had is in o
 test("a settled entry is one line until opened; one waiting on the owner is shown in full", () => {
   const review = code("src/components/AssistantLearnedReview.tsx");
   assert.match(review, /return note\.status !== "approved" \|\| note\.expired \|\|/);
+  // The tab's badge counts with the same rule, so an expired or flagged approved entry is counted too (review of #1223).
+  assert.match(review, /export function needsAttention\(note: LearnedNote\): boolean/);
+  assert.match(code("src/app/(app)/settings/assistant/page.tsx"), /count: learned\.filter\(needsAttention\)\.length/);
   assert.match(review, /needsAttention\(note\) \? \(\s*<li key=\{note\.id\} className="space-y-2 py-3">\s*<NoteDetail note=\{note\} \/>/);
   assert.match(review, /<details className="group\/note">[\s\S]*<NoteDetail note=\{note\} settled \/>/);
   assert.match(review, /Number\(needsAttention\(b\)\) - Number\(needsAttention\(a\)\)/, "what's waiting comes first");

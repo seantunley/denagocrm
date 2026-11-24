@@ -8,9 +8,12 @@ export type SectionTab = { id: string; label: string; /** A number worth acting 
 
 const CHANGED = "section-tab-changed";
 function subscribe(onChange: () => void) {
+  // popstate: Back and Forward between tabs (pushState below adds no hashchange of its own).
+  window.addEventListener("popstate", onChange);
   window.addEventListener("hashchange", onChange);
   window.addEventListener(CHANGED, onChange);
   return () => {
+    window.removeEventListener("popstate", onChange);
     window.removeEventListener("hashchange", onChange);
     window.removeEventListener(CHANGED, onChange);
   };
@@ -33,8 +36,10 @@ export default function SectionTabs({ label, tabs, panels }: { label: string; ta
   const list = useRef<HTMLDivElement>(null);
 
   function open(id: string, focus = false) {
-    // replaceState, not `location.hash =`: that would scroll to the element with this id.
-    window.history.replaceState(null, "", `#${id}`);
+    // A NEW history entry per tab, so Back and Forward step through the tabs visited (review of #1223 — replaceState
+    // left Back jumping straight off the page). pushState, not `location.hash =`, which would also scroll to the
+    // element with this id. Choosing the tab already open adds nothing.
+    if (id !== active) window.history.pushState(null, "", `#${id}`);
     window.dispatchEvent(new Event(CHANGED));
     if (focus) list.current?.querySelector<HTMLButtonElement>(`[data-tab="${id}"]`)?.focus();
   }

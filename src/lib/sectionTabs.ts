@@ -5,7 +5,13 @@
  * and a link written before the page had tabs still lands in the right place.
  */
 export function tabFromHash(hash: string, ids: readonly string[], fallback: string): string {
-  const wanted = decodeURIComponent(hash.replace(/^#/, "")).trim();
+  let wanted: string;
+  try {
+    wanted = decodeURIComponent(hash.replace(/^#/, "")).trim();
+  } catch {
+    // A malformed fragment (`#%E0%A4%A`) is a bad link, not a reason to break the page: open the first tab (review of #1223).
+    return fallback;
+  }
   return ids.includes(wanted) ? wanted : fallback;
 }
 

@@ -126,8 +126,11 @@ export default function AssistantLearnedReview({ notes }: { notes: LearnedNote[]
   );
 }
 
-/** An entry is settled when it is approved, current and unflagged; anything else is waiting on the owner. */
-function needsAttention(note: LearnedNote): boolean {
+/**
+ * An entry is settled when it is approved, current and unflagged; anything else is waiting on the owner. The tab's
+ * badge counts with this too, so the number on the tab and the entries shown open below always agree (review of #1223).
+ */
+export function needsAttention(note: LearnedNote): boolean {
   return note.status !== "approved" || note.expired || (note.kind !== "playbook" && Boolean(note.description?.startsWith(FLAG_PREFIX)));
 }
 
