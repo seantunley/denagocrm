@@ -74,7 +74,7 @@ export function surveyDormantReason(survey: {
 /** What each trigger fires on, as a phrase that completes "… automatically X". */
 const TRIGGER_PHRASE: Record<string, string> = {
   job_complete: "when a job card is completed",
-  delivery: "when a cart is delivered",
+  delivery: "when a vehicle is delivered",
   won: "when a deal is won",
 };
 

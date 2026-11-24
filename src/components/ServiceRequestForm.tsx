@@ -18,7 +18,7 @@ export default function ServiceRequestForm({
     <form action={action} className="space-y-3">
       {vehicles.length > 0 && (
         <div>
-          <label className="label">Which cart?</label>
+          <label className="label">Which vehicle?</label>
           <select name="vehicleId" className="input" defaultValue="">
             <option value="">— select —</option>
             {vehicles.map((v) => (

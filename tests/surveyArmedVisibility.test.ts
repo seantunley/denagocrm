@@ -119,7 +119,7 @@ test("THE EDITOR NOTE DOES NOT CLAIM A DRAFT SENDS AUTOMATICALLY", () => {
 test("THE NOTE IS UNMISTAKABLE WHEN IT IS LIVE", () => {
   const live = surveyAutoSendNote({ ...ARMED, delayHours: 0 })!;
   assert.match(live, /LIVE/);
-  assert.match(live, /emails customers automatically when a cart is delivered/);
+  assert.match(live, /emails customers automatically when a vehicle is delivered/);
   assert.match(live, /nobody pressing send/);
 
   // The two states must not read the same — the whole failure was two different

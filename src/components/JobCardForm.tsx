@@ -88,7 +88,7 @@ export default function JobCardForm({
 
       <div className="flex items-start gap-2 rounded-xl border border-border bg-muted/25 px-3 py-2.5 text-xs leading-5 text-muted-foreground">
         <ShieldCheck className="mt-0.5 size-4 shrink-0 text-emerald-400" />
-        The job card opens in Waiting status and is assigned to you. Check-in photos, parts, labour and customer signature are added in the workspace.
+        The job card opens at the Booking stage and is assigned to you. Check-in photos, parts, labour and customer signature are added in the workspace.
       </div>
 
       <StickyActionArea className="justify-end">

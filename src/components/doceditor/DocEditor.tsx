@@ -297,7 +297,7 @@ export function DocEditor({
           ? email.frame
             ? `Published version ${result.version}. Every customer email now uses this frame.`
             : `Published version ${result.version}. Customers now get this email (once the email frame is published).`
-          : `Published version ${result.version}. Quotes now use this layout.`,
+          : `Published version ${result.version}. Documents of this type now use this layout.`,
       );
       for (const warning of result.warnings ?? []) toast.warning(warning);
     } catch (error) {

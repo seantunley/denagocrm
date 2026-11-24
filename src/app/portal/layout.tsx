@@ -28,7 +28,7 @@ export default async function PortalLayout({ children }: { children: React.React
             <BrandLogo
               logoUrl={brand.logoUrl}
               alt={brand.displayName}
-              className="h-7 w-auto object-contain sm:h-8"
+              className="h-auto max-h-10 w-auto max-w-[170px] object-contain sm:max-h-12 sm:max-w-[200px]"
             />
           </Link>
           <PortalNav mode="desktop" />

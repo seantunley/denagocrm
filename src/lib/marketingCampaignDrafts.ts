@@ -55,7 +55,8 @@ export function normaliseCampaignDraft(input: Record<string, unknown>): Campaign
     preheader: nullable(input.preheader),
     body: text(input.body),
     htmlBody: nullable(input.htmlBody),
-    audience: text(input.audience) || "Audience not selected",
+    // Replaced by campaignAudienceFor() before anything is stored: the label is the saved audience's name.
+    audience: text(input.audience) || NO_AUDIENCE,
     segmentId: nullable(input.segmentId),
     objective: nullable(input.objective),
     offer: nullable(input.offer),
@@ -78,13 +79,33 @@ export function normaliseCampaignDraft(input: Record<string, unknown>): Campaign
   };
 }
 
+export const NO_AUDIENCE = "Audience not selected";
+
+/**
+ * A campaign's audience is a SAVED audience of this workspace, and its label is that audience's name — never free text
+ * (2026-11-24: a typed label passed the checks and a campaign with no saved audience was worked out from empty rules,
+ * i.e. everyone who accepts marketing). An id that isn't this workspace's, or is archived, is dropped.
+ */
+export async function campaignAudienceFor(segmentId: string | null | undefined, tenantId: string | null): Promise<{ segmentId: string | null; audience: string }> {
+  if (!segmentId) return { segmentId: null, audience: NO_AUDIENCE };
+  const rows = await basePrisma.$queryRaw<Array<{ id: string; name: string }>>`
+    SELECT "id", "name" FROM "Segment"
+    WHERE "id" = ${segmentId}
+      AND "tenantId" IS NOT DISTINCT FROM ${tenantId}
+      AND COALESCE("status", 'active') <> 'archived'
+    LIMIT 1
+  `;
+  return rows[0] ? { segmentId: rows[0].id, audience: rows[0].name } : { segmentId: null, audience: NO_AUDIENCE };
+}
+
 export async function createCampaignDraftRecord(args: {
   tenantId: string | null;
   userId: string;
   input?: Record<string, unknown>;
 }) {
   const id = `cmp_${crypto.randomUUID()}`;
-  const draft = normaliseCampaignDraft(args.input ?? {});
+  const normalised = normaliseCampaignDraft(args.input ?? {});
+  const draft = { ...normalised, ...(await campaignAudienceFor(normalised.segmentId, args.tenantId)) };
   await basePrisma.$executeRaw`
     INSERT INTO "Campaign" (
       "id", "tenantId", "name", "channel", "subject", "preheader", "body", "htmlBody",
@@ -127,7 +148,8 @@ export async function updateCampaignDraftRecord(args: {
   const existing = await readCampaignDraftRecord(args.id, args.tenantId);
   if (!existing) throw new Error("Campaign not found");
   if (!isCampaignEditable(parseCampaignStatus(existing.status))) throw new Error("This campaign is locked and must be returned to draft before editing");
-  const draft = normaliseCampaignDraft({ ...existing, ...args.input });
+  const normalised = normaliseCampaignDraft({ ...existing, ...args.input });
+  const draft = { ...normalised, ...(await campaignAudienceFor(normalised.segmentId, args.tenantId)) };
   await basePrisma.$executeRaw`
     UPDATE "Campaign" SET
       "name" = ${draft.name}, "channel" = ${draft.channel}, "subject" = ${draft.subject},

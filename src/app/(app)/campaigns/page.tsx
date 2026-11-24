@@ -43,6 +43,7 @@ import {
 } from "@/components/visual-system";
 import { WorkspaceHero } from "@/components/workspace-hero";
 import RecordContextMenu from "@/components/RecordContextMenu";
+import { workspaceRegions } from "@/lib/regions";
 
 // Read-only compatibility screen: campaign creation and launch now live under
 // the governed Marketing → Campaigns workspace, so no bulk send runs here.
@@ -57,7 +58,7 @@ function criteriaSummary(criteria: SegmentCriteria): string {
   if (criteria.source) parts.push(`Source: ${criteria.source}`);
   if (criteria.tagId) parts.push("Tagged");
   if (criteria.province) parts.push(criteria.province);
-  if (criteria.hasVehicle) parts.push("Owns a cart");
+  if (criteria.hasVehicle) parts.push("Owns a vehicle");
   if (criteria.serviceDue) parts.push("Service due");
   if (criteria.wonOnly) parts.push("Bought before");
   return parts.join(" · ") || "All opted-in subscribers";
@@ -479,7 +480,7 @@ export default async function CampaignsPage({
 
   const audiences = (
     <div className="space-y-6">
-      <SegmentBuilder tags={tags.map((tag) => ({ id: tag.id, name: tag.name }))} />
+      <SegmentBuilder tags={tags.map((tag) => ({ id: tag.id, name: tag.name }))} regions={await workspaceRegions(tenantId)} />
       <div>
         <SectionHeading
           title="Saved audiences"

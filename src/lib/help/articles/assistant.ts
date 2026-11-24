@@ -1,6 +1,6 @@
 import type { HelpArticle } from "../types";
 
-export const daxArticles: HelpArticle[] = [
+export const assistantArticles: HelpArticle[] = [
   // ── The assistant ("Ask the CRM") ─────────────────────────────────────
   {
     slug: "assistant-ask-the-crm",
@@ -8,9 +8,9 @@ export const daxArticles: HelpArticle[] = [
     summary: "Ask questions about your leads, quotes, diary and customers in plain words, and get an answer drawn from your own records.",
     category: "automation",
     audience: "everyone",
-    keywords: ["assistant", "ask the crm", "DAX", "AI", "chat", "bubble", "question", "voice", "microphone", "screenshot"],
+    keywords: ["assistant", "ask the crm", "AI", "chat", "bubble", "question", "voice", "microphone", "screenshot"],
     body: [
-      { type: "p", text: "**Ask the CRM** is an assistant that reads your CRM for you. Ask it something like \"Which deals should I chase today, and why?\" and it looks up the records, then tells you what it found and what it would do. Your workspace owner can give it its own name (for example DAX), so the page may be titled **Ask** followed by that name." },
+      { type: "p", text: "**Ask the CRM** is an assistant that reads your CRM for you. Ask it something like \"Which deals should I chase today, and why?\" and it looks up the records, then tells you what it found and what it would do. Your workspace owner can give it its own name under **Settings → Assistant**, so the page may be titled **Ask** followed by that name. This guide calls it **the assistant**." },
       { type: "h", text: "Where to find it" },
       { type: "list", items: [
         "**The Ask the CRM button at the bottom of the sidebar.** Click it to open a small chat window on any page, and click it again (or press Escape) to close it. It knows which page you are on, so on a lead you can simply ask \"What should I do with this one?\".",
@@ -141,7 +141,7 @@ export const daxArticles: HelpArticle[] = [
     summary: "A short list on the home screen showing what needs your attention today, in a fixed order of importance.",
     category: "automation",
     audience: "everyone",
-    keywords: ["daily brief", "home screen", "needs attention", "morning", "what to do today", "plan my day", "team brief", "Ask DAX for a plan"],
+    keywords: ["daily brief", "home screen", "needs attention", "morning", "what to do today", "plan my day", "team brief", "ask for a plan"],
     body: [
       { type: "p", text: "On the home screen, a brief sums up your day in one line — for example \"6 things need your attention.\" — followed by a short list. It is there for anyone who can see leads, as long as the Automation & AI module is on." },
       { type: "callout", tone: "info", text: "The brief is worked out from fixed rules over your records. It is not written by AI, so the counts are exact and the same facts always give the same brief." },
@@ -150,7 +150,7 @@ export const daxArticles: HelpArticle[] = [
         "**Customers waiting for a reply.** The customer who has waited longest is named.",
         "**Today.** Meetings, test drives and other tasks still ahead of you today.",
         "**Overdue follow-ups.**",
-        "**Nurture reviews due** — deals parked in Nurture whose review day has come, with why each was parked, what the customer wanted and when to follow up. One whose review day has passed stays on the list, marked overdue, until somebody acts on it. Ask DAX to bring it back and it prepares a **Reactivate** card showing the stage and the next action. Nothing changes until you press Confirm, and the customer is not contacted.",
+        "**Nurture reviews due** — deals parked in Nurture whose review day has come, with why each was parked, what the customer wanted and when to follow up. One whose review day has passed stays on the list, marked overdue, until somebody acts on it. Ask the assistant to bring it back and it prepares a **Reactivate** card showing the stage and the next action. Nothing changes until you press Confirm, and the customer is not contacted.",
         "**Deals that look close** — the customer opened the quote recently, or replied and you answered.",
         "**Quotes expiring.**",
         "**Quotes opened but not signed.**",
@@ -168,16 +168,16 @@ export const daxArticles: HelpArticle[] = [
       { type: "h", text: "The buttons" },
       { type: "list", items: [
         "**Review all** opens the Today page, where every deal worth contacting is ranked.",
-        "**Ask DAX for a plan** opens the assistant and asks it to go through what needs your attention and tell you what to do first.",
+        "**Ask … for a plan** (with your assistant's name) opens the assistant and asks it to go through what needs your attention and tell you what to do first.",
       ] },
       { type: "h", text: "The Team section" },
       { type: "p", text: "Workspace owners, and people who manage a team, also get a **Team** section they can open. It shows one row per salesperson: how many customers are waiting on them, how many follow-ups are overdue, the value of their stalled deals and the value of their open deals. A team manager sees their own team members; an owner sees everyone." },
       { type: "callout", tone: "tip", text: "The brief only ever counts deals you are allowed to see. If the brief cannot be worked out for some reason, it is simply left off and the rest of your home screen still loads." },
       { type: "h", text: "Lost deals that aren't really lost" },
-      { type: "p", text: "Ask DAX \"which lost deals are still alive?\" and it lists deals marked lost in the last 90 days for a went-quiet or timing reason — \"gone cold\", \"stopped responding\", \"buying next year\" — where the customer has since sent a message or opened a quote. For each, it says when and why the deal was lost and what the customer did since." },
+      { type: "p", text: "Ask the assistant \"which lost deals are still alive?\" and it lists deals marked lost in the last 90 days for a went-quiet or timing reason — \"gone cold\", \"stopped responding\", \"buying next year\" — where the customer has since sent a message or opened a quote. For each, it says when and why the deal was lost and what the customer did since." },
       { type: "list", items: [
-        "On the first working day of each month, DAX's morning brief adds this list for your own deals.",
-        "DAX offers one card per deal: **Park in Nurture** (it asks why and when to look again) or **Reopen** (the deal goes back to the stage it was in). Nothing changes until you press Confirm, and the customer is not contacted.",
+        "On the first working day of each month, the assistant's morning brief adds this list for your own deals.",
+        "The assistant offers one card per deal: **Park in Nurture** (it asks why and when to look again) or **Reopen** (the deal goes back to the stage it was in). Nothing changes until you press Confirm, and the customer is not contacted.",
         "A deal lost because the customer bought elsewhere or found it too expensive is not listed. The reason is read from the words typed when it was marked lost.",
       ] },
     ],
@@ -194,7 +194,7 @@ export const daxArticles: HelpArticle[] = [
       { type: "h", text: "Link your phone" },
       { type: "steps", items: [
         "Open **Automation → Ask the CRM** and find the card named after your assistant followed by **on WhatsApp**. If the card is not there, the owner has not switched the feature on, or WhatsApp is not connected.",
-        "Press **Link my WhatsApp**. A short code appears, in the form of the word DAX followed by six digits.",
+        "Press **Link my WhatsApp**. A short code appears: a word followed by six digits.",
         "Send exactly that text to the business WhatsApp number from the phone you want to link, within 15 minutes. **Open WhatsApp with the code** does this for you on the device you are using.",
         "Press **I've sent it — check**. Once linked, the card shows **Linked** and the last digits of your number, and the assistant replies on your phone to say so.",
       ] },

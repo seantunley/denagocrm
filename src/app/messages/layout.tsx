@@ -1,7 +1,8 @@
 import type { Metadata, Viewport } from "next";
 import Image from "next/image";
 import { requireUser, getActiveTenantId } from "@/lib/auth";
-import { brandForTenant, brandLogoUrl, DEFAULT_BRAND } from "@/lib/tenantBrand";
+import { brandForTenant, brandIcons, brandLogoUrl, DEFAULT_BRAND } from "@/lib/tenantBrand";
+import { manifestHref } from "@/lib/installedApp";
 import { PLATFORM_NAME } from "@/lib/platformIdentity";
 import { BrandMark } from "@/components/BrandLogo";
 import { assertPathModuleEnabled } from "@/lib/modules/routeGuard";
@@ -18,12 +19,11 @@ export async function generateMetadata(): Promise<Metadata> {
     .then(brandForTenant)
     .catch(() => DEFAULT_BRAND);
   const title = `${brand.tenantId ? brand.displayName : PLATFORM_NAME} Messages`;
-  const logo = brandLogoUrl(brand);
   return {
     title,
-    manifest: "/messages/manifest.webmanifest",
+    manifest: manifestHref("/messages/manifest.webmanifest", brand.tenantId),
     appleWebApp: { capable: true, title, statusBarStyle: "black-translucent" },
-    icons: logo ? { icon: logo, apple: logo } : { apple: "/icons/messages-apple-180.png" },
+    icons: brand.tenantId ? brandIcons(brand) : { apple: "/icons/messages-apple-180.png" },
   };
 }
 

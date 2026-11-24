@@ -5,6 +5,7 @@ import { requireContactAccess } from "@/lib/permissions";
 import { listActingTenantStaff } from "@/lib/tenantActor";
 import ContactForm from "@/components/ContactForm";
 import { fleetPicker } from "@/lib/fleetDirectory";
+import { workspaceRegions } from "@/lib/regions";
 import { contactName } from "@/lib/format";
 
 export default async function EditContactPage({
@@ -35,6 +36,7 @@ export default async function EditContactPage({
     fleetPicker(),
   ]);
   if (!contact) notFound();
+  const regions = await workspaceRegions(contact.tenantId);
 
   return (
     <div className="space-y-5">
@@ -45,6 +47,7 @@ export default async function EditContactPage({
         submitLabel="Save changes"
         users={users.map((u) => ({ id: u.id, name: u.name }))}
         fleetPicker={picker}
+        regions={regions}
       />
     </div>
   );

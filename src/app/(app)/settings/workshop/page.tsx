@@ -213,7 +213,7 @@ export default async function WorkshopSettingsPage() {
                     </select>
                     <input name="description" required placeholder="Description" className="input flex-1 min-w-40" />
                     <input name="qty" type="number" min={0.5} step={0.5} defaultValue={1} className="input w-20 tabular-nums" />
-                    <input name="unitPrice" inputMode="decimal" placeholder="Unit R" className="input w-24 tabular-nums" />
+                    <input name="unitPrice" inputMode="decimal" placeholder={`Unit ${currencySymbol(moneyFmt)}`} className="input w-24 tabular-nums" />
                     <SaveButton className="btn-secondary btn-sm">Add item</SaveButton>
                   </SaveForm>
                 </div>

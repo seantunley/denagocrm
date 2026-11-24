@@ -1,7 +1,9 @@
 import { headers } from "next/headers";
-import { DEFAULT_BRAND, brandForHost, brandForTenant, brandLogoUrl, brandStyle, type TenantBrand } from "./tenantBrand";
+import { DEFAULT_BRAND, brandForHost, brandForTenant, brandIcons, brandLogoUrl, brandStyle, type TenantBrand } from "./tenantBrand";
 import { PLATFORM, isPlatformHost } from "./platformLegal";
 import { LOGIN_DEFAULTS, loginImageUrl, type LoginLook } from "./loginLook";
+import { SIGN_IN_WORKSPACE_PARAM, brandForSignInSlug } from "./signInWorkspace";
+import type { Metadata } from "next";
 
 /**
  * The brand for a LOGIN page, resolved from the hostname the request arrived on.
@@ -106,10 +108,36 @@ export function toLoginBrand(brand: TenantBrand): LoginBrand {
  * nonce-based CSP. There is no static variant of these pages to be served to the
  * wrong tenant.
  */
-export async function loginBrand(): Promise<LoginBrand> {
+export type SignInSearch = Promise<Record<string, string | string[] | undefined>>;
+
+/** The workspace a sign-in link names (?w=<slug>), as typed; checked by brandForSignInSlug. Never throws. */
+export async function signInWorkspaceFrom(searchParams: SignInSearch): Promise<string | undefined> {
+  try {
+    const value = (await searchParams)[SIGN_IN_WORKSPACE_PARAM];
+    return typeof value === "string" ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The tab title and icon for a workspace's own sign-in link — only on an address no workspace owns. Never throws. */
+export async function loginMetadata(workspace: string | undefined): Promise<Metadata> {
+  try {
+    if (!workspace || (await brandForHost((await headers()).get("host"))).tenantId) return {};
+    const brand = await brandForSignInSlug(workspace);
+    return brand ? { title: brand.displayName, icons: brandIcons(brand) } : {};
+  } catch {
+    return {};
+  }
+}
+
+export async function loginBrand(workspace?: string): Promise<LoginBrand> {
   try {
     const host = (await headers()).get("host");
-    const brand = toLoginBrand(await brandForHost(host));
+    const hostBrand = await brandForHost(host);
+    // A workspace's own sign-in link (lib/signInWorkspace.ts) — only where the address belongs to no workspace.
+    const named = !hostBrand.tenantId && workspace ? await brandForSignInSlug(workspace) : null;
+    const brand = toLoginBrand(named ?? hostBrand);
     // The platform's own address names the platform (Meta's reviewers land here) and links its legal pages.
     // Only when no workspace claimed the host, so a tenant's own domain is never relabelled.
     return !brand.branded && isPlatformHost(host)

@@ -77,7 +77,7 @@ export default async function ServiceDuePage() {
         })}</MobileDataList>}
         desktop={<div className="card p-0 overflow-x-auto">
         <table className="table-base">
-          <thead><tr><th>Cart</th><th>Owner</th><th>Status</th><th>Due</th><th className="text-right">Km left</th><th>Last service</th><th /></tr></thead>
+          <thead><tr><th>Vehicle</th><th>Owner</th><th>Status</th><th>Due</th><th className="text-right">Km left</th><th>Last service</th><th /></tr></thead>
           <tbody>
             {rows.length === 0 && <tr><td colSpan={7} className="text-center text-slate-400 py-8">Nothing accessible is due right now.</td></tr>}
             {rows.map(({ vehicle, due }) => {

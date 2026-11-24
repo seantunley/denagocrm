@@ -49,7 +49,7 @@ export default async function FleetsPage() {
       <Surface className="p-5">
         <SectionHeading title={<span className="inline-flex items-center gap-2"><Plus className="size-4 text-primary" /> Create a fleet</span>} description="Open a managed account and optionally connect its primary customer contact." />
         <form action={createFleet} className="mt-4 grid gap-2 sm:grid-cols-3">
-          <input name="name" className="input" placeholder="Fleet name (e.g. De Zalze Estate)" required />
+          <input name="name" className="input" placeholder="Fleet name (e.g. Lakeside Estate)" required />
           <select name="type" className="input" defaultValue={DEFAULT_FLEET_TYPE}>
             {FLEET_TYPES.map((t) => (
               <option key={t} value={t}>
@@ -87,7 +87,7 @@ export default async function FleetsPage() {
             <tr>
               <th>Fleet</th>
               <th>Type</th>
-              <th className="text-right">Carts</th>
+              <th className="text-right">Vehicles</th>
             </tr>
           </thead>
           <tbody>

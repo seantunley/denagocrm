@@ -118,7 +118,7 @@ export default function QuickActions({
                 </DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => go("/vehicles")}>
                   <BatteryCharging className="size-4" />Log battery check
-                  <DropdownMenuShortcut>pick cart</DropdownMenuShortcut>
+                  <DropdownMenuShortcut>pick vehicle</DropdownMenuShortcut>
                 </DropdownMenuItem>
               </>
             )}

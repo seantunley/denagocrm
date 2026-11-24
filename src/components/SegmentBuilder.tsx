@@ -7,20 +7,10 @@ import { ACTION_NOT_DELIVERED } from "@/components/actionError";
 import { Filter, Save, ScanSearch, UsersRound } from "lucide-react";
 import { previewAudience, saveSegment } from "@/app/actions/campaigns";
 import { SectionHeading, StatusPill, Surface } from "@/components/visual-system";
+import type { WorkspaceRegions } from "@/lib/regions";
 
 type Tag = { id: string; name: string };
 
-const PROVINCES = [
-  "Western Cape",
-  "Eastern Cape",
-  "Northern Cape",
-  "Gauteng",
-  "KwaZulu-Natal",
-  "Free State",
-  "North West",
-  "Limpopo",
-  "Mpumalanga",
-];
 const SOURCES = ["manual", "facebook", "instagram", "website", "whatsapp"];
 
 type Criteria = {
@@ -41,7 +31,7 @@ const EMPTY: Criteria = {
   wonOnly: false,
 };
 
-export default function SegmentBuilder({ tags }: { tags: Tag[] }) {
+export default function SegmentBuilder({ tags, regions }: { tags: Tag[]; regions: WorkspaceRegions }) {
   const router = useRouter();
   const [criteria, setCriteria] = useState<Criteria>(EMPTY);
   const [name, setName] = useState("");
@@ -149,29 +139,29 @@ export default function SegmentBuilder({ tags }: { tags: Tag[] }) {
             ))}
           </select>
         </div>
-        <div>
-          <label className="label" htmlFor="audience-province">Province</label>
+        {regions.options.length > 0 && <div>
+          <label className="label" htmlFor="audience-province">{regions.label}</label>
           <select
             id="audience-province"
             className="input"
             value={criteria.province}
             onChange={(event) => setCriteria({ ...criteria, province: event.target.value })}
           >
-            <option value="">Any province</option>
-            {PROVINCES.map((province) => (
+            <option value="">Any {regions.label.toLowerCase()}</option>
+            {regions.options.map((province) => (
               <option key={province} value={province}>
                 {province}
               </option>
             ))}
           </select>
-        </div>
+        </div>}
       </div>
 
       <fieldset className="mt-5">
         <legend className="label">Lifecycle signals</legend>
         <div className="grid gap-2 sm:grid-cols-3">
           <SignalChoice
-            label="Owns a cart"
+            label="Owns a vehicle"
             description="Has a vehicle on record"
             checked={criteria.hasVehicle}
             onChange={(checked) => setCriteria({ ...criteria, hasVehicle: checked })}

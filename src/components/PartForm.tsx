@@ -75,7 +75,7 @@ export default function PartForm({
             required
             value={name}
             onChange={(event) => setName(event.target.value)}
-            placeholder="e.g. Rover brake pad set"
+            placeholder="e.g. Front brake pad set"
           />
         </CaptureField>
         <CaptureField label="SKU / part code" hint="Use the supplier or internal stock code.">

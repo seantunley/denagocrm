@@ -13,7 +13,7 @@ import { dealFinanceArticles } from "./articles/deal-finance";
 import { offlineChecklistArticles } from "./articles/offline-checklists";
 import { documentStudioArticles } from "./articles/document-studio";
 import { signingAndInboxArticles } from "./articles/signing-and-inbox";
-import { daxArticles } from "./articles/dax";
+import { assistantArticles } from "./articles/assistant";
 import { chatbotArticles } from "./articles/chatbot";
 import { todayAndLeadScoreArticles } from "./articles/today-and-lead-scores";
 import { dealWorkspaceArticles } from "./articles/deal-workspace";
@@ -118,7 +118,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
   ...documentStudioArticles.filter((article) => article.category !== "documents"),
   ...signingAndInboxArticles.filter((article) => article.category !== "sales" && article.category !== "comms"),
   // Once one file (assistant-and-more.ts), split by topic on 2026-11-16 — the same articles in the same order.
-  ...daxArticles,
+  ...assistantArticles,
   ...chatbotArticles,
   ...todayAndLeadScoreArticles,
   ...dealWorkspaceArticles,

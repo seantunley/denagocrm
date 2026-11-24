@@ -204,7 +204,7 @@ export default async function PortalHome() {
                   {fleets.map((fleet) => (
                     <li key={fleet.id} className="text-sm flex justify-between gap-3">
                       <span>{fleet.name}</span>
-                      <span className="text-slate-500">{fleet.vehicles.length} carts · {scope.roleByFleetId.get(fleet.id) ?? "viewer"}</span>
+                      <span className="text-slate-500">{fleet.vehicles.length} vehicles · {scope.roleByFleetId.get(fleet.id) ?? "viewer"}</span>
                     </li>
                   ))}
                 </ul>
@@ -239,7 +239,7 @@ export default async function PortalHome() {
       <section className="space-y-3">
         <div><Eyebrow>Your garage</Eyebrow><h2 className="mt-1 text-lg font-semibold">{warrantyOn ? "Vehicles, service and warranty" : "Vehicles and service"}</h2></div>
         {vehicles.length === 0 ? (
-          <div className="card text-sm text-slate-400">No carts are currently available in your portal.</div>
+          <div className="card text-sm text-slate-400">No vehicles are currently available in your portal.</div>
         ) : vehicles.map((vehicle) => {
           const due = computeDue(vehicle);
           const warranty = computeWarranty(vehicle);

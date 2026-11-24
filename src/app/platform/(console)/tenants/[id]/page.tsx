@@ -23,8 +23,11 @@ import { formatDateTime } from "@/lib/format";
 import { MODULE_REGISTRY } from "@/lib/modules/registry";
 import { parseModuleCsv } from "@/lib/modules/entitlement";
 import { brandFromRow, brandLogoUrl } from "@/lib/tenantBrand";
+import { appIconUrl } from "@/lib/appIcon";
+import { clearTenantAppIconAction, setTenantAppIconAction } from "@/app/actions/workspaceIcon";
 import { parseLoginLook } from "@/lib/loginLook";
 import LoginLookEditor from "@/components/branding/LoginLookEditor";
+import { signInLinkFor } from "@/lib/signInWorkspace";
 import { savePlatformLoginLookAction } from "@/app/actions/loginLook";
 import {
   setTenantBrandAction,
@@ -133,6 +136,7 @@ export default async function TenantProfilePage({
       createdAt: true,
       brandPrimary: true,
       brandLogoRef: true,
+      brandIconRef: true,
       brandDisplayName: true,
       brandTagline: true,
       loginJson: true,
@@ -143,6 +147,7 @@ export default async function TenantProfilePage({
     },
   });
   if (!tenant) notFound();
+  const signInLink = await signInLinkFor(tenant);
 
   // What the login page will actually render for this tenant — resolved through
   // the same brandFromRow the page itself uses, so the preview cannot drift from
@@ -151,6 +156,7 @@ export default async function TenantProfilePage({
     tenantId: tenant.id,
     brandPrimary: tenant.brandPrimary,
     brandLogoRef: tenant.brandLogoRef,
+    brandIconRef: tenant.brandIconRef,
     brandDisplayName: tenant.brandDisplayName,
     brandTagline: tenant.brandTagline,
   });
@@ -568,6 +574,23 @@ export default async function TenantProfilePage({
                         </SaveButton>
                       </SaveForm>
                     )}
+                    {/* The square app icon (lib/appIcon.ts): tab, installed app, notifications. */}
+                    <div className="flex items-center gap-3 border-t border-border/60 pt-3">
+                      {/* eslint-disable-next-line @next/next/no-img-element -- drawn by /api/brand/icon */}
+                      <img src={appIconUrl(brand, 192)} alt="" className="size-12 rounded-lg border border-border" />
+                      <p className="text-xs text-muted-foreground">
+                        App icon — {brand.iconRef ? "its own" : brand.logoRef ? "made from the logo" : "the platform's"}. Square, at least 192 × 192.
+                      </p>
+                    </div>
+                    <SaveForm action={setTenantAppIconAction.bind(null, tenant.id)} success="App icon updated" resetOnSuccess={false} className="flex items-center gap-2">
+                      <input type="file" name="icon" accept="image/png,image/jpeg,image/webp" className="input flex-1" />
+                      <SaveButton className="btn-secondary btn-sm">Upload icon</SaveButton>
+                    </SaveForm>
+                    {brand.iconRef && (
+                      <SaveForm action={clearTenantAppIconAction.bind(null, tenant.id)} success="App icon removed" resetOnSuccess={false}>
+                        <SaveButton className="btn-ghost btn-sm text-muted-foreground">Remove app icon</SaveButton>
+                      </SaveForm>
+                    )}
                   </div>
 
                   <div className="card p-5 space-y-3">
@@ -644,7 +667,11 @@ export default async function TenantProfilePage({
                 <div className="card p-5 lg:col-span-2">
                   <h2 className="font-semibold">Sign-in screen</h2>
                   <p className="mb-4 mt-0.5 text-xs text-muted-foreground">
-                    How this workspace&apos;s sign-in page greets staff on a verified hostname. Its owner can also edit this.
+                    How this workspace&apos;s sign-in page greets staff. Its owner can also edit this.
+                  </p>
+                  <p className="mb-4 text-xs">
+                    Sign-in link:{" "}
+                    <a href={signInLink} className="font-mono text-primary hover:underline" target="_blank" rel="noreferrer">{signInLink}</a>
                   </p>
                   <LoginLookEditor
                     action={savePlatformLoginLookAction.bind(null, tenant.id)}

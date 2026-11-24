@@ -74,7 +74,7 @@ export const HOSTS: readonly HostDef[] = [
   {
     id: "quote.delivery",
     label: "Delivery handover",
-    description: "Captured when a cart is handed over to the customer.",
+    description: "Captured when a vehicle is handed over to the customer.",
     permission: "deliveries.manage",
     model: "quote",
     href: "/deliveries",

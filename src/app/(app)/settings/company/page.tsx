@@ -4,6 +4,8 @@ import { basePrisma } from "@/lib/db";
 import { getCompanyProfile } from "@/lib/companyProfile";
 import { saveCompanyProfile, saveRecordLabels } from "@/app/actions/company";
 import { uploadMyLogoAction } from "@/app/actions/workspaceLogo";
+import { removeMyAppIconAction, uploadMyAppIconAction } from "@/app/actions/workspaceIcon";
+import { appIconUrl } from "@/lib/appIcon";
 import { resetMyLoginLookAction, saveMyLoginLookAction } from "@/app/actions/loginLook";
 import { SaveButton, SaveForm } from "@/components/SaveForm";
 import LoginLookEditor from "@/components/branding/LoginLookEditor";
@@ -13,6 +15,7 @@ import { SettingsWorkspace } from "@/components/settings-workspace";
 import { SETTINGS_NAV_GROUPS } from "@/lib/settings-navigation";
 import { brandForTenant, brandLogoUrl } from "@/lib/tenantBrand";
 import { parseLoginLook } from "@/lib/loginLook";
+import { signInLinkFor } from "@/lib/signInWorkspace";
 
 export const dynamic = "force-dynamic";
 
@@ -37,6 +40,8 @@ export default async function CompanyProfilePage() {
     basePrisma.tenant.findUnique({ where: { id: tenantId }, select: { loginJson: true } }),
   ]);
   const logo = brandLogoUrl(brand) ?? (profile.logoUrl || null);
+  const slug = (await basePrisma.tenant.findUnique({ where: { id: tenantId }, select: { slug: true } }))?.slug;
+  const signInLink = slug ? await signInLinkFor({ id: tenantId, slug }) : null;
 
   return (
     <SettingsWorkspace
@@ -87,6 +92,34 @@ export default async function CompanyProfilePage() {
               <SaveButton>Upload logo</SaveButton>
             </div>
           </SaveForm>
+
+          <SaveForm action={uploadMyAppIconAction} success="App icon updated" className="card flex flex-col gap-4 p-5">
+            <div>
+              <h3 className="font-semibold">App icon</h3>
+              <p className="mt-1 text-xs text-muted-foreground">
+                The square picture on your browser tab, your team&apos;s installed app and its notifications. Without one,
+                your logo is placed on a square.
+              </p>
+            </div>
+            <div className="flex items-center gap-4">
+              {/* eslint-disable-next-line @next/next/no-img-element -- drawn by /api/brand/icon */}
+              <img src={appIconUrl(brand, 192)} alt="" className="size-16 rounded-xl border border-border" />
+              <span className="text-xs text-muted-foreground">{brand.iconRef ? "Your own icon" : brand.logoRef ? "Made from your logo" : "The standard icon"}</span>
+            </div>
+            <label className="space-y-1">
+              <span className="text-xs font-medium text-muted-foreground">{brand.iconRef ? "Replace with" : "Upload"}</span>
+              <input type="file" name="icon" accept="image/png,image/jpeg,image/webp" required className="block w-full text-xs file:mr-3 file:rounded-md file:border-0 file:bg-muted file:px-3 file:py-1.5 file:text-foreground" />
+              <span className="block text-[11px] text-muted-foreground">A square PNG, JPEG or WebP, at least 192 × 192 (512 × 512 is best), under 1 MB.</span>
+            </label>
+            <div className="mt-auto flex justify-end gap-2">
+              <SaveButton>Upload icon</SaveButton>
+            </div>
+          </SaveForm>
+          {brand.iconRef && (
+            <SaveForm action={removeMyAppIconAction} success="App icon removed" resetOnSuccess={false} className="-mt-2 flex justify-end">
+              <SaveButton className="btn-ghost btn-sm text-muted-foreground">Remove app icon</SaveButton>
+            </SaveForm>
+          )}
         </section>
 
         <section className="space-y-3">
@@ -95,6 +128,12 @@ export default async function CompanyProfilePage() {
             <p className="mt-1 text-xs text-muted-foreground">
               The page your team signs in on. Change any of the wording, use your own background photo, and choose what goes in the card&apos;s place. Your logo, name and colour are used automatically.
             </p>
+            {signInLink && (
+              <p className="mt-2 text-xs">
+                Your team&apos;s sign-in link:{" "}
+                <a href={signInLink} className="font-mono text-primary hover:underline" target="_blank" rel="noreferrer">{signInLink}</a>
+              </p>
+            )}
           </div>
           <LoginLookEditor
             action={saveMyLoginLookAction}

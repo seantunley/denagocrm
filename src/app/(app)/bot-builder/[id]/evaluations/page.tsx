@@ -72,7 +72,7 @@ export default async function FlowEvaluationsPage({ params }: { params: Promise<
             <div className="space-y-4">
               <div><label className="label">Evaluation name</label><input name="name" className="input" required maxLength={120} placeholder="Service booking happy path" /></div>
               <div><label className="label">Target</label><select name="target" className="input" defaultValue="draft"><option value="draft">Current saved draft</option>{versions.map((version) => <option key={version.id} value={version.id}>Published version {version.version} · {version.createdAt.toLocaleDateString("en-ZA")}</option>)}</select></div>
-              <div><label className="label">Customer turns</label><textarea name="turns" className="input min-h-44 font-mono text-xs" required placeholder={"choice: Book a service\ntext: Rover XL\nfile: licence.jpg"} /><p className="mt-1 text-[11px] text-muted-foreground">Up to 12 turns. A line without a prefix is treated as text.</p></div>
+              <div><label className="label">Customer turns</label><textarea name="turns" className="input min-h-44 font-mono text-xs" required placeholder={"choice: Book a service\ntext: Is it road legal?\nfile: licence.jpg"} /><p className="mt-1 text-[11px] text-muted-foreground">Up to 12 turns. A line without a prefix is treated as text.</p></div>
             </div>
             <div className="space-y-4">
               <div><label className="label">Expected final outcome</label><select name="outcome" className="input" defaultValue="completed"><option value="completed">Flow completed</option><option value="handoff">Human handoff</option><option value="waiting">Still waiting for customer input</option></select></div>

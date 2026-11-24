@@ -123,7 +123,7 @@ export const DOC_DEFS: Record<DocKey, DocDef> = {
       { id: "signatures", label: "Signature block" },
       { id: "footer", label: "Branded footer" },
     ],
-    defaultIntro: "Please inspect your cart on handover and note anything unusual below.",
+    defaultIntro: "Please inspect your vehicle on handover and note anything unusual below.",
   },
   jobcard: {
     label: "Job card",

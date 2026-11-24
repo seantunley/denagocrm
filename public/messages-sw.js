@@ -1,4 +1,4 @@
-/* Denago Messages service worker — dedicated /messages push channel (rev 1) */
+/* Messages service worker — dedicated /messages push channel (rev 2: the workspace's own notification icon) */
 
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
@@ -40,10 +40,10 @@ self.addEventListener("push", (event) => {
   const testId = testIdFromUrl(url);
 
   const display = self.registration.showNotification(
-    data.title || (messaging ? "Denago Messages" : "Denago CRM"),
+    data.title || (messaging ? "Messages" : "CRM"),
     {
       body: data.body || "",
-      icon: messaging ? "/icons/messages-192.png" : "/icons/icon-192.png",
+      icon: data.icon || (messaging ? "/icons/messages-192.png" : "/icons/icon-192.png"),
       badge: messaging ? "/icons/messages-badge-96.png" : "/icons/badge-96.png",
       data: { url },
       vibrate: [100, 50, 100],

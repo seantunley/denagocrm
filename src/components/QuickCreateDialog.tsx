@@ -15,6 +15,7 @@ import ContactForm from "@/components/ContactForm";
 import JobCardForm from "@/components/JobCardForm";
 import VehicleForm from "@/components/VehicleForm";
 import type { FleetPicker } from "@/lib/fleetTypes";
+import type { WorkspaceRegions } from "@/lib/regions";
 import { QuoteEditorDialog, type QuoteEditorDefaults } from "@/components/quotes/QuoteEditorDialog";
 import {
   createQuickContact,
@@ -68,6 +69,7 @@ type Options = {
   users: { id: string; name: string }[];
   vehicles: { id: string; label: string }[];
   fleetPicker: FleetPicker;
+  regions: WorkspaceRegions;
   /** Sent only when the quote dialog is asked for (or the legacy full payload). */
   quoteDefaults: QuoteEditorDefaults | null;
 };
@@ -257,7 +259,7 @@ export default function QuickCreateDialog() {
             )}
 
             {kind === "contact" && (
-              <ContactForm action={createQuickContact} users={currentOptions.users} fleetPicker={currentOptions.fleetPicker} submitLabel="Create contact" variant="dialog" />
+              <ContactForm action={createQuickContact} users={currentOptions.users} fleetPicker={currentOptions.fleetPicker} regions={currentOptions.regions} submitLabel="Create contact" variant="dialog" />
             )}
 
             {kind === "jobcard" && <JobCardForm vehicles={currentOptions.vehicles} contacts={currentOptions.contacts} defaultVehicleId={createDefaults.vehicleId} />}

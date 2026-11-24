@@ -59,7 +59,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ toke
 
       const url = new URL(destination);
       const defaults: Record<string, string | null> = {
-        utm_source: campaign.utmSource || "denagocrm",
+        utm_source: campaign.utmSource || "crm",
         utm_medium: campaign.utmMedium || campaign.channel,
         utm_campaign: campaign.utmCampaign || slug(campaign.name),
         utm_content: campaign.utmContent,
@@ -83,7 +83,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ toke
           "utmSource", "utmMedium", "utmCampaign", "utmContent", "utmTerm", "eventKey", "metadata", "occurredAt"
         ) VALUES (
           ${`mt_${crypto.randomUUID()}`}, ${campaign.tenantId}, ${campaign.id}, ${recipient.id}, ${recipient.contactId}, 'click', ${redirectUrl},
-          ${campaign.utmSource || "denagocrm"}, ${campaign.utmMedium || campaign.channel}, ${campaign.utmCampaign || slug(campaign.name)},
+          ${campaign.utmSource || "crm"}, ${campaign.utmMedium || campaign.channel}, ${campaign.utmCampaign || slug(campaign.name)},
           ${campaign.utmContent}, ${campaign.utmTerm}, ${`click:${recipient.id}:${targetHash}:${bucket}`},
           ${JSON.stringify({ userAgent: req.headers.get("user-agent"), referer: req.headers.get("referer") })}::jsonb, CURRENT_TIMESTAMP
         ) ON CONFLICT ("eventKey") DO NOTHING

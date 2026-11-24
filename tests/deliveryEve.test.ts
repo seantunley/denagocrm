@@ -36,7 +36,7 @@ test("tomorrow is the next Johannesburg calendar day, whatever the hour", () => 
 test("all done: every check ticked, and 'All set'", () => {
   const text = deliveryEveText(facts(), "Anna Smith", "https://crm.example.com/");
   assert.match(text, /^🚚 Tomorrow's delivery: Q-1042 for Anna Smith/);
-  assert.match(text, /✅ Deposit paid\n✅ Invoice issued\n✅ Cart allocated and PDI passed/);
+  assert.match(text, /✅ Deposit paid\n✅ Invoice issued\n✅ Vehicle allocated and PDI passed/);
   assert.match(text, /All set\./);
   assert.match(text, /Nothing has been sent to the customer/);
 });
@@ -45,10 +45,10 @@ test("anything missing: what to do and the screen's link — and no promise to c
   const text = deliveryEveText(facts({ depositPaid: false, stock: [{ pdiStatus: "pending" }] }), "Anna Smith", "https://crm.example.com");
   assert.match(text, /❌ Deposit paid — not yet\. .*I won't contact them.* https:\/\/crm\.example\.com\/deliveries/);
   assert.match(text, /✅ Invoice issued/);
-  assert.match(text, /❌ Cart allocated and PDI passed — not yet\. .* https:\/\/crm\.example\.com\/stock/);
+  assert.match(text, /❌ Vehicle allocated and PDI passed — not yet\. .* https:\/\/crm\.example\.com\/stock/);
   assert.doesNotMatch(text, /All set/);
   // No cart at all is missing too.
-  assert.match(deliveryEveText(facts({ stock: [] }), "A", ""), /❌ Cart allocated and PDI passed/);
+  assert.match(deliveryEveText(facts({ stock: [] }), "A", ""), /❌ Vehicle allocated and PDI passed/);
 });
 
 test("a proactive kind of its own: its words, a lock-screen line naming nobody, its own heading", () => {

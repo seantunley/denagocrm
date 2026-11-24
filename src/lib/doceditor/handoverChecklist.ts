@@ -65,7 +65,7 @@ export const DEFAULT_HANDOVER_ITEMS = [
   "Keys handed over",
   "Owner's manual provided",
   "Controls & safety walkthrough done",
-  "Cart inspected — no visible damage",
+  "Vehicle inspected — no visible damage",
 ];
 
 function esc(s: unknown): string {

@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
-import manifest from "../src/app/manifest";
+import { GET as crmManifest } from "../src/app/manifest.webmanifest/route";
+import { NextRequest } from "next/server";
 import { GET as messagesManifest } from "../src/app/messages/manifest.webmanifest/route";
 import { readPwaActivityShortcut } from "../src/lib/pwaShortcuts";
 
@@ -24,8 +25,10 @@ function assertPngShortcutIcon(icon: {
 }
 
 test("CRM manifest exposes launcher shortcuts inside the root app scope", async () => {
-  // Async: the name is the workspace's, resolved from the request's host.
-  const data = await manifest();
+  // A route (it reads the workspace its link names); the name is the workspace's, else the platform's.
+  const data = (await (await crmManifest(new NextRequest("https://example.test/manifest.webmanifest"))).json()) as {
+    shortcuts?: { name: string; url: string; icons?: { src: string }[] }[];
+  };
 
   assert.deepEqual(
     data.shortcuts?.map(({ name, url, icons }) => ({

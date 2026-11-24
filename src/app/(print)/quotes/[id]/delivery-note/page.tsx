@@ -161,7 +161,7 @@ export default async function DeliveryNotePrintPage({
                       ["Keys handed over", false],
                       ["Owner's manual provided", false],
                       ["Controls & safety walkthrough done", false],
-                      ["Cart inspected — no visible damage", false],
+                      ["Vehicle inspected — no visible damage", false],
                     ]
                 ).map(([label, done]) => (
                   <p key={String(label)} className="flex items-center gap-2 text-xs text-slate-700">

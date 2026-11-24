@@ -309,7 +309,7 @@ function CommentRow({
                 onChange={(event) => setText(event.target.value)}
                 placeholder={
                   mode === "public"
-                    ? "Thanks for asking — the Rover XL starts at R89 900 including delivery."
+                    ? "Thanks for asking — I've sent you the price list in a private message."
                     : "Thanks for the comment — happy to help. What would you like to know?"
                 }
               />

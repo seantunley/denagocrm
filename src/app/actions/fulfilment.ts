@@ -342,7 +342,7 @@ export async function scheduleDelivery(quoteId: string, formData: FormData) {
     if (file) {
       await attachStageDocument(quoteId, quote.contactId, "delivery-note", `Delivery paperwork — Q-${quote.number} — ${file.name}`, file, user.id, quote.tenantId);
     }
-    const model = quote.lead?.product?.name ?? quote.items[0]?.description ?? "cart";
+    const model = quote.lead?.product?.name ?? quote.items[0]?.description ?? "vehicle";
     const who = quoteBillTo(quote, await loadBillToFleet(prisma, quote.fleetId)).name;
     const activityTenantId = await customerRecordTenantId({ contactId: quote.contactId, leadId: quote.leadId });
     // BOOKED ONCE (review of #939): the day is claimed only while none is booked, and its workshop-calendar entry is

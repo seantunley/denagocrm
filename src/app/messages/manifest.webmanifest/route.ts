@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { headers } from "next/headers";
-import { DEFAULT_BRAND, brandForHost } from "@/lib/tenantBrand";
+import { DEFAULT_BRAND } from "@/lib/tenantBrand";
 import { PLATFORM_NAME } from "@/lib/platformIdentity";
+import { installedAppBrand, installedAppIcons } from "@/lib/installedApp";
 
 // A second, separate PWA scoped to /messages — installs on a phone as its own
 // "<Workspace> Messages" app icon, distinct from the main CRM, but the same login
@@ -10,13 +10,10 @@ import { PLATFORM_NAME } from "@/lib/platformIdentity";
 // was "Denago Messages … for Denago Cape Town" for every workspace).
 export const dynamic = "force-dynamic";
 
-export async function GET() {
-  let brand = DEFAULT_BRAND;
-  try {
-    brand = await brandForHost((await headers()).get("host"));
-  } catch {
-    // No request scope (or no host): the platform's name.
-  }
+export async function GET(req?: Request) {
+  // The workspace the Messages pages name (?t=), honoured as lib/installedApp.ts allows; else the address's.
+  const named = req ? new URL(req.url).searchParams.get("t") : null;
+  const brand = await installedAppBrand(named).catch(() => DEFAULT_BRAND);
   const workspace = brand.tenantId ? brand.displayName : PLATFORM_NAME;
   return NextResponse.json(
     {
@@ -40,12 +37,13 @@ export async function GET() {
       // art is full-bleed on the background colour for the same reason: a
       // launcher masks the tile it is given, and anything it can see through
       // becomes the plate.
-      icons: [
-        { src: "/icons/messages-192.png", sizes: "192x192", type: "image/png" },
-        { src: "/icons/messages-512.png", sizes: "512x512", type: "image/png" },
-        { src: "/icons/messages-maskable-192.png", sizes: "192x192", type: "image/png", purpose: "maskable" },
-        { src: "/icons/messages-maskable-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
-      ],
+      // The workspace's own icon (lib/appIcon.ts); the platform's Messages set when none is named.
+      icons: installedAppIcons(brand, [
+        { src: "/icons/messages-192.png", sizes: "192x192" },
+        { src: "/icons/messages-512.png", sizes: "512x512" },
+        { src: "/icons/messages-maskable-192.png", sizes: "192x192", purpose: "maskable" },
+        { src: "/icons/messages-maskable-512.png", sizes: "512x512", purpose: "maskable" },
+      ]),
       shortcuts: [
         {
           name: "Open chats",
