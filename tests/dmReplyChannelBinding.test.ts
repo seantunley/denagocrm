@@ -109,7 +109,8 @@ test("a DM thread with no conversation cannot be typed into or sent", () => {
   // a phone number, not a conversation.
   const ui = src("src/components/InboxReply.tsx");
   assert.match(ui, /const missingConversation = channel !== "whatsapp" && !conversationId;/);
-  assert.match(ui, /<button className="btn-primary btn-sm" disabled=\{missingConversation\}>Send<\/button>/);
+  // Greyed out — and it says why on hover (tooltips PR #1224).
+  assert.match(ui, /<button className="btn-primary btn-sm" disabled=\{missingConversation\} title=\{missingConversation \? "[^"]+" : undefined\}>Send<\/button>/);
   assert.match(ui, /disabled=\{missingConversation\}\s*\n?\s*\/>/, "the textarea must be disabled too");
   // And it must say why, above the box, like the collision warning.
   const notice = ui.indexOf("not linked to a conversation yet");
