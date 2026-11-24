@@ -188,6 +188,11 @@ test("the audit page scopes exactly the way its own export route does — whatev
 
 /* ── P4 / P5 / P6 — edit pages under a read-guarded layout ────────────── */
 
+/** Owner-only edit pages, and the action that saves each — which must be owner-only too. */
+const OWNER_EDIT_ACTIONS: Record<string, { file: string; fn: string }> = {
+  "src/app/(app)/help/ours/[id]/edit/page.tsx": { file: "src/app/actions/helpGuides.ts", fn: "saveHelpGuide" },
+};
+
 /** Every `[id]/edit/page.tsx` under the app shell, found by walking, not guessing. */
 function editPages(dir = "src/app/(app)"): string[] {
   const out: string[] = [];
@@ -211,9 +216,17 @@ test("an edit form is guarded by the permission that saves it, not the one that 
 
   for (const page of pages) {
     const code = shipped(page);
-    const guard = code.match(/await require[A-Za-z]+\(([^)]*)\)/);
+    const guard = code.match(/await (require[A-Za-z]+)\(([^)]*)\)/);
     assert.ok(guard, `${page} has no guard of its own — it inherits whatever its layout allows`);
-    const keys = [...guard[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+    // The workspace OWNER only: stronger than any one permission, so it names none. Its save action must check the
+    // same — pinned per page in OWNER_EDIT_ACTIONS below, so an owner-only form can't sit over a weaker action.
+    if (guard[1] === "requireTenantOwner" && guard[2].trim() === "") {
+      const action = OWNER_EDIT_ACTIONS[page];
+      assert.ok(action, `${page} is owner-only; name the action that saves it in OWNER_EDIT_ACTIONS`);
+      assert.match(shipped(action.file), new RegExp(`export async function ${action.fn}\\([\\s\\S]*?await requireTenantOwner\\(\\)`), `${action.file}: ${action.fn} must be owner-only too`);
+      continue;
+    }
+    const keys = [...guard[2].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
     assert.ok(keys.length > 0, `${page}: the guard names no permission`);
     for (const key of keys) {
       assert.doesNotMatch(
