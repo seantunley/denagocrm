@@ -456,7 +456,7 @@ export default async function platformIntegrationRows({ xAccountId }: { xAccount
           <SaveForm resetOnSuccess={false} action={saveSetting} className="space-y-2">
             <input type="hidden" name="key" value={PRONUNCIATIONS_KEY} />
             <label className="label">How to say names (one per line: word = how to say it)</label>
-            <textarea name="value" rows={4} className="input font-mono text-xs" defaultValue={setting(PRONUNCIATIONS_KEY)} placeholder={"Denago = Deh-NAH-go\nTokai = Toh-KAI"} />
+            <textarea name="value" rows={4} className="input font-mono text-xs" defaultValue={setting(PRONUNCIATIONS_KEY)} placeholder={"Nguyen = Win\nTokai = Toh-KAI"} />
             <p className="text-xs text-muted-foreground">Used whenever DAX or the chatbot speaks, and to help transcribe voice notes with these words spelt right.</p>
             <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
           </SaveForm>

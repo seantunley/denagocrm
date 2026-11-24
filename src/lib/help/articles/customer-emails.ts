@@ -19,7 +19,7 @@ export const customerEmailArticles: HelpArticle[] = [
       { type: "h", text: "Where each email lives" },
       { type: "table", headers: ["Open", "Emails you find there"], rows: [
         ["**Document Studio**, under **Emails that send your documents**", "The quote email, and the signing invitation, reminder, signed copy and verification code."],
-        ["**Journeys → Customer messages**", "Service reminders, recall notices, Google review requests, and survey invitations and reminders."],
+        ["**Journeys**, then the **Customer messages** button", "Service reminders, recall notices, Google review requests, and survey invitations and reminders."],
         ["**Settings → Email**", "Login and verification codes, which are rarely changed."],
       ] },
       { type: "p", text: "The **Customer messages** page also ends with a list headed **All customer messages**: every message a customer can receive, with a link to where its wording is edited. Text messages and WhatsApp messages stay as plain text and are edited on the same pages." },
@@ -37,6 +37,13 @@ export const customerEmailArticles: HelpArticle[] = [
       { type: "callout", tone: "info", text: "Designing an email does not switch it on. Whether an automatic email is sent at all is decided on **Journeys** and under **Settings → Automatic jobs & messages**." },
       { type: "callout", tone: "tip", text: "The sender's name, job title, mobile and email in the signature come from each person's own details under **Settings → Profile & sign-in**. Automatic messages are signed by your company. Your logo and company details come from **Company profile**." },
       { type: "p", text: "**Using the same signature in Gmail, Outlook or on your phone:** open **Email signatures** (or, if your workspace doesn't have that pack, **Settings → Profile & sign-in → Email signature**) and find **Use this signature in Gmail, Outlook or on your phone** under your signature. **Copy my signature** copies it with its design and your details (not your photo: that only travels in emails sent from the CRM), and the steps under it show where to paste it in each mail app. Phone mail apps keep signatures as plain text, so use **Copy as plain text** there. The pasted signature is a copy — if your details or the design change, copy and paste it again." },
+      { type: "h", text: "Related guides" },
+      { type: "list", items: [
+        "Designing and publishing a customer email",
+        "Email signatures: everyone's signature in one place",
+        "Automatic jobs & messages: everything the CRM does by itself",
+        "Company profile and branding",
+      ] },
     ],
   },
   {
@@ -80,6 +87,19 @@ export const customerEmailArticles: HelpArticle[] = [
         "In History, **Reset draft to the standard wording** (or **standard frame**) replaces your draft with the built-in version. Customers keep the published version until you press **Publish** again, and your old draft stays in the history.",
       ] },
       { type: "callout", tone: "tip", text: "After publishing, send yourself a real example — for instance a quote to your own address — to check how it looks in your own mail app." },
+      { type: "h", text: "If something goes wrong" },
+      { type: "list", items: [
+        "**Not published. Nothing changed on real documents; try again.**: the publish didn't go through. Your draft is safe; press **Publish** again.",
+        "**You published a message but customers still get the old one**: publish the **email frame** too. Until the frame is published, customers keep getting the emails as they were.",
+        "**A detail you want isn't offered in a message**: that email can't fill it in. Each message only offers the details it actually has.",
+        "**You can't find Edit email**: only the workspace owner designs customer emails.",
+      ] },
+      { type: "h", text: "Related guides" },
+      { type: "list", items: [
+        "Customer emails: one frame, one message each",
+        "Editing a document's layout and wording",
+        "Finding your way around the document editor",
+      ] },
     ],
   },
 ];

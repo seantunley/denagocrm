@@ -1,6 +1,7 @@
 import { cache } from "react";
 import { basePrisma } from "./db";
 import { PLATFORM_NAME, PLATFORM_TEAM_SIGNOFF } from "./platformIdentity";
+import { parseLoginLook, type LoginLook } from "./loginLook";
 
 /**
  * WHOSE BRAND DOES THIS REQUEST RENDER?
@@ -64,6 +65,8 @@ export type TenantBrand = {
   primaryForeground: string | null;
   /** Blob pathname for the logo, or null to use the built-in asset. */
   logoRef: string | null;
+  /** The sign-in screen's wording and layout (lib/loginLook.ts). Read only where the sign-in page needs it. */
+  login?: LoginLook;
 };
 
 /**
@@ -157,6 +160,8 @@ type BrandRow = {
   brandLogoRef: string | null;
   brandDisplayName: string | null;
   brandTagline: string | null;
+  /** Present only when the caller read it (the sign-in page). */
+  loginJson?: unknown;
 };
 
 /** Turn a row into a brand, applying the read-side colour validation. */
@@ -173,6 +178,8 @@ export function brandFromRow(row: BrandRow): TenantBrand {
     primary,
     primaryForeground: primary ? textOn(primary) : null,
     logoRef: row.brandLogoRef?.trim() || null,
+    // Re-checked on read: the sign-in page is public (lib/loginLook.ts).
+    ...("loginJson" in row ? { login: parseLoginLook(row.loginJson) } : {}),
   };
 }
 
@@ -204,6 +211,7 @@ export const brandForHost = cache(async (host: string | null | undefined): Promi
             brandLogoRef: true,
             brandDisplayName: true,
             brandTagline: true,
+            loginJson: true,
           },
         },
       },

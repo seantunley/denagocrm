@@ -1,1 +1,672 @@
-[{"slug":"jobcards-overview","title":"Job cards: the workshop board","summary":"Track every workshop job from intake to collection on the job cards list, with live KPIs, technician load and filters.","category":"workshop","audience":"everyone","keywords":["job cards","workshop","jobs","board","list","wip","technician load"],"body":[{"type":"p","text":"The **Job cards** page is the workshop's home. It lists up to 200 recent jobs and shows what each one is, whose bay it's in and who is working it. You need the *view* permission to open it; opening and editing jobs needs the *manage* permission."},{"type":"h","text":"Reading the KPI strip"},{"type":"list","items":["**Active jobs** — everything not yet Collected or Cancelled, with a count of how many are unassigned.","**In repair** — jobs currently on the workshop floor.","**Ready for collection** — finished jobs awaiting the customer.","**Work in progress** — the billed value tied up in all active jobs."]},{"type":"p","text":"The **Technician load** chip row below the KPIs shows how many active jobs each technician is carrying, so you can rebalance the floor at a glance."},{"type":"h","text":"Finding a job"},{"type":"steps","items":["Use the status tabs — All, Active, Awaiting approval, In repair, Ready, Collected — to narrow the list.","Type into the search box to match on job number, work description, vehicle model, VIN, registration, customer name, technician or bay.","Click a job number or **Open** to enter its workspace."]},{"type":"callout","tone":"info","text":"The list is scoped to what you can access. Technicians with owned-only access see just their jobs; managers with view-all see the whole floor."}]},{"slug":"jobcards-open-new","title":"Opening a new job card","summary":"Check a vehicle in by capturing the customer request and arrival mileage; the job number and technician are set automatically.","category":"workshop","audience":"everyone","keywords":["new job card","intake","check-in","book vehicle","arrival mileage","open job"],"body":[{"type":"p","text":"Open a job card the moment a vehicle arrives. Use **New job card** on the job cards list, or **Book workshop** from the Service due page to pre-select the vehicle. This needs the job cards *manage* permission."},{"type":"steps","items":["Select the **vehicle** — this determines the customer and where the future service history is stored.","Enter the **arrival mileage** in kilometres (optional but recommended).","Write the **work requested** so both the technician and customer understand the agreed scope — describe the concern, requested service, warning lights or noises.","Click **Open job card**."]},{"type":"p","text":"The job number is generated automatically and the card is assigned to you as the technician. If you captured arrival mileage, it is also written to the vehicle's mileage log."},{"type":"callout","tone":"tip","text":"You add check-in photos, parts, labour, inspections and the customer signature inside the job workspace after it opens — not on this intake form."}]},{"slug":"jobcards-workflow-stages","title":"Moving a job through its stages","summary":"Every job walks a guided pipeline from Booking to Ready for collection; tap a stage to move it, or cancel and reopen as needed.","category":"workshop","audience":"everyone","keywords":["stages","pipeline","workflow","status","booking","repair","quality check","cancel","reopen"],"body":[{"type":"p","text":"The job workspace is a guided flow. The current stage is expanded; completed and upcoming stages collapse to one-line headers you can open on demand. A stepper across the top shows the whole pipeline."},{"type":"h","text":"The pipeline"},{"type":"table","headers":["#","Stage","What happens here"],"rows":[["1","Booking","Assign technician, bay, priority and a labour estimate"],["2","Check-in","Pre-work condition photos and condition notes"],["3","Diagnosis","Multi-point inspection checklist"],["4","Approval","Additional-work approvals and customer sign-off"],["5","Repair","Parts, labour, time clock, reservations, subcontract"],["6","Quality check","Post-work check-out photos"],["7","Ready for collection","Complete the job and write the service record"]]},{"type":"steps","items":["Tap any stage tile in the top stepper to move the job to that stage.","Or work down the expanded current step and let the flow guide you.","Completed stages show a green tick; the current one is highlighted."]},{"type":"h","text":"Cancelling and reopening"},{"type":"list","items":["**Cancel job** closes an in-progress job as Cancelled (an off-path terminal).","**Reopen** on a Collected or Cancelled job sends it back to Repair.","**Delete** moves the card to Trash, where it can be restored for 60 days."]},{"type":"callout","tone":"warning","text":"Only \"Complete & write service record\" moves a job to Collected — tapping stages never fabricates a service record. Reaching Collected any other way is not possible from the stepper."}]},{"slug":"jobcards-checkin-photos-inspection","title":"Check-in photos, condition notes and inspections","summary":"Record the vehicle's pre-work condition with photos and notes, then run a multi-point inspection checklist with statuses and photos.","category":"workshop","audience":"everyone","keywords":["check-in photos","condition","inspection","checklist","annotate","diagnosis","photos"],"body":[{"type":"p","text":"Check-in evidence protects both the workshop and the customer. Capture the condition **before** work starts and record what you find during diagnosis."},{"type":"h","text":"Check-in photos"},{"type":"steps","items":["In the **Check-in** step, use the camera capture or file upload to add photos of scratches, dents and the odometer.","Upload up to 12 images at a time; each must be an image under 4 MB.","Click a photo to mark it up — draw on it to highlight damage. Markup is saved as re-editable shapes plus a flattened copy for print, and the original photo is never altered.","Add **condition notes** for check-in (existing damage, charge level, loose items) and, later, check-out."]},{"type":"h","text":"Inspection checklist"},{"type":"steps","items":["In the **Diagnosis** step, add a check (e.g. Brakes, Tyres, Lights, Battery terminals).","Set each item's status: OK, Attention, Fail or N/A.","Add a short note and, optionally, attach a photo to the item.","Save each row; remove a check with the ✕ button."]},{"type":"callout","tone":"tip","text":"Check-out photos are captured later in the Quality check step to prove the hand-over condition after the work is done."}]},{"slug":"jobcards-repair-parts-labour-time","title":"Logging parts, labour and technician time","summary":"Add parts and labour lines, run the technician time clock, reserve stock, apply service packages and record subcontracted work.","category":"workshop","audience":"everyone","keywords":["parts","labour","time clock","reservations","stock","service package","subcontract","repair"],"body":[{"type":"p","text":"The **Repair** step is where the job's cost is built up. Parts and labour lines drive the customer-facing total shown in the job KPIs."},{"type":"h","text":"Parts and labour lines"},{"type":"list","items":["Add a line as either a **part** or **labour**, with a quantity and unit price.","Adding a stocked part decrements its stock; removing that line returns the stock.","Removing a line asks for a reason, which is recorded in the customer history."]},{"type":"h","text":"The technician time clock"},{"type":"steps","items":["Click **Start my clock** to begin logging time against the job.","Click **Stop my clock** when you pause or finish.","Logged hours are valued at the job's labour rate (or the workshop default) to give a labour value."]},{"type":"callout","tone":"warning","text":"A technician has only one running clock at a time. Starting a clock automatically stops any other clock you left running — on this or another job."},{"type":"h","text":"Reservations, packages and subcontract"},{"type":"list","items":["**Reserve** earmarks stock without consuming it. **Consume** turns the reservation into a part line and deducts stock; **Release** cancels it.","**Apply service package** drops a preset bundle of parts and labour onto the job in one click.","**Subcontracted work** flags the job, records the subcontractor and cost, and feeds the profitability figure."]}]},{"slug":"jobcards-approvals-signoff","title":"Additional-work approvals and customer sign-off","summary":"Request customer approval for extra work found mid-job, record the decision, and capture the customer's signature on the card.","category":"workshop","audience":"everyone","keywords":["approval","additional work","customer sign-off","signature","portal","decline"],"body":[{"type":"p","text":"When you find work beyond the agreed scope, log it as an approval so the customer signs off before you proceed. This lives in the **Approval** step."},{"type":"steps","items":["Enter the **additional work** description and an estimated cost, then click **Request approval**.","The customer is notified in their portal that work needs their approval.","When they respond, click **Approve** or **Decline** — the decision is recorded with the method (e.g. phone) and time.","Remove an approval line with the ✕ button if it was raised in error."]},{"type":"h","text":"Customer signature"},{"type":"p","text":"The signing block on the same step captures the customer's sign-off on the job card itself. Once signed, the signature and signer name are stored against the card."},{"type":"callout","tone":"info","text":"Approvals track a status of pending, approved or declined. Anything still pending is surfaced on the job list under the \"Awaiting approval\" filter."}]},{"slug":"jobcards-complete-service-record","title":"Completing a job and writing the service record","summary":"Finish a job to create the vehicle's service record, set next-due values, record warranty recovery and flag comebacks.","category":"workshop","audience":"everyone","keywords":["complete","service record","next due","collected","warranty recovery","comeback","handover"],"body":[{"type":"p","text":"Completing a job in the **Ready for collection** step writes a permanent service record on the vehicle and moves the card to Collected."},{"type":"steps","items":["Confirm the **mileage** at completion.","Set **next due (km)** and **next due (date)** — leave them blank to auto-fill from the vehicle's service intervals.","Write a **service summary** and any **work done / notes**.","Click **Complete & write service record**."]},{"type":"p","text":"Completion also logs the mileage, sends the customer a service review request and triggers the post-service survey. From here you can print the job and open a **Service report**."},{"type":"h","text":"Warranty recovery and comebacks"},{"type":"list","items":["**Warranty recovery** — tick if the work is under warranty and record the labour and parts amount recovered.","**Comeback / repeat repair** — link this job to the earlier job on the same vehicle that it is a repeat of, so comeback rates stay accurate."]},{"type":"callout","tone":"tip","text":"If you leave next-due km or date blank, the system adds the vehicle's service interval (kilometres and months) to set the next service automatically."}]},{"slug":"jobcards-insights","title":"Workshop insights","summary":"See work-in-progress value, 90-day profitability and comeback rate, warranty recovered and technician productivity in one place.","category":"workshop","audience":"managers","keywords":["insights","wip","profitability","margin","comeback rate","productivity","reporting"],"body":[{"type":"p","text":"**Workshop insights** (linked from the job cards list) rolls up the numbers a workshop manager watches. Figures are scoped to the jobs you can access."},{"type":"list","items":["**Work in progress** — billed value tied up in active jobs, with the active job count.","**Profit · 90 days** — gross profit and margin on jobs completed in the last 90 days.","**Comeback rate · 90 days** — share of completed jobs linked as repeat repairs.","**Warranty recovered · 90 days** — total recovered on warranty work."]},{"type":"p","text":"Below the tiles, **Technician productivity** lists hours logged per technician over the last 30 days, and **Active jobs by stage** shows how the current workload is distributed across the pipeline."},{"type":"callout","tone":"info","text":"Profit is revenue less parts cost and any subcontract cost, so keep part costs and subcontract figures on job cards accurate for these numbers to hold."}]},{"slug":"workshop-calendar-bookings","title":"The workshop calendar","summary":"View and manage workshop bookings on a calendar that shows only workshop-category work and tracks slot capacity per day.","category":"workshop","audience":"everyone","keywords":["workshop calendar","bookings","schedule","slots","capacity","diary"],"body":[{"type":"p","text":"The **Workshop calendar** shows workshop bookings on a month view, separate from the sales diary. Only planned and completed workshop-category work appears; cancelled work is hidden."},{"type":"list","items":["Each booking shows its type and who it is assigned to.","Day capacity is tracked against configured booking slots, so you can see how full each day is.","Capacity maths counts every booking in the window, including ones assigned to other technicians, so open slots are accurate."]},{"type":"callout","tone":"info","text":"You need calendar or job-card view access to open it. Creating and editing bookings requires the activities manage permission."}]},{"slug":"service-due-scheduling","title":"Service due: staying ahead of scheduled work","summary":"See which vehicles are overdue or due soon by date or mileage, then book workshop time or send the owner a reminder.","category":"workshop","audience":"everyone","keywords":["service due","overdue","due soon","reminder","service interval","mileage","booking"],"body":[{"type":"p","text":"The **Service due** page lists accessible vehicles that need a service, driven by each vehicle's service intervals, last service record and latest recorded mileage."},{"type":"h","text":"How due status is worked out"},{"type":"list","items":["**Overdue** — the next-due date has passed or the vehicle is past its next-due kilometres.","**Due soon** — within 30 days, or within 200 km, of the next service.","Explicit next-due values on the last service record win; otherwise the vehicle's interval (months and km) is applied from the last service or purchase date."]},{"type":"p","text":"Each row shows the due date, kilometres remaining, last service and how many days early or overdue it is. The top cards count Overdue, Due soon and Total to action."},{"type":"h","text":"Acting on a due vehicle"},{"type":"steps","items":["Click **Book** / **Book workshop** to open a new job card with the vehicle pre-selected.","Or use the reminder button to send the owner a service reminder."]},{"type":"callout","tone":"info","text":"The book and reminder actions appear only if you have the vehicles manage permission. Everyone with view access can see the due list."}]},{"slug":"warranty-claims-recalls","title":"Warranty and recalls","summary":"Monitor expiring warranties and open claims, and publish recall or service bulletins that notify affected owners.","category":"workshop","audience":"everyone","keywords":["warranty","claims","recall","bulletin","expiring","notify owners"],"body":[{"type":"p","text":"The **Warranty & recalls** page brings together warranty status, open claims and safety bulletins for the vehicles you can access."},{"type":"h","text":"Warranties and claims"},{"type":"list","items":["**Warranties expiring or expired** — a warranty is flagged as expiring within 60 days of its end date (purchase date plus warranty months).","**Open warranty claims** — active claims with a status of open or approved. Open the claim's print view to produce a claim document.","Claims themselves are opened and updated from the individual vehicle's page."]},{"type":"h","text":"Recalls and service bulletins"},{"type":"steps","items":["Enter a **title**, choose the **affected model** and describe what owners need to know, then **Create bulletin**.","Use the notify action to email or SMS every owner of that model, at no charge to them; the bulletin records when owners were notified.","Delete a bulletin once it is no longer needed."]},{"type":"callout","tone":"warning","text":"Creating bulletins, notifying owners and managing claims require the warranty manage permission. With view-only access you can see the dashboard but not act on it."}]},{"slug":"settings-workshop-configuration","title":"Workshop settings: rate, bays and packages","summary":"Set the default labour rate, define the physical bays jobs are scheduled into, and build reusable service packages.","category":"workshop","audience":"admins","keywords":["workshop settings","labour rate","bays","service packages","configuration","admin"],"body":[{"type":"p","text":"**Settings → Workshop** configures the defaults the rest of the workshop relies on. It requires the workshop manage permission."},{"type":"h","text":"Default labour rate"},{"type":"p","text":"This rate (per hour) values the technician time logged on job cards. Individual job cards can override it in their labour estimate. The built-in default is R650/hour until you change it."},{"type":"h","text":"Workshop bays"},{"type":"steps","items":["Click **New bay** and give it a name, colour, sort order and optional notes (e.g. lift, alignment, diagnostics).","Keep **Active** ticked to make the bay available for assignment.","Edit or delete bays as your floor changes — deleting a bay unassigns any job cards in it."]},{"type":"h","text":"Service packages"},{"type":"steps","items":["Click **New package** (e.g. \"Minor service\") and describe what it includes.","Add line items as parts or labour with a quantity and unit price; the package total updates automatically.","Technicians can then apply the whole bundle to a job card in one click from the Repair step."]},{"type":"callout","tone":"tip","text":"Bays and their colours flow straight through to the job list and job workspace, so a quick glance shows what each work area is doing."}]}]
+[
+  {
+    "slug": "jobcards-overview",
+    "title": "Job cards: the workshop board",
+    "summary": "The job cards list: the headline figures, technician load, the stage filters and search, and who sees which jobs.",
+    "category": "workshop",
+    "audience": "everyone",
+    "keywords": ["job cards", "workshop", "jobs", "board", "list", "wip", "technician load", "search", "filter"],
+    "body": [
+      { "type": "p", "text": "**Job Cards** (in the menu under **Service**) is the workshop's home: every job, what it is for, which bay it is in, who is working on it and what stage it has reached. Your workspace may call job cards something else; the menu and page use your workspace's name for them." },
+      { "type": "h", "text": "Who can use it" },
+      { "type": "p", "text": "To open the list you need permission to view job cards: either every job card, or only the ones assigned to you or linked to customers you can see. Opening and working on jobs needs permission to create, update and complete job cards. An owner sets these under **Settings → Team & roles**, in the **Workshop** group." },
+      { "type": "h", "text": "The figures at the top" },
+      {
+        "type": "table",
+        "headers": ["Figure", "What it shows"],
+        "rows": [
+          ["**Active jobs**", "Every job that isn't collected or cancelled, with how many have no technician."],
+          ["**In repair**", "Jobs in the Repair stage, on the workshop floor."],
+          ["**Ready for collection**", "Finished jobs waiting for the customer."],
+          ["**Work in progress**", "The billed value of all active jobs."]
+        ]
+      },
+      { "type": "p", "text": "**Technician load · active jobs** shows how many active jobs each technician has, including **Unassigned**, so you can spread the work." },
+      { "type": "h", "text": "Finding a job" },
+      {
+        "type": "steps",
+        "items": [
+          "Click a filter: **All**, **Active**, **Awaiting approval** (jobs in the Approval stage), **In repair**, **Ready** or **Collected**.",
+          "Type in the search box. It matches the job number, the work requested, the vehicle's model, VIN or registration, the customer's name or company, the technician and the bay.",
+          "Click a job number or **Open** to go into the job. Right-click a row for **Open vehicle** and **Print job card**."
+        ]
+      },
+      { "type": "p", "text": "Each row shows the job number, the vehicle and customer, the technician, the bay, the estimate, the stage (with a coloured dot for high or urgent priority) and the date it was opened. Long lists are split into pages." },
+      { "type": "callout", "tone": "info", "text": "The figures and the technician load always count every active job you can see, not just the page or filter you are looking at." },
+      { "type": "h", "text": "If something goes wrong" },
+      {
+        "type": "list",
+        "items": [
+          "**No jobs matched this view**: try another filter or a shorter search, or click **Clear filters**.",
+          "**There is no New job card button**: you can view job cards but not create them.",
+          "**A colleague sees jobs you don't**: you can only see jobs assigned to you or linked to your customers."
+        ]
+      },
+      { "type": "h", "text": "Related guides" },
+      {
+        "type": "list",
+        "items": [
+          "Opening a new job card",
+          "Moving a job through its stages",
+          "Workshop insights"
+        ]
+      }
+    ]
+  },
+  {
+    "slug": "jobcards-open-new",
+    "title": "Opening a new job card",
+    "summary": "Check a vehicle in (or open a job for a customer without a vehicle) by recording the work requested, arrival mileage and priority.",
+    "category": "workshop",
+    "audience": "everyone",
+    "keywords": ["new job card", "intake", "check-in", "book vehicle", "arrival mileage", "open job", "priority", "customer only"],
+    "body": [
+      { "type": "p", "text": "Open a job card as soon as a vehicle arrives, or as soon as a customer asks for work. You need permission to create, update and complete job cards." },
+      { "type": "h", "text": "Where to start" },
+      {
+        "type": "list",
+        "items": [
+          "**New job card** on the job cards list.",
+          "**+ Job card** on a vehicle's page: the vehicle is chosen for you.",
+          "**Book** or **Book workshop** on the **Service due** page: the vehicle is chosen for you."
+        ]
+      },
+      { "type": "h", "text": "Opening the job" },
+      {
+        "type": "steps",
+        "items": [
+          "Choose what the job is for. **On a vehicle** is the usual choice. **Customer only** is for work that isn't on a vehicle; it has no mileage and writes no service history.",
+          "For a vehicle job, choose the **Vehicle**. The vehicle decides the customer and where the service history is kept. Type the **Arrival mileage** in kilometres.",
+          "For a customer-only job, choose the **Customer**.",
+          "Write the **Work requested**: the customer's concern, the service they asked for, warning lights, noises. Write it so the technician and the customer both understand what was agreed.",
+          "Set the **Priority**: **Urgent**, **High**, **Normal** or **Low**.",
+          "Click **Open job card**."
+        ]
+      },
+      { "type": "p", "text": "The job gets the next job number, starts in the **Booking** stage and is assigned to you. Change the technician in the Booking step. The arrival mileage is also added to the vehicle's mileage log." },
+      { "type": "callout", "tone": "tip", "text": "Photos, inspections, parts, labour and the customer's signature are added inside the job after it opens, not on this form." },
+      { "type": "h", "text": "Correcting what you captured" },
+      { "type": "p", "text": "In the job's **Booking** step, click **Edit details** to correct the work requested or the arrival mileage. This isn't possible once the job has been collected." },
+      { "type": "h", "text": "If something goes wrong" },
+      {
+        "type": "table",
+        "headers": ["Message", "What to do"],
+        "rows": [
+          ["Describe the job.", "Fill in **Work requested**."],
+          ["Choose a vehicle or a customer.", "Pick the vehicle, or switch to **Customer only** and pick the customer."],
+          ["Enter the arrival mileage as a whole number of km.", "Type the mileage without spaces or decimals, for example 12450."],
+          ["This job has no vehicle, so it has no mileage.", "Customer-only jobs don't take a mileage. Leave it empty."]
+        ]
+      },
+      { "type": "h", "text": "Related guides" },
+      {
+        "type": "list",
+        "items": [
+          "Moving a job through its stages",
+          "Check-in photos, condition notes and inspections",
+          "Service due: staying ahead of scheduled work"
+        ]
+      }
+    ]
+  },
+  {
+    "slug": "jobcards-workflow-stages",
+    "title": "Moving a job through its stages",
+    "summary": "The seven stages a job walks from Booking to Ready for collection, how to move between them, and how to cancel, reopen, print or delete a job.",
+    "category": "workshop",
+    "audience": "everyone",
+    "keywords": ["stages", "pipeline", "workflow", "status", "booking", "repair", "quality check", "cancel", "reopen", "print", "delete"],
+    "body": [
+      { "type": "p", "text": "Inside a job, the work is laid out as seven stages. The current stage is open; the others fold away to one line you can click to open. The row of stage tiles across the top shows where the job is." },
+      { "type": "h", "text": "The stages" },
+      {
+        "type": "table",
+        "headers": ["#", "Stage", "What you do there"],
+        "rows": [
+          ["1", "**Booking**", "Set the technician, **Workshop bay**, **Priority** and **Labour estimate** (hours and rate)."],
+          ["2", "**Check-in**", "Photos and notes of the condition before work starts, and any check-in checklist."],
+          ["3", "**Diagnosis**", "The inspection checklist."],
+          ["4", "**Approval**", "Ask the customer to approve extra work, and get their signature."],
+          ["5", "**Repair**", "Parts and labour, the technician time clock, part reservations, service packages and subcontracted work."],
+          ["6", "**Quality check**", "Photos of the condition after the work, and any check-out checklist."],
+          ["7", "**Ready for collection**", "Complete the job and write the service record."]
+        ]
+      },
+      { "type": "p", "text": "After stage 7, a completed job is **Collected**. A job stopped early is **Cancelled**." },
+      { "type": "h", "text": "Moving the job" },
+      {
+        "type": "steps",
+        "items": [
+          "Click any stage tile at the top to move the job to that stage.",
+          "Or work down the open stage and move on when it is done.",
+          "Finished stages show a green tick; the current stage is highlighted."
+        ]
+      },
+      { "type": "callout", "tone": "warning", "text": "Only **Complete & write service record** in the last stage makes a job **Collected**. The stage tiles can't do it, so a job never looks finished without its service record." },
+      { "type": "h", "text": "Cancelling, reopening and deleting" },
+      {
+        "type": "list",
+        "items": [
+          "**Cancel job** asks for a **Reason for cancelling**, then takes the job off the workshop board. You can reopen it later.",
+          "**Reopen** on a collected or cancelled job sends it back to **Repair**. You can also click a stage tile to reopen it at that stage.",
+          "**More → Delete** moves the job card to Trash, where an owner can restore it for 60 days."
+        ]
+      },
+      { "type": "h", "text": "Other buttons at the top" },
+      {
+        "type": "list",
+        "items": [
+          "**Print** opens a printable job card.",
+          "**Service report** opens the customer's service report once the job is collected.",
+          "The watch button lets you follow the job: you are told when its stage changes."
+        ]
+      },
+      { "type": "p", "text": "The figures under the stages show the **Arrival mileage**, **Parts**, **Labour** (with hours logged) and the **Job total** the customer will be charged. **Team notes** at the bottom are for staff only and never appear on customer documents; type @ to mention a colleague." },
+      { "type": "h", "text": "If something goes wrong" },
+      {
+        "type": "list",
+        "items": [
+          "**Clicking a stage does nothing for you**: you can view the job but not update it.",
+          "**This job card is already completed — reopen it first to complete it again.**: click **Reopen**, make your changes, then complete it again."
+        ]
+      },
+      { "type": "h", "text": "Related guides" },
+      {
+        "type": "list",
+        "items": [
+          "Check-in photos, condition notes and inspections",
+          "Logging parts, labour and technician time",
+          "Additional-work approvals and customer sign-off",
+          "Completing a job and writing the service record"
+        ]
+      }
+    ]
+  },
+  {
+    "slug": "jobcards-checkin-photos-inspection",
+    "title": "Check-in photos, condition notes and inspections",
+    "summary": "Record the vehicle's condition before work starts with photos, mark-ups and notes, then run an inspection checklist during diagnosis.",
+    "category": "workshop",
+    "audience": "everyone",
+    "keywords": ["check-in photos", "condition", "inspection", "checklist", "annotate", "mark up", "diagnosis", "photos", "check-out photos"],
+    "body": [
+      { "type": "p", "text": "Photos and notes taken at check-in protect both your workshop and your customer: they show what the vehicle looked like before you touched it. The inspection checklist records what you found." },
+      { "type": "h", "text": "Check-in photos" },
+      {
+        "type": "steps",
+        "items": [
+          "In the **Check-in** stage, click **Add check-in photos**. On a phone you can take the photos with the camera.",
+          "Photograph scratches, dents, the odometer and anything else worth recording. You can add up to 12 photos at a time, each an image under 4 MB.",
+          "Click a photo to mark it up: draw on it to point out damage. The original photo is kept as it was, and you can change the mark-up later."
+        ]
+      },
+      { "type": "h", "text": "Condition notes" },
+      { "type": "p", "text": "Under **Condition notes**, type what you see **At check-in** (existing damage, charge level, loose items) and, when the job is done, **At check-out** (final condition, what was handed back). Click **Save condition notes**." },
+      { "type": "h", "text": "Checklists" },
+      { "type": "p", "text": "If your workspace has set up a check-in or check-out checklist, it appears in the Check-in and Quality check stages. Work through it there; it can be filled in offline on a phone and synced later." },
+      { "type": "h", "text": "Inspection checklist" },
+      {
+        "type": "steps",
+        "items": [
+          "In the **Diagnosis** stage, type what you are checking under **Add check**, for example Brakes, Tyres, Lights or Battery terminals, and click **Add**.",
+          "Set each item's status: **OK**, **Attention**, **Fail** or **N/A**.",
+          "Type a short **Note** and click **Save**.",
+          "To add evidence, use **Attach inspection photo** on the item.",
+          "Click ✕ to remove an item added by mistake."
+        ]
+      },
+      { "type": "callout", "tone": "tip", "text": "Take check-out photos in the **Quality check** stage with **Add check-out photos**. Together with the check-in photos, they show the condition the vehicle came in and went out in." },
+      { "type": "h", "text": "If something goes wrong" },
+      {
+        "type": "table",
+        "headers": ["Message", "What to do"],
+        "rows": [
+          ["None of those files could be used — photos must be images under 4 MB.", "Choose image files under 4 MB. Most phone cameras have a smaller-size setting."],
+          ["Upload up to 12 job-card photos at a time.", "Add the photos in smaller batches."],
+          ["Give the inspection item a label.", "Type what you are checking before clicking **Add**."],
+          ["That photo is larger than 4 MB.", "Use a smaller photo."]
+        ]
+      },
+      { "type": "h", "text": "Related guides" },
+      {
+        "type": "list",
+        "items": [
+          "Moving a job through its stages",
+          "Capturing guided checklists and signatures",
+          "Additional-work approvals and customer sign-off"
+        ]
+      }
+    ]
+  },
+  {
+    "slug": "jobcards-repair-parts-labour-time",
+    "title": "Logging parts, labour and technician time",
+    "summary": "Build up the job's cost in the Repair stage: part and labour lines, the technician time clock, part reservations, service packages and subcontracted work.",
+    "category": "workshop",
+    "audience": "everyone",
+    "keywords": ["parts", "labour", "time clock", "reservations", "stock", "service package", "subcontract", "repair", "labour rate"],
+    "body": [
+      { "type": "p", "text": "The **Repair** stage is where the job's cost is built up. The part and labour lines make up the **Job total** the customer is charged." },
+      { "type": "h", "text": "Part and labour lines" },
+      {
+        "type": "steps",
+        "items": [
+          "Under **Parts & labour**, choose whether the line is a part or labour.",
+          "For a part, pick it from your parts list (its selling price fills in), or choose **Custom part…** and type a description.",
+          "For labour, type the **Labour description**, for example a diagnostic or installation.",
+          "Enter the **Qty** and **Unit price** and add the line."
+        ]
+      },
+      {
+        "type": "list",
+        "items": [
+          "Adding a part from your parts list takes it off the shelf. Removing the line puts it back.",
+          "Click ✕ on a line to remove it. Removing can't be undone and is recorded in the customer's history.",
+          "Lines can't be changed once the job is collected or cancelled."
+        ]
+      },
+      { "type": "h", "text": "The technician time clock" },
+      {
+        "type": "steps",
+        "items": [
+          "Click **Start my clock** when you start working on the job.",
+          "Click **Stop my clock** when you stop or finish.",
+          "Each stretch of time is listed with who worked and when. Click ✕ to remove a wrong entry."
+        ]
+      },
+      { "type": "p", "text": "The heading shows the estimated hours, the hours logged and their labour value at the job's rate (or the workshop's default rate). **over estimate** appears when logged time passes the estimate." },
+      { "type": "callout", "tone": "warning", "text": "You can only run one clock at a time. Starting your clock on a job stops any clock you left running, on this job or another." },
+      { "type": "h", "text": "Reserving parts" },
+      { "type": "p", "text": "Under **Parts reservations**, choose a **Part** and **Qty** and click **Reserve** to set stock aside before it is fitted. Reserved stock stays on the shelf but can't be promised to another job. **Consume** turns the reservation into a part line and takes the stock off the shelf; **Release** cancels it." },
+      { "type": "h", "text": "Service packages" },
+      { "type": "p", "text": "If your workspace has service packages, choose one under **Apply service package** and click **Apply** to add its parts and labour lines in one go. Packages are set up under **Settings → Workshop settings**." },
+      { "type": "h", "text": "Subcontracted work" },
+      { "type": "p", "text": "If part of the job goes to another business, tick **This job is (partly) subcontracted**, type the **Subcontractor** and the **Cost** and click **Save**. The cost is taken off the job's profit in Workshop insights." },
+      { "type": "h", "text": "If something goes wrong" },
+      {
+        "type": "table",
+        "headers": ["Message", "What to do"],
+        "rows": [
+          ["A message like **Only 2 × Brake pads in stock.**", "You don't have enough on the shelf. Use fewer, or ask whoever manages parts to adjust the quantity."],
+          ["A message like **Only 1 × Oil filter available to reserve.**", "Other jobs have already reserved the rest."],
+          ["Give the line a description.", "Type a description, or pick a part."],
+          ["Enter a valid quantity.", "Type a quantity such as 1 or 0.5."]
+        ]
+      },
+      { "type": "h", "text": "Related guides" },
+      {
+        "type": "list",
+        "items": [
+          "Managing workshop parts",
+          "Workshop settings: rate, bays and packages",
+          "Workshop insights"
+        ]
+      }
+    ]
+  },
+  {
+    "slug": "jobcards-approvals-signoff",
+    "title": "Additional-work approvals and customer sign-off",
+    "summary": "Ask the customer to approve extra work found during the job, record their answer, and get the job card signed.",
+    "category": "workshop",
+    "audience": "everyone",
+    "keywords": ["approval", "additional work", "customer sign-off", "signature", "portal", "decline", "extra work", "online signature"],
+    "body": [
+      { "type": "p", "text": "When you find work beyond what the customer asked for, ask them to approve it before you do it. This happens in the **Approval** stage." },
+      { "type": "h", "text": "Asking for approval" },
+      {
+        "type": "steps",
+        "items": [
+          "Under **Additional-work approvals**, describe the **Additional work**, for example \"Replace worn brake pads\".",
+          "Type the **Est. cost** if you have one.",
+          "Click **Request approval**. If the customer uses your customer portal, they are told there that work is waiting for their approval."
+        ]
+      },
+      { "type": "h", "text": "Recording the customer's answer" },
+      {
+        "type": "steps",
+        "items": [
+          "When the customer answers, for example by phone, click **Approve** or **Decline** on the request.",
+          "The request shows **approved** or **declined** with how and when it was decided.",
+          "Click ✕ to remove a request raised by mistake."
+        ]
+      },
+      { "type": "p", "text": "Each request shows **pending** until it is decided. The stage heading shows how many are still waiting." },
+      { "type": "h", "text": "Getting the job card signed" },
+      { "type": "p", "text": "The **Online signature** card in the same stage sends the job card to the customer to sign. Click **Review & send**, check the document and who signs it, and send it. Once they have signed, the signature and the signer's name are kept on the job card and the stage heading shows **Signed**." },
+      { "type": "callout", "tone": "tip", "text": "Get approval before starting extra work, not after. A declined request is still worth keeping: it shows you told the customer." },
+      { "type": "h", "text": "If something goes wrong" },
+      {
+        "type": "list",
+        "items": [
+          "**Describe the additional work you are requesting.**: fill in **Additional work** before clicking **Request approval**.",
+          "**The request form is missing**: the job is collected or cancelled. Reopen it first."
+        ]
+      },
+      { "type": "h", "text": "Related guides" },
+      {
+        "type": "list",
+        "items": [
+          "Sending a quote for signature",
+          "Signing in person on your device",
+          "Moving a job through its stages"
+        ]
+      }
+    ]
+  },
+  {
+    "slug": "jobcards-complete-service-record",
+    "title": "Completing a job and writing the service record",
+    "summary": "Finish a job so it writes the vehicle's service record and sets the next service, and record warranty recovery and comebacks.",
+    "category": "workshop",
+    "audience": "everyone",
+    "keywords": ["complete", "service record", "next due", "collected", "warranty recovery", "comeback", "handover", "service report"],
+    "body": [
+      { "type": "p", "text": "Completing a job in the **Ready for collection** stage writes a permanent service record on the vehicle and marks the job **Collected**." },
+      { "type": "h", "text": "Completing the job" },
+      {
+        "type": "steps",
+        "items": [
+          "Under **Complete job card**, check the **Mileage (km)**. It starts at the arrival mileage.",
+          "Fill in **Next due (km)** and **Next due (date)** only if this service sets a specific next service. Leave them empty to use the vehicle's service intervals.",
+          "Type the **Service summary**. If you leave it empty, the work requested is used.",
+          "Add **Work done / notes** and click **Complete & write service record**."
+        ]
+      },
+      { "type": "p", "text": "If you left the next-due values empty, the next service is set from the vehicle's intervals: the mileage you entered plus **Service every (km)**, and today plus **Service every (months)**. The mileage is also added to the vehicle's mileage log." },
+      { "type": "p", "text": "A job with no vehicle is simply marked done, with no service record." },
+      { "type": "callout", "tone": "info", "text": "Completing a job also sends the customer whatever your workspace has switched on for completed job cards, such as a review request or a survey. You can see and switch these under **Settings → Automatic jobs & messages**." },
+      { "type": "p", "text": "Once collected, the job shows **Completed** with the service record, and **Service report** appears at the top." },
+      { "type": "h", "text": "Warranty recovery" },
+      { "type": "p", "text": "If your workspace uses warranties and the work was under warranty, tick **Work is under warranty**, type the amount **Recovered** (labour and parts) and click **Save**. Workshop insights totals it." },
+      { "type": "h", "text": "Comebacks" },
+      { "type": "p", "text": "If this job is a repeat of an earlier repair on the same vehicle, choose that earlier job under **Comeback / repeat repair** and click **Save**. This keeps your comeback rate in Workshop insights honest. Choose **Not a comeback** to clear it." },
+      { "type": "h", "text": "If something goes wrong" },
+      {
+        "type": "list",
+        "items": [
+          "**This job card is already completed — reopen it first to complete it again.**: click **Reopen**, then complete it again.",
+          "**The next service date is empty after completing**: the vehicle has no service interval in months and you left **Next due (date)** empty. Open the vehicle, click **Edit** and set the intervals."
+        ]
+      },
+      { "type": "h", "text": "Related guides" },
+      {
+        "type": "list",
+        "items": [
+          "Service history and mileage tracking",
+          "Workshop insights",
+          "Automatic jobs & messages: everything the CRM does by itself"
+        ]
+      }
+    ]
+  },
+  {
+    "slug": "jobcards-insights",
+    "title": "Workshop insights",
+    "summary": "Work in progress, 90-day profit and margin, comeback rate, warranty recovered, technician hours and where active jobs are sitting.",
+    "category": "workshop",
+    "audience": "managers",
+    "keywords": ["insights", "wip", "profitability", "margin", "comeback rate", "productivity", "reporting", "technician hours"],
+    "body": [
+      { "type": "p", "text": "**Workshop Insights** (in the menu under **Insights**) gathers the numbers a workshop manager watches. Anyone who can view job cards can open it; the figures only count the jobs you can see. It isn't available on the phone app." },
+      {
+        "type": "table",
+        "headers": ["Figure", "How it is worked out"],
+        "rows": [
+          ["**Work in progress**", "The billed value of every active job, with how many there are."],
+          ["**Profit · 90 days**", "For jobs completed in the last 90 days: what the customers were billed, less the cost price of the parts used and any subcontract cost. The margin is that profit as a share of what was billed."],
+          ["**Comeback rate · 90 days**", "The share of jobs completed in the last 90 days that were marked as a comeback."],
+          ["**Warranty recovered**", "The amount recovered on warranty work over the last 90 days. Shown only if your workspace uses warranties."]
+        ]
+      },
+      { "type": "p", "text": "Below the figures, **Technician productivity · 30 days** lists the hours each technician logged on the time clock, and **Active jobs by stage** shows how many active jobs sit in each stage." },
+      { "type": "callout", "tone": "warning", "text": "Profit is only as good as your costs. Parts typed as **Custom part…** have no cost price, labour has no cost, and subcontract costs count only if they are saved on the job. Keep part cost prices and subcontract costs up to date." },
+      { "type": "h", "text": "Related guides" },
+      {
+        "type": "list",
+        "items": [
+          "Logging parts, labour and technician time",
+          "Completing a job and writing the service record",
+          "Managing workshop parts"
+        ]
+      }
+    ]
+  },
+  {
+    "slug": "workshop-calendar-bookings",
+    "title": "The workshop calendar",
+    "summary": "See and schedule workshop bookings by month, week or agenda, block time off, and see how many booking slots are still open.",
+    "category": "workshop",
+    "audience": "everyone",
+    "keywords": ["workshop calendar", "bookings", "schedule", "slots", "capacity", "diary", "block time", "open slots"],
+    "body": [
+      { "type": "p", "text": "The **Workshop calendar** (in the menu under **Service**) shows workshop bookings only, separate from the sales calendar. Use the **Sales** and **Workshop** switch at the top to move between the two." },
+      { "type": "h", "text": "Who can use it" },
+      { "type": "p", "text": "You need permission to view activities and calendars and to view job cards. Scheduling, moving and blocking time needs permission to create, assign and complete activities. An owner sets these under **Settings → Team & roles**." },
+      { "type": "h", "text": "What you see" },
+      {
+        "type": "table",
+        "headers": ["Figure", "What it shows"],
+        "rows": [
+          ["**Today**", "Workshop jobs planned for today."],
+          ["**Bookings**", "Workshop bookings this month."],
+          ["**Open slots**", "Booking slots still free from today up to the furthest day bookings are allowed, based on your slot settings."],
+          ["**Overdue**", "Planned bookings whose time has passed without being marked done."]
+        ]
+      },
+      {
+        "type": "list",
+        "items": [
+          "Only workshop bookings that are planned or done appear, plus time someone has blocked off. Cancelled bookings are hidden.",
+          "Each booking shows its time, type and who it is assigned to.",
+          "On bookable days, each day shows how full it is against its slots. The count includes bookings assigned to other people, so a full day really is full.",
+          "Switch between **Month**, **Week** and **Agenda**, search, and filter by person or activity type."
+        ]
+      },
+      { "type": "h", "text": "Scheduling a booking" },
+      {
+        "type": "steps",
+        "items": [
+          "Click **Schedule** at the top, or select a day and click **Add**.",
+          "Fill in the booking. The time starts at the first free slot of the day, so the booking takes up a real slot.",
+          "Save it."
+        ]
+      },
+      { "type": "p", "text": "To move a booking, drag it to another day. To keep a person or the workshop unavailable, click **Block time** (or **Block** on a day)." },
+      { "type": "h", "text": "Setting up the slots" },
+      { "type": "p", "text": "An owner sets the slots under **Settings → Bookings & slots**, in **Online booking slots**: the **Slot start times**, the **Booking days**, the **Vehicles per slot** and the **Bookable days ahead**. Click **Save workshop settings**. The calendar's open slots use these settings." },
+      { "type": "h", "text": "If something goes wrong" },
+      {
+        "type": "list",
+        "items": [
+          "**Workshop calendar isn't in your menu**: you need permission to view both activities and job cards.",
+          "**Open slots shows 0**: no slot times or booking days are set, or every slot is taken.",
+          "**There is no Schedule button**: you can view the calendar but not schedule on it."
+        ]
+      },
+      { "type": "h", "text": "Related guides" },
+      {
+        "type": "list",
+        "items": [
+          "The sales calendar",
+          "Opening a new job card",
+          "Activity types: what your team can put in the diary"
+        ]
+      }
+    ]
+  },
+  {
+    "slug": "service-due-scheduling",
+    "title": "Service due: staying ahead of scheduled work",
+    "summary": "See which customer vehicles are overdue or due soon, book them into the workshop, and send the owner a service reminder.",
+    "category": "workshop",
+    "audience": "everyone",
+    "keywords": ["service due", "overdue", "due soon", "reminder", "service interval", "mileage", "booking", "remind"],
+    "body": [
+      { "type": "p", "text": "**Service Due** (in the menu under **Service**) lists the customer vehicles that are overdue for a service or due within the next 30 days or 200 km. Use it to fill the workshop before customers' service windows pass." },
+      { "type": "p", "text": "Anyone who can view vehicles can see the list, but only the vehicles they can see. Booking and reminding need permission to manage vehicles." },
+      { "type": "h", "text": "How due is worked out" },
+      {
+        "type": "list",
+        "items": [
+          "**Overdue**: the next service date has passed, or the vehicle has gone past the next service mileage.",
+          "**Due soon**: the next service date is 30 days away or less, or the vehicle is within 200 km of the next service mileage.",
+          "If the last service record has a next-due date or mileage, that is used. Otherwise the vehicle's service intervals are added to the last service (or the purchase date, if there has been no service)."
+        ]
+      },
+      { "type": "p", "text": "The figures at the top count **Overdue**, **Due soon**, **Total to action** and **Fleet checked** (all vehicles checked, and how many are clear). Each row shows the vehicle, owner, status, due date, kilometres left and last service." },
+      { "type": "h", "text": "Acting on a due vehicle" },
+      {
+        "type": "list",
+        "items": [
+          "**Book** (or **Book workshop** on a phone) opens a new job card with the vehicle already chosen.",
+          "**Remind** sends the owner a service reminder by email, or by SMS if there is no email or the customer doesn't take email reminders. The button changes to **Reminded via email ✓** or **Reminded via SMS ✓**."
+        ]
+      },
+      { "type": "p", "text": "The wording of the reminder comes from your workspace's own service reminder email and SMS, which you can change under **Settings → Email**, in **Email templates**." },
+      { "type": "callout", "tone": "info", "text": "A reminder is never sent to a customer who has opted out of that kind of message. The button tells you why instead." },
+      { "type": "h", "text": "If something goes wrong" },
+      {
+        "type": "table",
+        "headers": ["Message", "What to do"],
+        "rows": [
+          ["No email or phone on file", "Add an email address or mobile number to the customer's contact."],
+          ["A message starting **Not sent —**", "The customer has opted out, or this kind of message isn't allowed for them. The message says which."],
+          ["Email failed or SMS failed", "Your workspace's email or SMS sending has a problem. Tell whoever looks after your settings."]
+        ]
+      },
+      { "type": "h", "text": "Related guides" },
+      {
+        "type": "list",
+        "items": [
+          "Service history and mileage tracking",
+          "Opening a new job card",
+          "Registering customer vehicles"
+        ]
+      }
+    ]
+  },
+  {
+    "slug": "warranty-claims-recalls",
+    "title": "Warranty and recalls",
+    "summary": "Watch warranties that are expiring, follow open claims, send recall and service bulletins to every owner of a model, and (for owners) set the warranty rules.",
+    "category": "workshop",
+    "audience": "everyone",
+    "keywords": ["warranty", "claims", "recall", "bulletin", "expiring", "notify owners", "warranty parts", "warranty transfer"],
+    "body": [
+      { "type": "p", "text": "**Warranty** (in the menu under **Service**) brings together warranty expiry, open claims and recall bulletins for the vehicles you can see. It is there only if your workspace uses warranties." },
+      { "type": "h", "text": "Who can use it" },
+      { "type": "p", "text": "You need permission to view warranty claims, recalls and battery checks to open the page. Creating bulletins, notifying owners and managing claims need permission to manage them. An owner sets these under **Settings → Team & roles**, in the **Workshop** group." },
+      { "type": "h", "text": "The figures at the top" },
+      {
+        "type": "table",
+        "headers": ["Figure", "What it shows"],
+        "rows": [
+          ["**Warranty attention**", "Warranties expiring within 60 days or already expired."],
+          ["**Open claims**", "Claims that are open or approved."],
+          ["**Recall bulletins**", "Bulletins on record, and how many models your vehicles cover."],
+          ["**Fleet covered**", "How many vehicles were checked."]
+        ]
+      },
+      { "type": "h", "text": "Expiring warranties and open claims" },
+      {
+        "type": "list",
+        "items": [
+          "**Warranties expiring or expired** lists each vehicle, its owner, its status (**Expiring soon** or **Out of warranty**) and the expiry date, soonest first.",
+          "**Open warranty claims** lists each claim with the fault, its status and when it was opened. Click the fault to open the claim, or **Print claim** for a printable claim.",
+          "Claims are logged on the vehicle's page, in its **Warranty** panel."
+        ]
+      },
+      { "type": "h", "text": "Sending a recall or service bulletin" },
+      {
+        "type": "steps",
+        "items": [
+          "Under **Recalls & service bulletins**, type the **Title**, choose the **Affected model** and describe what owners need to know and do.",
+          "Click **Create bulletin**.",
+          "Click **Notify … owners** on the bulletin. Each owner of that model gets the notice by email or SMS. The result shows how many were sent and skipped, and the bulletin records the date."
+        ]
+      },
+      { "type": "p", "text": "The notice wording comes from your workspace's own recall notice email and SMS, under **Settings → Email**, in **Email templates**. Owners who have opted out of service messages are skipped." },
+      { "type": "callout", "tone": "warning", "text": "Deleting a bulletin removes it permanently; it doesn't go to Trash. Notices already sent can't be called back." },
+      { "type": "h", "text": "Settings only the owner sees" },
+      {
+        "type": "list",
+        "items": [
+          "**Warranty when a vehicle changes hands**: whether the warranty goes to a new owner. **Yes — the warranty transfers with the vehicle**, **No — the warranty stays with the first owner**, or **Needs approval — someone with warranty rights approves each transfer**. The warranty's dates never change.",
+          "**Warranty parts**: the parts a warranty can cover, one per line (for example Battery, Frame, Motor). Each model's cover for each part is set on its product page and copied onto every vehicle at delivery. Click **Save parts**."
+        ]
+      },
+      { "type": "h", "text": "If something goes wrong" },
+      {
+        "type": "list",
+        "items": [
+          "**Title, model and details are required**: fill in all three before creating the bulletin.",
+          "**The Notify button is greyed out**: no vehicles you can see are of that model.",
+          "**Warranty isn't in your menu**: warranties are switched off for your workspace, or you can't view them."
+        ]
+      },
+      { "type": "h", "text": "Related guides" },
+      {
+        "type": "list",
+        "items": [
+          "Battery health and warranty claims",
+          "Transferring a vehicle (and its warranty) to a new owner",
+          "Managing the product catalogue"
+        ]
+      }
+    ]
+  },
+  {
+    "slug": "settings-workshop-configuration",
+    "title": "Workshop settings: rate, bays and packages",
+    "summary": "Set the default labour rate, the workshop bays jobs are assigned to, and the service packages technicians apply in one click.",
+    "category": "workshop",
+    "audience": "admins",
+    "keywords": ["workshop settings", "labour rate", "bays", "service packages", "configuration", "admin", "minor service"],
+    "body": [
+      { "type": "p", "text": "**Settings → Workshop settings** holds the defaults the workshop works from. You need permission to manage workshop operations, set by an owner under **Settings → Team & roles**, in the **Workshop** group." },
+      { "type": "p", "text": "The figures at the top show the **Labour rate**, **Active bays**, **Service packages** and **Package items**." },
+      { "type": "h", "text": "Default labour rate" },
+      { "type": "p", "text": "Type the **Rate per hour** and click **Save rate**. It values the time technicians log on job cards. A job card can use its own rate in its **Labour estimate**. Until you set one, a built-in default of 650 an hour is used." },
+      { "type": "h", "text": "Workshop bays" },
+      {
+        "type": "steps",
+        "items": [
+          "Click **New bay**.",
+          "Type the **Name**, pick a **Colour**, set the **Sort order** and add **Notes** (for example lift, alignment or diagnostics).",
+          "Keep **Active (available for assignment)** ticked so jobs can be put in the bay.",
+          "Click **Create bay**."
+        ]
+      },
+      { "type": "p", "text": "Use **Edit** to change a bay. A bay's colour shows next to its name on job cards." },
+      { "type": "callout", "tone": "warning", "text": "Deleting a bay takes it off every job card that was in it. Untick **Active** instead if you might use the bay again." },
+      { "type": "h", "text": "Service packages" },
+      {
+        "type": "steps",
+        "items": [
+          "Click **New package**. Type the **Name** (for example Minor service) and a **Description** of what it includes.",
+          "Keep **Active (available to apply)** ticked and click **Create package**.",
+          "On the package, add each line: choose **Part** or **Labour**, type the **Description**, the quantity and the unit price, and click **Add item**. Click ✕ to remove a line."
+        ]
+      },
+      { "type": "p", "text": "Technicians can then add the whole package to a job card from the Repair stage with **Apply service package**. Deleting a package doesn't change job cards it was already applied to." },
+      { "type": "h", "text": "If something goes wrong" },
+      {
+        "type": "list",
+        "items": [
+          "**Workshop settings isn't in Settings**: you don't have permission to manage workshop operations, or the workshop isn't switched on for your workspace.",
+          "**A package doesn't appear on job cards**: it is inactive or has no lines."
+        ]
+      },
+      { "type": "h", "text": "Related guides" },
+      {
+        "type": "list",
+        "items": [
+          "Logging parts, labour and technician time",
+          "The workshop calendar",
+          "Managing workshop parts"
+        ]
+      }
+    ]
+  }
+]

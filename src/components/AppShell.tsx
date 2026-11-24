@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import Nav from "@/components/Nav";
 import SidebarHelpSettings from "@/components/SidebarHelpSettings";
+import ScreenHelp from "@/components/help/ScreenHelp";
 import AccountMenu from "@/components/AccountMenu";
 import ClockWeather from "@/components/ClockWeather";
 import type { WeatherCity } from "@/lib/weatherCities";
@@ -99,6 +100,8 @@ function AccountCluster({ user, isOwner, tenantId, unreadNotices = 0, birthdaysT
         <Bell className="size-3.5" />
         {unreadNotices > 0 && <span className="text-[10px] font-semibold tabular-nums">{unreadNotices > 99 ? "99+" : unreadNotices}</span>}
       </Link>
+      {/* "?" — this screen's guide in a side panel, without leaving the page (hidden where there is none). */}
+      <ScreenHelp />
       <SidebarHelpSettings isOwner={isOwner} permissions={user.permissions} compact />
       <div className="mx-0.5 h-5 w-px bg-sidebar-border/70" aria-hidden />
       <AccountMenu user={user} isOwner={isOwner} tenantId={tenantId} compact />
@@ -151,7 +154,7 @@ function SidebarInner({ user, inboxWaiting = 0, casesWaiting = 0, activitiesOver
         <div className="flex min-w-0 flex-1 items-center">
           <BrandLogo
             logoUrl={brand?.logoUrl ?? null}
-            alt={brand?.displayName ?? "Denago Cape Town"}
+            alt={brand?.displayName ?? "Logo"}
             className="h-8 w-auto max-w-full object-contain"
           />
         </div>
@@ -307,7 +310,7 @@ export default function AppShell({
         <div className="flex min-w-0 shrink justify-center overflow-hidden">
           <BrandLogo
             logoUrl={brand?.logoUrl ?? null}
-            alt={brand?.displayName ?? "Denago Cape Town"}
+            alt={brand?.displayName ?? "Logo"}
             className="h-6 w-auto max-w-full object-contain"
             wordmarkClassName="text-xs"
           />

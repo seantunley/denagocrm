@@ -18,7 +18,7 @@ export default function VendorFields({ vendor }: { vendor?: VendorDetails }) {
   return (
     <>
       <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_14rem]">
-        <div><label className="label">Name</label><input name="name" className="input" required maxLength={120} defaultValue={vendor?.name} placeholder="Denago, Cape Carts Transport, Wrap Studio" /></div>
+        <div><label className="label">Name</label><input name="name" className="input" required maxLength={120} defaultValue={vendor?.name} placeholder="e.g. your manufacturer, a transport company, a wrap studio" /></div>
         <div>
           <label className="label">What they are</label>
           <select name="kind" className="input" defaultValue={vendor?.kind ?? "other"}>

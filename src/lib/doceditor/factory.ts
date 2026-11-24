@@ -47,7 +47,7 @@ export function newBlock(type: BlockType, preset?: string): DocumentBlock {
     case "pricing":
       return {
         id: uid(), type, ...emptyLayout, currency: DEFAULT_REGIONAL.currency, bound: false, showTax: true, showDiscount: true, accent: "#ea580c",
-        lines: [newPricingLine({ name: "Denago Rover XL", unitPrice: 189900, qty: 1 }), newPricingLine({ name: "On-road & handover", unitPrice: 4500, qty: 1 })],
+        lines: [newPricingLine({ name: "Product", unitPrice: 189900, qty: 1 }), newPricingLine({ name: "On-road & handover", unitPrice: 4500, qty: 1 })],
       };
     case "table":
       return {
@@ -94,7 +94,7 @@ export function newBlock(type: BlockType, preset?: string): DocumentBlock {
     case "warrantyCover":
       return { id: uid(), type, ...emptyLayout, title: "WARRANTY COVER", accent: "#ea580c" };
     case "showcaseHeader":
-      return { id: uid(), type, ...emptyLayout, title: "QUOTATION", docNumber: "{{quote.number}}", tagline: "PREMIUM ELECTRIC MOBILITY", bg: "#020617", accent: "#ea580c", bgImage: "", showLogo: true };
+      return { id: uid(), type, ...emptyLayout, title: "QUOTATION", docNumber: "{{quote.number}}", tagline: "", bg: "#020617", accent: "#ea580c", bgImage: "", showLogo: true };
     case "infoStrip":
       return { id: uid(), type, ...emptyLayout, accent: "#ea580c", items: [
         { icon: "calendar", label: "QUOTE DATE", value: "{{quote.date}}", sub: "" },
@@ -102,7 +102,7 @@ export function newBlock(type: BlockType, preset?: string): DocumentBlock {
         { icon: "user", label: "PREPARED BY", value: "{{preparedBy}}", sub: "Sales Consultant" },
       ] };
     case "vehicleShowcase":
-      return { id: uid(), type, ...emptyLayout, part: "full", brand: "DENAGO EV", accent: "#ea580c", imageHeight: 280, imageFit: "contain" };
+      return { id: uid(), type, ...emptyLayout, part: "full", brand: "", accent: "#ea580c", imageHeight: 280, imageFit: "contain" };
     case "totalsBox":
       return { id: uid(), type, ...emptyLayout, bg: "#020617", accent: "#ea580c", totalLabel: "TOTAL INCL. VAT", totalAmount: "{{quote.total}}", rows: [
         { label: "Subtotal (excl. VAT)", value: "{{quote.subtotal}}" },

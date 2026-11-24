@@ -108,7 +108,7 @@ export function AddDocumentsForm({
           className="input"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="e.g. Denago EV Price List"
+          placeholder="e.g. 2027 Price List"
         />
       </div>
       {progress && <p className="text-sm text-emerald-400">{progress}</p>}

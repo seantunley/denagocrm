@@ -217,7 +217,7 @@ export default async function InboxPage({ searchParams }: { searchParams: Promis
         <Surface className="border-amber-500/30 bg-amber-500/[0.06] p-4">
           <p className="text-sm font-medium text-amber-200">Public replies are not enabled yet</p>
           <p className="mt-1 text-xs text-muted-foreground">
-            Replying <b>privately</b> works now. To also reply <b>under the post</b>, the Denago CRM app needs
+            Replying <b>privately</b> works now. To also reply <b>under the post</b>, the CRM&apos;s Meta app needs
             Meta&apos;s <code className="rounded bg-muted px-1">pages_manage_engagement</code> permission:
             request it in the Meta app dashboard under <b>App Review → Permissions and Features</b>, then
             reconnect the Page in Settings → Integrations.

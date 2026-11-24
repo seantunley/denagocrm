@@ -1,1 +1,460 @@
-[{"slug":"admin-settings-overview","title":"Settings overview and navigation","summary":"How the Settings area is organised, who can see which sections, and how to find any setting fast.","category":"admin","audience":"everyone","keywords":["settings","configuration","navigation","admin","workspace"],"body":[{"type":"p","text":"**Settings** is the single place to configure your workspace, customer channels, operational policies and security. Open it from the main navigation. What you see depends on your access level."},{"type":"h","text":"Who sees what"},{"type":"p","text":"If you are an **owner (admin)**, you see every settings section. Everyone else sees only **My Account** — your own profile, password, two-factor authentication, passkeys and device notifications. All other sections are admin-only."},{"type":"h","text":"How settings are grouped"},{"type":"list","items":["**You** — My Account and Notifications.","**CRM** — Pipeline, Quotes, Import.","**Workshop** — Bookings and slots.","**Catalog** — Products, Stock labels, Library.","**Comms & Marketing** — Email, Automations.","**Organisation** — Company profile, Team & access, Portal access, Documents, Signing workflows, Security, Backup & recovery, Sessions & devices, Integrations, System Log."]},{"type":"h","text":"Finding a setting"},{"type":"p","text":"The settings sidebar is searchable, and the same catalogue powers the application-wide search. Search by name or by keyword (for example \"logo\", \"webhook\", \"2FA\", \"stock\") to jump straight to the right panel."},{"type":"callout","tone":"info","text":"Some sections open as their own full page (Company profile, Team & access, Pipelines, Security, Backup & recovery, Sessions, Portal access, Documents, Signing workflows). Others open as a tab within the main Settings page."}]},{"slug":"admin-my-account-profile","title":"My Account: profile, password and email signature","summary":"Manage your own password, mobile number and email signature from the My Account tab.","category":"admin","audience":"everyone","keywords":["account","password","signature","profile","mobile"],"body":[{"type":"p","text":"**My Account** is the one settings tab every user can open. It shows your name, email and whether you are an Owner or a Member, and lets you manage your own sign-in and signature."},{"type":"h","text":"Change your password"},{"type":"steps","items":["Open Settings and go to My Account.","Expand **Password** and choose Change.","Enter your current password, then a new password of at least 12 characters containing letters and numbers.","Save. The new password must be different from your current one."]},{"type":"callout","tone":"warning","text":"Changing your password signs out all your other devices immediately. Your current session stays active."},{"type":"h","text":"Email signature"},{"type":"p","text":"Expand **Email signature** to preview your branded signature. Add **My mobile number** so it appears in the signature. Leave **Custom signature HTML** blank to keep the branded signature (recommended); fill it in only if you need a fully custom block."},{"type":"h","text":"Push notifications"},{"type":"p","text":"The **Push notifications** panel opts this specific device in to alerts when a lead, DM or signed quote comes in. Each phone or computer opts in separately — see the Notifications article for detail."}]},{"slug":"admin-two-factor-passkeys","title":"Two-factor authentication and passkeys","summary":"Add a second sign-in step with an authenticator app, backup codes, email codes or a passkey.","category":"admin","audience":"everyone","keywords":["2fa","two-factor","totp","authenticator","passkey","security","backup codes"],"body":[{"type":"p","text":"Two-factor authentication (2FA) adds a second step at sign-in, protecting your account even if your password leaks. Set it up from **My Account**. Your status shows as On or Off."},{"type":"h","text":"Set up an authenticator app"},{"type":"steps","items":["In My Account, expand **Two-factor authentication** and choose Set up.","Select **Set up authenticator app**.","Scan the QR code with Google Authenticator, Authy or 1Password (or enter the shown key manually).","Enter the 6-digit code the app displays and choose Verify & enable.","Save the one-time **backup codes** shown — each works once if you lose your phone. They are not shown again."]},{"type":"callout","tone":"warning","text":"Store your backup codes somewhere safe and separate from your phone. Without them, losing your authenticator device can lock you out."},{"type":"h","text":"Turn 2FA off"},{"type":"p","text":"Expand Two-factor authentication, enter a current authenticator code, and choose **Disable 2FA**."},{"type":"h","text":"Email sign-in codes (backup)"},{"type":"p","text":"Tick **Also allow email sign-in codes as a backup** to receive a code by email at sign-in. It is a useful fallback, but be aware your email inbox then becomes part of your account security."},{"type":"h","text":"Passkeys"},{"type":"p","text":"Expand **Passkeys** to add a passkey (fingerprint, face or device PIN) for password-free sign-in. Each passkey can be given a nickname; the panel shows when each was created and last used, and lets you remove ones you no longer use."}]},{"slug":"admin-notifications","title":"Notifications and push alerts","summary":"Opt each device in to push, and (admins) choose which events notify the whole team.","category":"admin","audience":"everyone","keywords":["notifications","push","alerts","devices","mobile app"],"body":[{"type":"p","text":"Notifications are controlled in two places: **per device** (each user, on each device) and **team-wide** (admins decide which event types are allowed to notify anyone)."},{"type":"h","text":"Turn on push for this device"},{"type":"steps","items":["Open Settings and go to Notifications (or the Push panel in My Account).","Expand **Push on this device** and choose Manage.","Allow notifications when your browser or phone prompts."]},{"type":"callout","tone":"tip","text":"Each phone and computer opts in separately. Install the app on your phone (add to home screen) for lock-screen notifications."},{"type":"h","text":"Choose what sends a notification (admins)"},{"type":"p","text":"The **What sends a notification** list applies to the whole team's devices — unticking a type silences it everywhere. Available types include:"},{"type":"list","items":["New lead, Social DMs, WhatsApp messages, Bot hand-offs","Service bookings, Portal service requests, Support cases, Warranty claims, Profile change requests","Quote opened, Quote / job card signed, Quote declined or changes","Google reviews, Email replies, Referral fees, Competitor changes","System errors (throttled to 1 per 30 min), Security & AI health, Backup failures (throttled to 1 per day), Meeting reminders"]},{"type":"callout","tone":"info","text":"Editing the team-wide list is owner-only. Members can still manage push on their own devices."}]},{"slug":"admin-company-profile","title":"Company profile and branding","summary":"Set the business details that fill merge fields and the branded footer on your documents.","category":"admin","audience":"admins","keywords":["company","branding","logo","address","footer","merge fields"],"body":[{"type":"p","text":"**Company profile** is the single source of truth for your business details. It fills the {{company.*}} merge fields and the branded footer in documents that use them (the Document Builder, e-signature documents and Document Studio). Only owners can open it."},{"type":"h","text":"Fields you can set"},{"type":"table","headers":["Field","Use"],"rows":[["Company name","Business name shown on documents"],["Tagline","e.g. \"Authorized Denago EV Dealer\""],["Address","Full business address"],["Phone / Email / Website","Contact details in the footer and merge fields"],["Facebook / Instagram","Social handles"],["Logo URL","Link to your logo image (https://…)"]]},{"type":"steps","items":["Open Settings, then Company profile.","Fill in the fields you want to use.","Choose Save company profile."]},{"type":"callout","tone":"info","text":"Blank fields fall back to the built-in defaults. The classic quote, invoice and agreement print templates are being migrated to read from here."}]},{"slug":"admin-team-user-management","title":"Managing team members and user security","summary":"Add users, disable or reactivate accounts, revoke sessions, reset 2FA and set the idle sign-out policy.","category":"admin","audience":"admins","keywords":["users","team","add user","disable","revoke sessions","reset 2fa","session policy"],"body":[{"type":"p","text":"User accounts are managed in two places: the **Team** tab in Settings (quick add and per-user controls) and the **Team & access** page (full user-security table, teams and roles)."},{"type":"h","text":"Add a team member"},{"type":"steps","items":["In Settings, open the Team tab.","Expand **Add a team member**.","Enter their full name, email and a password of at least 12 characters containing letters and numbers.","Choose Add team member."]},{"type":"callout","tone":"info","text":"New users are created as Members and automatically assigned the Sales rep role. Adjust their roles afterwards on the Team & access page. Emails must be unique."},{"type":"h","text":"Per-user controls"},{"type":"p","text":"In the Team table, each other user has controls to **Make admin / Make member**, toggle legacy access modules (CRM, Workshop, Reports, Social Inbox — fallbacks for screens not yet on role-based permissions), and **Reset 2FA**. Resetting 2FA signs the user out and lets them sign in with only their password until they reconfigure it."},{"type":"h","text":"User security (Team & access page)"},{"type":"p","text":"The **User security** table lists every user with status, last login and failed-login count. For any user other than yourself you can:"},{"type":"list","items":["**Revoke sessions** — sign the user out of every device.","**Disable** — block sign-in entirely; **Reactivate** to restore access."]},{"type":"callout","tone":"warning","text":"Disabling a user or revoking their sessions takes effect on their next request, not necessarily instantly."},{"type":"h","text":"Auto sign-out policy"},{"type":"p","text":"Under **Settings → Sessions & devices**, set **Auto sign-out after inactivity** (15 minutes up to 24 hours). Saving signs everyone else in the workspace out, so they sign in again under the new rule. Everyone still re-signs in at least once per absolute session window regardless of this setting."}]},{"slug":"admin-roles-permissions","title":"Roles and permissions","summary":"Bundle granular permissions into roles, then assign roles to people for fine-grained access control.","category":"admin","audience":"admins","keywords":["roles","permissions","rbac","access control","sales rep"],"body":[{"type":"p","text":"Access is controlled by **roles** — named bundles of permissions that you assign to users. Manage them under **Team & access → Roles & permissions**. Owners always have every permission; everything else is granted through roles."},{"type":"h","text":"Create a role"},{"type":"steps","items":["On the Team & access page, choose **Create role**.","Give it a name (e.g. \"Sales manager\") and an optional description.","Create it, then expand the role to tick the permissions it should include.","Choose **Save permissions**."]},{"type":"p","text":"Permissions are grouped by category (leads, contacts, quotes, documents, cases, vehicles, job cards, reports, teams, roles, audit and more). Most modules offer view-all versus view-owned scopes plus create, edit, manage and delete actions — for example **leads.view_all** versus **leads.view_owned**, or **quotes.change_status**."},{"type":"callout","tone":"info","text":"Roles marked System are built in. You can view and adjust their permissions but they are intended as sensible defaults."},{"type":"h","text":"Assign roles to people"},{"type":"steps","items":["Scroll to **Role assignments**.","For each user, tick the roles they should have.","Choose Save on that user's row."]},{"type":"callout","tone":"tip","text":"\"Owned\" scopes let someone see only records they created, are assigned to, or that belong to their team. Use view-owned roles for reps and view-all roles for managers."}]},{"slug":"admin-teams","title":"Teams and lead visibility","summary":"Group members into teams to drive team-level lead ownership and view-owned visibility.","category":"admin","audience":"managers","keywords":["teams","team","manager","lead visibility","ownership"],"body":[{"type":"p","text":"**Teams** group members so that view-owned permissions extend across a team, not just to individuals. A user with view-owned access sees records they own plus records belonging to any team they are a member of or manage. Manage teams under **Team & access → Teams**."},{"type":"h","text":"Create a team"},{"type":"steps","items":["On the Team & access page, choose **Create team**.","Enter a name (e.g. \"Sales floor\"), optionally pick a manager, and add a description.","Create it."]},{"type":"h","text":"Manage members"},{"type":"p","text":"Expand a team to add or remove members, change its manager, edit its description, or toggle it Active. The team manager and every member can see the team's leads under owned scopes."},{"type":"callout","tone":"info","text":"Viewing teams needs the teams.view permission; creating and editing them needs teams.manage. Without manage rights you see teams read-only."}]},{"slug":"admin-pipelines","title":"Sales pipelines and stages","summary":"Configure separate sales processes and their stages, colours, probabilities and closed results.","category":"admin","audience":"managers","keywords":["pipeline","stages","sales process","probability","won","lost"],"body":[{"type":"p","text":"**Sales pipelines** let you run separate retail, fleet, hospitality, partner and service-sales processes, each with its own stages. Manage them under Settings → Pipeline (Team & access users need the pipelines.manage permission)."},{"type":"h","text":"Create a pipeline"},{"type":"steps","items":["On the Pipelines page, choose **Create pipeline**.","Name it, pick a type (Retail, Fleet/B2B, Hospitality, Partner/Dealer, Service upsell or Other sales), and add an optional description.","Optionally tick **Make this the default pipeline**.","Create it."]},{"type":"h","text":"Configure stages"},{"type":"p","text":"Expand a pipeline to manage its stages. For each stage you can set the name, colour, default win **probability**, a **stale after days** threshold, and whether it is a **Closed stage** with a closed result of Won or Lost. Use the up/down arrows to reorder stages."},{"type":"callout","tone":"info","text":"Archiving a pipeline is only possible when it has no active or historical leads, and the default pipeline cannot be archived."},{"type":"callout","tone":"tip","text":"There is also a simpler legacy Pipeline stages editor (name, colour and order) on the main Settings page. A stage still holding leads cannot be deleted."}]},{"slug":"admin-portal-access","title":"Customer portal access","summary":"Grant delegated account or fleet access to portal users and review customer profile-change requests.","category":"admin","audience":"managers","keywords":["portal","customer portal","delegation","fleet access","profile requests"],"body":[{"type":"p","text":"**Portal access** administers who can see what in the customer portal, and approves changes customers request to their own details. It needs the portal_access.manage permission."},{"type":"h","text":"Grant delegated access"},{"type":"p","text":"Delegation lets one portal user (a contact with an email) see another account's or a fleet's records — for example a company admin viewing all vehicles on a fleet."},{"type":"steps","items":["Open Settings → Portal access.","In **Grant contact/account access** or **Grant fleet access**, choose the portal user, then the contact/account or fleet to expose.","Pick a role — Viewer, Manager or Owner — and choose Grant access."]},{"type":"p","text":"Active grants are listed with their role and status. Choose **Revoke** to end a grant."},{"type":"h","text":"Review profile-change requests"},{"type":"p","text":"When a customer requests changes to their contact details, they appear under **Pending profile changes**. Review the proposed values, then **Approve & apply** (with an optional note) or **Reject** (a reason is required)."}]},{"slug":"admin-security-runbook","title":"Security runbook","summary":"Run automated checks on keys, exposure, backups and accounts, and track your security score over time.","category":"admin","audience":"admins","keywords":["security","runbook","checks","score","ai health","audit"],"body":[{"type":"p","text":"The **Security runbook** runs automated self-checks on keys, surface exposure, backups and accounts, and grades your posture as a score out of 100. It is owner-only and lives under Settings → Security."},{"type":"h","text":"Running the checks"},{"type":"steps","items":["Open Settings → Security.","Use the run button to check on demand; the sweep runs live self-probes and can take up to a minute.","Review each result — Pass, Warn or Fail — with the suggested fix for anything that isn't passing."]},{"type":"p","text":"The top strip shows your **Score** (passed / warn / failed), the **Last run** date, **AI health** (OK, Off or Down) and **AI usage** for the month (calls and token counts)."},{"type":"callout","tone":"info","text":"The runbook auto-runs on the 1st of every month. A History panel keeps an accountability trail of past scores."}]},{"slug":"admin-backup-recovery","title":"Backup and recovery","summary":"Monitor automated backups, verify retained packages, and follow the guided recovery runbook.","category":"admin","audience":"admins","keywords":["backup","recovery","restore","disaster recovery","neon","encryption"],"body":[{"type":"p","text":"**Backup & recovery** monitors your automated database backups and asset snapshots, and documents the safe path to restore. It is owner-only, under Settings → Backup & recovery."},{"type":"h","text":"What runs automatically"},{"type":"p","text":"A scheduled job creates an encrypted, portable backup package daily at 02:00 UTC (04:00 SAST) and verifies it after upload. The newest 30 database packages are retained; asset snapshots are content-addressed and deduplicated. The dashboard shows protection status, copy counts, total size and the last verification."},{"type":"h","text":"Run or verify on demand"},{"type":"steps","items":["Choose **Run backup** to create a fresh restore point now.","Use **Verify** on any retained package to confirm it is intact.","Download the **Encrypted file** for off-site safekeeping if needed."]},{"type":"h","text":"Recovery runbook"},{"type":"p","text":"Recovery is deliberately guided, not one-click: (1) restore the database in Neon via point-in-time or a recovery branch; (2) validate a staging deployment against that branch; (3) pause writes, cut over the production connection and run smoke checks, keeping the old branch until sign-off."},{"type":"callout","tone":"warning","text":"Keep the SETTINGS_ENCRYPTION_KEY stored separately from the app. Downloaded portable files cannot be opened without the exact key used to create them. Portable restore is an emergency path — follow docs/backup-and-recovery.md during an incident."}]},{"slug":"admin-sessions-devices","title":"Sessions and devices","summary":"Review every active sign-in across the team and revoke a device or a whole user immediately.","category":"admin","audience":"admins","keywords":["sessions","devices","sign out","revoke","logins","auto sign-out","idle","timeout","inactivity"],"body":[{"type":"p","text":"**Sessions & devices** lists every active sign-in across the team, grouped by user, so you can spot and cut off access fast. It is owner-only, under Settings → Sessions & devices."},{"type":"h","text":"What each session shows"},{"type":"p","text":"Each entry shows the device (browser and OS), IP address, when it signed in and when it was last active. Mobile app (installed PWA) sessions are flagged and use a 7-day session window."},{"type":"h","text":"Revoke access"},{"type":"steps","items":["Open Settings → Sessions & devices.","To sign out one device, choose **Revoke** on that session.","To sign a user out everywhere, choose **Sign out all** on their card."]},{"type":"callout","tone":"tip","text":"Use Sign out all when a laptop or phone is lost, or when off-boarding someone. Pair it with Disable on the Team & access page to block re-sign-in."}]},{"slug":"admin-integrations","title":"Integrations: WhatsApp, Meta, Google, SMS, AI and lead intake","summary":"Connect messaging channels, reviews, SMS codes, AI Assist and the website lead-intake API.","category":"admin","audience":"admins","keywords":["integrations","whatsapp","meta","facebook","instagram","webhook","api","anthropic","bulksms","messenger","telegram","lead ads","system user","access token"],"body":[{"type":"p","text":"The **Integrations** tab (owner-only) connects your external channels and services. Each row shows a Connected or Not set up status. Secrets are stored encrypted and shown as password fields."},{"type":"h","text":"Facebook & Instagram (Meta)"},{"type":"p","text":"Powers lead ads and Messenger/Instagram DMs. Add the webhook callback URL (shown in the panel) with the leadgen and messages fields, using the generated **Verify token** (regenerable). Save the **Page access token** (System User) and the **App secret** that verifies webhook signatures."},{"type":"h","text":"WhatsApp Business (Cloud API)"},{"type":"p","text":"Add the WhatsApp product in your Meta app, register your number, and subscribe the WhatsApp webhook to the messages field (same verify token and app secret as Meta). Save the **Phone number ID** and a permanent System User **access token**."},{"type":"h","text":"Other connectors"},{"type":"table","headers":["Integration","What it does","Needs"],"rows":[["Google reviews","New reviews appear in the Social inbox with a push","Places API (New) key + Place ID"],["SMS one-time codes (BulkSMS)","OTPs for website vehicle verification (falls back to email)","Token ID + Token secret"],["Which AI the CRM uses","One model picker: a ChatGPT model (the default, and DAX's model too) or a Claude model (automatic, Haiku, Sonnet or Opus) for the chatbot, invoice reading, message check, voice-note replies, spam screening and research","ChatGPT connected, or a Claude model chosen with an Anthropic key. If ChatGPT isn't connected the AI is off — it never moves to paid Claude credit by itself. The model lists come from ChatGPT and Anthropic themselves"],["ChatGPT subscription","DAX, and the default AI for everything above","Sign in with your ChatGPT account"],["AI Assist (Claude)","Used only when a Claude model is chosen","Anthropic API key + credit"],["Website lead intake API","POST leads from your website/landing pages","X-Api-Key header (regenerable key)"]]},{"type":"callout","tone":"info","text":"AI Assist only makes suggestions — it never changes data. Optionally tick auto-research to research every new lead within about 15 minutes. Regenerating an intake or verify token invalidates the old one immediately."},{"type":"h","text":"Step-by-step channel guides"},{"type":"p","text":"This tab is the control panel; for a walkthrough of connecting each channel from scratch — creating the Meta app, generating tokens and subscribing the webhooks — see the **Inbox & support** guides: **Connecting your social channels: the big picture**, **Step 1 — Create your Meta app**, **Connecting Facebook Messenger**, **Connecting Instagram DMs**, **Connecting WhatsApp Business (Cloud API)**, **Connecting Facebook & Instagram Lead Ads** and **Connecting Google reviews**. For Telegram, see **Connecting a Telegram bot**."}]},{"slug":"admin-documents-templates","title":"Documents, templates and the document repository","summary":"Manage print templates, Document Studio, reusable clauses, the Document Builder and the shared file repository.","category":"admin","audience":"admins","keywords":["documents","templates","studio","builder","repository","clauses","pdf"],"body":[{"type":"p","text":"The **Documents** hub (owner-only) manages every document surface: print templates, free-form Studio documents and the shared file repository. It opens with three tabs plus the Document Builder."},{"type":"h","text":"Templates"},{"type":"p","text":"Templates cover the eight built-in document types (quote, invoice, agreement, indemnity, delivery note, job card, service report, warranty claim). For each type you can create a new template from defaults or by copying an existing one, mark one as **Default** for new documents, duplicate, edit or delete (the default can't be deleted)."},{"type":"h","text":"Studio"},{"type":"p","text":"Document Studio builds free-form documents. Create **Studio templates**, write **Reusable clauses** (payment terms, warranty text, indemnities) to insert anywhere, and generate a **New document** by picking a template and linking a customer, quote or deal — merge fields fill in and are frozen into the document. Documents can be marked draft or final and exported to PDF."},{"type":"h","text":"Document Builder"},{"type":"p","text":"The **Document Builder** offers drag-and-drop blocks for flowing, multi-page, sealed PDFs. Open it from the banner at the top of the Documents page."},{"type":"h","text":"Repository"},{"type":"p","text":"The **Repository** holds every signed quote, invoice, proof of payment, delivery note, photo and upload. Filter by file name, tag, what it is filed on (customer, vehicle, quote or unfiled) and whether to include version history, and upload new files directly."}]},{"slug":"admin-signing-workflows","title":"Signing workflows","summary":"Design approval chains that decide who signs, in what order, and the rules that route them.","category":"admin","audience":"admins","keywords":["signing","workflow","approval","e-sign","routing"],"body":[{"type":"p","text":"**Signing workflows** (owner-only) design who signs a document, in what order, and the rules that route approvals — for example requiring manager approval above a value threshold."},{"type":"steps","items":["Open Settings → Signing workflows.","Enter a name (e.g. \"Manager approval over R500k\") and choose **Create**.","Open the new workflow to design its signer steps and routing rules in the visual builder.","Saved workflows list their number of signer steps and when they were last updated."]},{"type":"callout","tone":"info","text":"Workflows use a node-based builder similar to the chatbot flow editor. Archived workflows are hidden from the list."}]},{"slug":"admin-catalog-settings","title":"Catalog settings: products and stock labels","summary":"Maintain the product catalogue and the organisational stock labels used to flag units.","category":"admin","audience":"admins","keywords":["products","catalog","stock labels","inventory","demo","consignment"],"body":[{"type":"p","text":"Catalog settings cover your **Products** catalogue and **Stock labels**, both reached from the Catalog group in Settings. Products is admin-gated."},{"type":"h","text":"Stock labels"},{"type":"p","text":"Stock labels are organisational tags kept **separate** from a unit's lifecycle status (incoming → delivered). Use them to flag demo units, showroom stock, consignment, management holds and the like."},{"type":"steps","items":["Open Settings → Stock labels.","Under **Add a label**, enter a name (e.g. Demo unit, Consignment, Management hold) and pick a colour.","Choose Add label.","To delete a label, choose **Remove** — this clears it from any units carrying it."]},{"type":"h","text":"Products"},{"type":"p","text":"The **Products** section manages your catalogue and pricing used across quotes and stock. It opens the products management screen embedded in Settings."},{"type":"callout","tone":"info","text":"The Library section (also under Catalog) manages the shared document library of files and attachments."}]}]
+[
+  {
+    "slug": "admin-my-account-profile",
+    "title": "Your profile, password and email signature",
+    "summary": "Change your photo, name, job title, phone number, sign-in email and password, and find your email signature.",
+    "category": "admin",
+    "audience": "everyone",
+    "keywords": ["account", "profile", "photo", "password", "change password", "email address", "sign-in email", "job title", "phone", "signature"],
+    "body": [
+      { "type": "p", "text": "**Settings → My account → Profile & sign-in** is the one part of Settings everyone can open. It holds your own details and how you sign in. Nobody else can change these for you, except an owner resetting a forgotten password." },
+      { "type": "h", "text": "Your photo and personal details" },
+      { "type": "p", "text": "Your details appear on records you're assigned to, on messages you send and in your email signature." },
+      { "type": "steps", "items": [
+        "Open **Settings**, then **Profile & sign-in**.",
+        "To add or change your photo, choose a picture — JPG, PNG or WebP, up to 3 MB.",
+        "Under **Personal details**, fill in **Full name**, and optionally **Job title** and **Phone number** (for example +27 82 123 4567).",
+        "Save."
+      ] },
+      { "type": "h", "text": "Changing the email you sign in with" },
+      { "type": "steps", "items": [
+        "Under **Sign-in email**, type the new **Email address**.",
+        "Enter your **Current password** to confirm it's you.",
+        "Save. From now on you sign in with the new address."
+      ] },
+      { "type": "callout", "tone": "warning", "text": "Changing your sign-in email signs you out on your other devices. Sign in again there with the new address." },
+      { "type": "h", "text": "Changing your password" },
+      { "type": "steps", "items": [
+        "Open **Password** and press **Change**.",
+        "Enter your current password, then a new one: at least 12 characters, with both letters and numbers.",
+        "Save."
+      ] },
+      { "type": "callout", "tone": "info", "text": "Changing your password signs you out on every other device straight away. The device you're using stays signed in." },
+      { "type": "h", "text": "Your email signature" },
+      { "type": "p", "text": "Open **Email signature** and press **View & edit**. If your workspace uses the Email signatures feature, the link takes you to the **Email signatures** page, where everyone's signature is managed in one place." },
+      { "type": "h", "text": "Also on this page" },
+      { "type": "list", "items": [
+        "**Two-factor authentication** and **Passkeys** — see *Two-factor sign-in and passkeys*.",
+        "**Push notifications** — turn alerts on for this device. See *Notifications and alerts on your phone*."
+      ] },
+      { "type": "h", "text": "If something goes wrong" },
+      { "type": "table", "headers": ["Message", "What to do"], "rows": [
+        ["New password must be at least 12 characters and contain letters and numbers.", "Make it longer, and include at least one letter and one number."],
+        ["Current password is incorrect.", "Check Caps Lock and try again. If you've forgotten it, sign out and use **Forgot password?** on the sign-in page, or ask an owner to reset it."],
+        ["Choose a password different from your current password.", "Pick a new password you haven't used here."]
+      ] },
+      { "type": "h", "text": "Related guides" },
+      { "type": "list", "items": ["Two-factor sign-in and passkeys", "Notifications and alerts on your phone", "Email signatures: everyone's signature in one place"] }
+    ]
+  },
+  {
+    "slug": "admin-two-factor-passkeys",
+    "title": "Two-factor sign-in and passkeys",
+    "summary": "Add a second step to signing in with an authenticator app or email codes, or sign in with your fingerprint or face using a passkey.",
+    "category": "admin",
+    "audience": "everyone",
+    "keywords": ["2fa", "two-factor", "authenticator", "backup codes", "passkey", "fingerprint", "face id", "security", "email code"],
+    "body": [
+      { "type": "p", "text": "Two-factor sign-in adds a second step after your password, so your account stays safe even if someone learns your password. A **passkey** goes further: you sign in with your fingerprint, face or device PIN instead of typing a password at all. Both are set up under **Settings → Profile & sign-in**." },
+      { "type": "h", "text": "Turning on two-factor with an authenticator app" },
+      { "type": "steps", "items": [
+        "Open **Two-factor authentication** (it shows **Off**) and press **Set up**.",
+        "Choose **Set up authenticator app**.",
+        "Scan the code on screen with an authenticator app on your phone, such as Google Authenticator, Authy or 1Password.",
+        "Type the 6-digit code the app shows into **Enter the 6-digit code it shows** and press **Verify & enable**.",
+        "Save the **backup codes** that appear. Each one works once if you lose your phone."
+      ] },
+      { "type": "callout", "tone": "warning", "text": "The backup codes are shown only once. Keep them somewhere safe and away from your phone, such as a password manager. Without your phone or a backup code, an owner has to reset your two-factor before you can sign in." },
+      { "type": "h", "text": "Email codes as a backup" },
+      { "type": "p", "text": "Tick **Also allow email sign-in codes as a backup** to be sent a code by email at sign-in. It's handy if you lose your phone, but it means anyone who can get into your email could also get into the CRM." },
+      { "type": "h", "text": "Turning two-factor off" },
+      { "type": "steps", "items": [
+        "Open **Two-factor authentication** and press **Manage**.",
+        "Under **Turn off — enter a current code**, type a code from your authenticator app.",
+        "Press **Disable 2FA**."
+      ] },
+      { "type": "h", "text": "Passkeys: sign in with your fingerprint or face" },
+      { "type": "steps", "items": [
+        "Open **Passkeys** and press **Set up** (or **Manage** if you already have one).",
+        "Press **Add a passkey** and follow your device's prompt (fingerprint, face or PIN).",
+        "Give it a **Device name** you'll recognise later, such as \"Work laptop\" or \"My iPhone\"."
+      ] },
+      { "type": "p", "text": "Add a passkey on each device you use. The list shows when each was added and last used. Remove one you no longer use, such as an old phone, with **Remove passkey**." },
+      { "type": "callout", "tone": "info", "text": "If you see \"This browser doesn't support passkeys\", use Safari, Chrome or Edge on a device with a fingerprint reader, Face ID or a PIN." },
+      { "type": "h", "text": "Locked out?" },
+      { "type": "p", "text": "Use one of your backup codes at the sign-in prompt. If you have none, ask a workspace owner: on **Settings → Team & roles** they can press **Reset 2FA** next to your name. You'll then sign in with your password only until you set two-factor up again." },
+      { "type": "h", "text": "Related guides" },
+      { "type": "list", "items": ["Your profile, password and email signature", "Managing team members and their access", "Signing in & keeping your account secure"] }
+    ]
+  },
+  {
+    "slug": "admin-notifications",
+    "title": "Notifications and alerts on your phone",
+    "summary": "Turn on alerts for each phone and computer, test them, and (owners) choose which events alert the team.",
+    "category": "admin",
+    "audience": "everyone",
+    "keywords": ["notifications", "push", "alerts", "phone", "mentions", "reminders", "test notification"],
+    "body": [
+      { "type": "p", "text": "The CRM can alert you on your phone or computer when something needs you — a new lead, a customer message, a signed quote, a meeting about to start. Alerts are switched on **per device**, and owners decide which kinds of event send them at all." },
+      { "type": "h", "text": "Turning alerts on for this device" },
+      { "type": "steps", "items": [
+        "Open **Settings → Notifications** (or **Push notifications** on **Profile & sign-in**).",
+        "Under **Push on this device**, turn alerts on and allow them when your browser or phone asks.",
+        "Press **Send test notification** to check one arrives."
+      ] },
+      { "type": "callout", "tone": "tip", "text": "Every phone and computer is switched on separately. On a phone, install the CRM to your home screen first — that's what lets alerts appear on your lock screen. See *Install it on your phone & get notifications*." },
+      { "type": "p", "text": "To stop alerts on a device, press **Disable on this device** there." },
+      { "type": "h", "text": "What sends an alert (owners)" },
+      { "type": "p", "text": "**What sends a notification** applies to the whole team. Untick a type to silence it on everyone's devices." },
+      { "type": "table", "headers": ["Alert", "When it's sent"], "rows": [
+        ["New lead", "A lead arrives from Facebook, Instagram, your website or WhatsApp"],
+        ["Social DMs", "A new Messenger or Instagram message"],
+        ["WhatsApp messages", "A new incoming WhatsApp message"],
+        ["Bot hand-offs", "The WhatsApp assistant hands a chat to a person"],
+        ["Chatbot alerts", "A chatbot flow's \"Tell someone\" step names you"],
+        ["Service bookings", "An online booking lands in the workshop diary"],
+        ["Portal service requests, Support cases, Customer uploads, Warranty claims, Profile change requests", "A customer does that from the customer portal"],
+        ["Quote opened", "A customer opens their signing link"],
+        ["Quote / job card signed", "A customer signs online"],
+        ["Quote questions / changes", "A customer asks a question or requests changes on the signing page"],
+        ["Google reviews", "A new review appears"],
+        ["Email replies", "A customer replies to an email"],
+        ["Email not delivered", "A customer's mail server refused an email — only to whoever sent it"],
+        ["Signature banner clicks", "A customer clicks the banner under your email signature — only to whoever wrote the email"],
+        ["Secure file downloads", "A customer downloads a file you sent as a secure link — only to whoever sent it"],
+        ["Referral fees", "A referred deal is won and a fee is due"],
+        ["Competitor changes", "An important change on a competitor's page you watch"],
+        ["System errors", "Something in the CRM failed (at most one alert every 30 minutes)"],
+        ["Security & AI health", "Monthly security check results and problems with the AI service"],
+        ["Backup failures", "The nightly backup didn't run (at most one a day)"],
+        ["Meeting reminders", "An hour before a timed meeting or test drive — tapping it opens Google Maps"],
+        ["Mentions", "Someone @mentions you in a note — only to you"],
+        ["Records you watch", "A note, stage change, customer reply or job update on a record you watch — only to you"],
+        ["Scheduled assistant answers", "A question you scheduled with the assistant has been answered — only to you"]
+      ] },
+      { "type": "callout", "tone": "info", "text": "Only owners can change the team-wide list. Everyone can switch alerts on or off on their own devices." },
+      { "type": "h", "text": "If alerts don't arrive" },
+      { "type": "list", "items": [
+        "Press **Send test notification**. If nothing appears, check your phone or browser allows notifications for the CRM.",
+        "On an iPhone, alerts only work once the CRM is added to your home screen and opened from there.",
+        "Check the alert type is still ticked under **What sends a notification** (ask an owner)."
+      ] },
+      { "type": "h", "text": "Related guides" },
+      { "type": "list", "items": ["Install it on your phone & get notifications", "Your profile, password and email signature"] }
+    ]
+  },
+  {
+    "slug": "admin-company-profile",
+    "title": "Company profile: your business details",
+    "summary": "Set your business name, contact details and logo, which appear on your documents, emails and sign-in screen.",
+    "category": "admin",
+    "audience": "admins",
+    "keywords": ["company", "business details", "logo", "address", "phone", "tagline", "branding", "record names"],
+    "body": [
+      { "type": "p", "text": "**Settings → Company profile** holds your business's own details. They're printed on your quotes, invoices and other documents and used in your emails. Only owners can open it." },
+      { "type": "h", "text": "Your business details" },
+      { "type": "table", "headers": ["Field", "Where it's used"], "rows": [
+        ["Business name", "The name on your documents and emails"],
+        ["Tagline", "A short line under your name, for example \"Family-owned since 1998\""],
+        ["Address", "Your full business address"],
+        ["Phone, Email, Website", "Contact details on your documents"],
+        ["Facebook, Instagram", "Your social pages, where a document shows them"]
+      ] },
+      { "type": "steps", "items": [
+        "Open **Settings → Company profile**.",
+        "Fill in the details you want to show. Leave a box empty if it doesn't apply.",
+        "Save."
+      ] },
+      { "type": "h", "text": "Names for records" },
+      { "type": "p", "text": "Further down, **Names for records** lets you use your own word for a record — for example \"Enquiry\" instead of \"Lead\", or \"Work order\" instead of \"Job card\". Your words appear in the menu, page titles and buttons. Leave a box blank to keep the standard word." },
+      { "type": "h", "text": "Related guides" },
+      { "type": "list", "items": ["Settings overview and navigation", "Documents and templates: where everything lives"] }
+    ]
+  },
+  {
+    "slug": "admin-team-user-management",
+    "title": "Managing team members and their access",
+    "summary": "Add a team member, reset a password or two-factor, sign someone out everywhere, and disable or reactivate an account.",
+    "category": "admin",
+    "audience": "admins",
+    "keywords": ["users", "team", "add user", "new staff", "disable", "reactivate", "reset password", "reset 2fa", "revoke sessions", "offboarding"],
+    "body": [
+      { "type": "p", "text": "Everyone who works in your workspace is managed on **Settings → Team & roles**, under **User security**. Only owners see these controls." },
+      { "type": "h", "text": "Adding a team member" },
+      { "type": "steps", "items": [
+        "Open **Settings → Team & roles**.",
+        "Press **Add a team member**.",
+        "Enter their **Full name**, **Email** and a starting **Password** (at least 12 characters, with letters and numbers).",
+        "Press **Add team member**, then give them their email and password."
+      ] },
+      { "type": "callout", "tone": "info", "text": "New people start with the **Sales representative** role. Change their roles under **Role assignments** on the same page (see *Roles and permissions*). Each email address can only be used once." },
+      { "type": "h", "text": "What you can do for each person" },
+      { "type": "p", "text": "The **User security** table shows each person's status, **Last login** and **Failed logins**. Next to everyone except yourself:" },
+      { "type": "table", "headers": ["Button", "What it does"], "rows": [
+        ["Revoke sessions", "Signs them out on every phone and computer straight away. They can sign in again with their password."],
+        ["Reset password", "Sets a new password you choose (at least 12 characters, letters and numbers). They're signed out everywhere and can change it themselves afterwards."],
+        ["Reset 2FA", "Shown when they use two-factor sign-in. Turns it off so they can sign in with their password, for example after losing their phone. They should set it up again."],
+        ["Disable", "Stops them signing in at all, without deleting anything they did. Use it when someone leaves."],
+        ["Reactivate", "Lets a disabled person sign in again."]
+      ] },
+      { "type": "callout", "tone": "warning", "text": "When someone leaves, press **Disable**. Their records, notes and history stay in the CRM; they just can't sign in. If they had the assistant linked to their WhatsApp, unlink it on **Settings → Sessions & devices** too." },
+      { "type": "h", "text": "Auto sign-out" },
+      { "type": "p", "text": "How long someone can be idle before being signed out is set on **Settings → Sessions & devices**. See *Sessions and devices*." },
+      { "type": "h", "text": "If something goes wrong" },
+      { "type": "table", "headers": ["Message", "What to do"], "rows": [
+        ["Name, email and a password of at least 12 characters containing letters and numbers are required.", "Fill in all three; make the password longer and include letters and numbers."],
+        ["A user with that email already exists.", "That address already has an account. Check the table — they may already be here — or use a different address."]
+      ] },
+      { "type": "h", "text": "Related guides" },
+      { "type": "list", "items": ["Roles and permissions", "Teams and who sees which leads", "Sessions and devices"] }
+    ]
+  },
+  {
+    "slug": "admin-roles-permissions",
+    "title": "Roles and permissions",
+    "summary": "Decide what each person can see and do by giving them roles — named sets of permissions.",
+    "category": "admin",
+    "audience": "admins",
+    "keywords": ["roles", "permissions", "access", "who can see", "sales rep", "manager", "role assignments"],
+    "body": [
+      { "type": "p", "text": "What someone can see and do is decided by their **roles**. A role is a named set of permissions — for example \"Sales representative\" or \"Workshop manager\". Give a person one or more roles and they get every permission in them. Owners always have every permission." },
+      { "type": "p", "text": "Roles are on **Settings → Team & roles**, under **Roles & permissions**." },
+      { "type": "h", "text": "The built-in roles" },
+      { "type": "p", "text": "Your workspace starts with ready-made roles such as **Sales representative**, **Sales manager**, **CRM administrator**, **Marketing user** and **Read-only auditor**, plus **Technician** and **Workshop manager** when the workshop is switched on. You can adjust their permissions, but they're meant as sensible starting points." },
+      { "type": "h", "text": "Creating your own role" },
+      { "type": "steps", "items": [
+        "Press **Create role**.",
+        "Give it a **Role name**, for example \"Sales manager\", and create it.",
+        "Open the role and tick the permissions it should have.",
+        "Press **Save permissions**."
+      ] },
+      { "type": "h", "text": "Giving people roles" },
+      { "type": "steps", "items": [
+        "Scroll to **Role assignments**.",
+        "Tick the roles each person should have.",
+        "Press **Save** on their row."
+      ] },
+      { "type": "h", "text": "Seeing everything versus seeing your own" },
+      { "type": "p", "text": "Many areas come as a pair of permissions — for example **View all leads** and **View owned and team leads**. \"Owned and team\" means the records someone created, is assigned to, or that belong to a team they're in or manage." },
+      { "type": "callout", "tone": "tip", "text": "A common set-up: sales reps get the \"owned and team\" permissions, and managers get the \"all\" ones." },
+      { "type": "callout", "tone": "info", "text": "A permission change applies on the person's next click — they don't need to sign out." },
+      { "type": "h", "text": "Related guides" },
+      { "type": "list", "items": ["Teams and who sees which leads", "Managing team members and their access", "Who can see what: roles & permissions"] }
+    ]
+  },
+  {
+    "slug": "admin-teams",
+    "title": "Teams and who sees which leads",
+    "summary": "Group people into teams so team members and their manager can see each other's leads and customers.",
+    "category": "admin",
+    "audience": "managers",
+    "keywords": ["teams", "team", "manager", "lead visibility", "sales floor", "members"],
+    "body": [
+      { "type": "p", "text": "Teams decide what people with \"owned and team\" access can see. Someone like that sees their own records, plus the records of every team they belong to or manage. Teams are on **Settings → Team & roles**." },
+      { "type": "h", "text": "Creating a team" },
+      { "type": "steps", "items": [
+        "Press **Create team**.",
+        "Enter a **Name**, for example \"Sales floor\", optionally choose a **Manager**, and add a **Description** if useful.",
+        "Create it."
+      ] },
+      { "type": "h", "text": "Adding and removing members" },
+      { "type": "steps", "items": [
+        "Open the team.",
+        "Use **Add member…** to add someone. Remove someone with the control next to their name.",
+        "Change the manager, description or whether the team is active, then press **Save team**."
+      ] },
+      { "type": "callout", "tone": "info", "text": "You need the **Create teams and manage membership** permission to change teams. With only **View teams**, you see them but can't edit." },
+      { "type": "h", "text": "Related guides" },
+      { "type": "list", "items": ["Roles and permissions", "Managing team members and their access"] }
+    ]
+  },
+  {
+    "slug": "admin-pipelines",
+    "title": "Sales pipelines and stages",
+    "summary": "Set up one or more sales processes, each with its own stages, win chances and closing results.",
+    "category": "admin",
+    "audience": "managers",
+    "keywords": ["pipeline", "stages", "sales process", "probability", "won", "lost", "stale", "default pipeline"],
+    "body": [
+      { "type": "p", "text": "A pipeline is the series of stages a lead moves through, from first contact to won or lost. You can run several — for example one for walk-in retail customers and another for fleet sales — each with its own stages. Pipelines are on **Settings → Pipeline**." },
+      { "type": "callout", "tone": "info", "text": "You need the **Create and configure sales pipelines and stages** permission." },
+      { "type": "h", "text": "Creating a pipeline" },
+      { "type": "steps", "items": [
+        "Press **Create pipeline**.",
+        "Enter a **Name**, choose a **Type** (Retail, Fleet / B2B, Hospitality, Partner / Dealer, Service upsell or Other sales) and an optional **Description**.",
+        "Tick **Make this the default pipeline** if new leads should start here.",
+        "Create it, then add its stages."
+      ] },
+      { "type": "h", "text": "Setting up stages" },
+      { "type": "p", "text": "Open a pipeline and use **+ Add stage**. For each stage you can set:" },
+      { "type": "table", "headers": ["Setting", "What it does"], "rows": [
+        ["Name and colour", "How the stage appears on the lead board"],
+        ["Probability", "The usual chance of winning a lead at this stage — used by the sales forecast"],
+        ["Stale after days", "A lead left here longer than this is flagged as going stale"],
+        ["Closed stage and Closed result", "Marks the stage as the end of the road, with a result of **Won** or **Lost**"],
+        ["Required action on entry", "Something staff must fill in before a lead can be moved into this stage"]
+      ] },
+      { "type": "p", "text": "Use **Move up** and **Move down** to put stages in order, then **Save stage**." },
+      { "type": "h", "text": "Archiving a pipeline" },
+      { "type": "callout", "tone": "warning", "text": "A pipeline can only be archived when it has never held a lead, and the default pipeline can't be archived. Make another pipeline the default first." },
+      { "type": "h", "text": "Related guides" },
+      { "type": "list", "items": ["The lead pipeline board", "Reading the sales forecast"] }
+    ]
+  },
+  {
+    "slug": "admin-portal-access",
+    "title": "Customer portal access",
+    "summary": "Let a customer see another account's or a fleet's records in the portal, and approve changes customers ask to make to their details.",
+    "category": "admin",
+    "audience": "managers",
+    "keywords": ["portal", "customer portal", "access", "fleet access", "profile changes", "approve"],
+    "body": [
+      { "type": "p", "text": "**Settings → Portal access** controls two things in the customer portal: who can see more than their own records, and changes customers ask to make to their contact details." },
+      { "type": "callout", "tone": "info", "text": "You need the **Manage delegated customer-portal access and profile approvals** permission, and the customer portal must be switched on for your workspace." },
+      { "type": "h", "text": "Approving changes customers ask for" },
+      { "type": "p", "text": "When a customer asks to change their details in the portal, it waits under **Pending profile changes**. Check the new values, then either:" },
+      { "type": "list", "items": [
+        "**Approve & apply** — updates their record (you can add an optional note), or",
+        "**Reject** — leaves their record as it is. A reason is required, so the customer knows why."
+      ] },
+      { "type": "h", "text": "Letting a customer see more" },
+      { "type": "p", "text": "Normally a portal user sees only their own records. You can let them see another account — for example a company administrator seeing the company's records — or a whole fleet." },
+      { "type": "steps", "items": [
+        "Under **Grant contact/account access** (or **Grant fleet access**), choose the **Portal user**.",
+        "Choose the **Contact or account to expose** (or the **Fleet to expose**).",
+        "Pick a **Role** — Viewer, Manager or Owner — and press **Grant access**."
+      ] },
+      { "type": "p", "text": "Current access is listed with its role and status. Press **Revoke** to take it away." },
+      { "type": "h", "text": "Related guides" },
+      { "type": "list", "items": ["Managing fleets", "Inside a customer profile"] }
+    ]
+  },
+  {
+    "slug": "admin-security-runbook",
+    "title": "Security checks",
+    "summary": "The platform's monthly security check: what it looks at, how to run it, and how to read the results.",
+    "category": "admin",
+    "audience": "admins",
+    "keywords": ["security", "checks", "score", "ai health", "audit", "runbook"],
+    "body": [
+      { "type": "p", "text": "**Settings → Security checks** runs a set of automatic checks on the system's security — keys, what's exposed to the internet, backups and accounts — and gives a score out of 100." },
+      { "type": "callout", "tone": "info", "text": "Only the platform owner sees this screen. It's about the whole system, not one workspace." },
+      { "type": "h", "text": "Running the checks" },
+      { "type": "steps", "items": [
+        "Open **Settings → Security checks**.",
+        "Run the checks. It can take up to a minute.",
+        "Read each result — **Pass**, **Warn** or **Fail** — and the suggested fix for anything that didn't pass."
+      ] },
+      { "type": "p", "text": "The top of the page shows the score, the **Last run** date, **AI health** (whether the AI service is working) and **AI usage (month)**." },
+      { "type": "callout", "tone": "tip", "text": "The checks also run by themselves on the 1st of every month, and the **History** list keeps every past score." }
+    ]
+  },
+  {
+    "slug": "admin-backup-recovery",
+    "title": "Backups",
+    "summary": "How your data is backed up every night, how to check the backups are healthy, and what happens if data ever needs restoring.",
+    "category": "admin",
+    "audience": "admins",
+    "keywords": ["backup", "recovery", "restore", "data safety", "verify"],
+    "body": [
+      { "type": "p", "text": "Everything in the CRM is backed up automatically every night, encrypted, and checked after it's made. **Settings → Backup & recovery** shows that this is happening." },
+      { "type": "callout", "tone": "info", "text": "Only the platform owner sees this screen. Workspace owners don't need to do anything — backups cover every workspace." },
+      { "type": "h", "text": "What the screen shows" },
+      { "type": "list", "items": [
+        "**Latest automated run** — when the last backup ran and whether it succeeded.",
+        "**Database copies** and **Asset snapshots** — how many restore points are kept. The newest 30 are kept.",
+        "**Last verification** — when a backup was last checked to be complete and readable."
+      ] },
+      { "type": "h", "text": "Checking or making a backup now" },
+      { "type": "list", "items": [
+        "**Run backup** makes a fresh restore point straight away.",
+        "**Verify** on any kept backup checks it's complete.",
+        "**Encrypted file** downloads a copy for safekeeping elsewhere."
+      ] },
+      { "type": "callout", "tone": "warning", "text": "A downloaded backup can only be opened with the system's encryption key. Keep that key stored safely, separately from the backups." },
+      { "type": "h", "text": "If data ever needs restoring" },
+      { "type": "p", "text": "Restoring is done by the platform owner, carefully and step by step: the data is restored to a separate copy first, checked, and only then switched over. It's never a one-click button, so a mistake can't overwrite live data." },
+      { "type": "callout", "tone": "tip", "text": "Deleted something by accident? Check **Trash** first — most deleted items can be restored there for 60 days, with no backup needed." }
+    ]
+  },
+  {
+    "slug": "admin-sessions-devices",
+    "title": "Sessions and devices",
+    "summary": "See who is signed in on which devices, sign out a device or a person, and set how long before idle staff are signed out.",
+    "category": "admin",
+    "audience": "admins",
+    "keywords": ["sessions", "devices", "sign out", "revoke", "auto sign-out", "idle", "timeout", "inactivity", "lost phone"],
+    "body": [
+      { "type": "p", "text": "**Settings → Sessions & devices** lists every phone and computer your team is signed in on, so you can sign out a device or a person straight away. Only owners can open it." },
+      { "type": "h", "text": "Auto sign-out after inactivity" },
+      { "type": "p", "text": "At the top, choose how long someone can be idle before they're signed out — from 15 minutes to 24 hours — and press **Save**." },
+      { "type": "callout", "tone": "warning", "text": "Saving signs everyone else in your workspace out, so they sign in again under the new rule. Do it at a quiet time. Everyone also signs in again at least every 72 hours, whatever this is set to." },
+      { "type": "h", "text": "What's listed" },
+      { "type": "p", "text": "Each person shows their signed-in devices: the browser and type of device, the internet address, when they signed in and when they were last active. Only sign-ins that can still be used are listed. Phone app sign-ins are marked **Mobile app · 7-day session** — they last a week." },
+      { "type": "callout", "tone": "info", "text": "A device tagged **May already be signed out** signed in before this list could tell for sure. It isn't counted as active, but you can still revoke it to be certain." },
+      { "type": "h", "text": "Signing someone out" },
+      { "type": "list", "items": [
+        "**Revoke** next to a device signs out just that device.",
+        "**Sign out all** on a person's card signs them out everywhere."
+      ] },
+      { "type": "callout", "tone": "tip", "text": "Use **Sign out all** when a phone or laptop is lost, or when someone leaves. Then press **Disable** on **Team & roles** so they can't sign back in." },
+      { "type": "h", "text": "The assistant on WhatsApp" },
+      { "type": "p", "text": "If someone linked their WhatsApp number to the assistant, it shows on their card with **Unlink**. **Sign out all** also ends it." },
+      { "type": "h", "text": "Related guides" },
+      { "type": "list", "items": ["Managing team members and their access", "Two-factor sign-in and passkeys"] }
+    ]
+  },
+  {
+    "slug": "admin-integrations",
+    "title": "Integrations: connecting your other services",
+    "summary": "Connect WhatsApp, Facebook, Instagram, X, Threads, email, Xero and Google reviews, and see which connections need attention.",
+    "category": "admin",
+    "audience": "admins",
+    "keywords": ["integrations", "connect", "whatsapp", "facebook", "instagram", "messenger", "email", "smtp", "imap", "xero", "chatgpt", "claude", "ai", "google reviews", "telegram", "sms", "website leads"],
+    "body": [
+      { "type": "p", "text": "**Settings → Integrations** is where the CRM connects to the other services your business uses. Each connection shows whether it's **Connected** or **Not set up**, and anything that has stopped working is listed first under **Needs attention**." },
+      { "type": "h", "text": "What you can connect" },
+      { "type": "table", "headers": ["Group", "Connections"], "rows": [
+        ["Messaging channels", "WhatsApp, Facebook Messenger and Instagram (with Facebook and Instagram lead ads), X, Threads, and SMS for one-time codes"],
+        ["Email", "Outgoing email from your own mail server, and incoming replies brought into the Inbox"],
+        ["Accounting", "Xero — send invoices and bring payments back"],
+        ["Other services", "Google reviews"]
+      ] },
+      { "type": "callout", "tone": "info", "text": "Some services are set up once for the whole CRM by your CRM provider rather than by each business — the AI the CRM uses, voice, Telegram, Google Maps address suggestions and taking leads from a website. If you need one of these changed, ask your CRM provider." },
+      { "type": "h", "text": "Connecting a service" },
+      { "type": "steps", "items": [
+        "Find the service and open its card.",
+        "Use its connect button where it has one (for example **Connect WhatsApp**), or fill in the details from the other service and press **Save**.",
+        "The card changes to **Connected** once it works."
+      ] },
+      { "type": "callout", "tone": "info", "text": "Passwords and keys you enter are stored encrypted and never shown again. To change one, type the new value and save." },
+      { "type": "h", "text": "Step-by-step guides" },
+      { "type": "p", "text": "Most services need a few steps on their side too. Follow the guide for the one you're connecting: **Connect WhatsApp with one button**, **Connecting WhatsApp Business (Cloud API)**, **Connecting Facebook Messenger**, **Connecting Instagram DMs**, **Connecting Facebook & Instagram Lead Ads**, **Connecting Google reviews**, **Connect X to the Social inbox** and **Xero: sending invoices to your books**." },
+      { "type": "h", "text": "Related guides" },
+      { "type": "list", "items": ["Connecting your social channels: the big picture", "Connect WhatsApp with one button", "Xero: sending invoices to your books"] }
+    ]
+  },
+  {
+    "slug": "admin-catalog-settings",
+    "title": "Products and stock labels",
+    "summary": "Where to manage your product catalogue, and how to set up labels for organising stock.",
+    "category": "admin",
+    "audience": "admins",
+    "keywords": ["products", "catalogue", "stock labels", "demo unit", "consignment", "labels"],
+    "body": [
+      { "type": "p", "text": "Under **Settings → Workshop & stock** you'll find **Products** (your catalogue) and **Stock labels**. Both appear when stock is switched on for your workspace." },
+      { "type": "h", "text": "Products" },
+      { "type": "p", "text": "**Products** opens your product catalogue — the models, colours, codes and prices used by stock, leads, quotes and vehicles. See *Managing the product catalogue*." },
+      { "type": "h", "text": "Stock labels" },
+      { "type": "p", "text": "Labels let you tag stock for your own organising — for example \"Demo unit\", \"Consignment\" or \"Management hold\". A label never changes where a unit is in its life (on order, available, sold and so on); it's just a tag." },
+      { "type": "steps", "items": [
+        "Open **Settings → Stock labels**.",
+        "Under **Add a label**, enter a **Name** and pick a **Colour**.",
+        "Press **Add label**."
+      ] },
+      { "type": "callout", "tone": "warning", "text": "Removing a label also removes it from every unit that carried it." },
+      { "type": "h", "text": "Related guides" },
+      { "type": "list", "items": ["Managing the product catalogue", "Labels, custom statuses and unit records"] }
+    ]
+  }
+]
