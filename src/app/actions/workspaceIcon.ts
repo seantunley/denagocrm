@@ -35,7 +35,9 @@ async function storeIcon(tenantId: string, formData: FormData, audit: Audit) {
   // The bytes, not just the declared type: it must open as that picture, and be big enough for a home screen.
   const meta = await sharp(bytes).metadata().catch(() => null);
   if (!meta?.width || !meta.height || meta.format !== (ext === "jpg" ? "jpeg" : ext)) throw new ActionRefusal("That file isn't a readable PNG, JPEG or WebP image.");
-  if (Math.min(meta.width, meta.height) < 192) throw new ActionRefusal("The icon must be at least 192 × 192 pixels (512 × 512 is best).");
+  // Square, as the form says: a wide picture would be cropped without warning (review of #1221).
+  if (meta.width !== meta.height) throw new ActionRefusal(`The icon must be square — this one is ${meta.width} × ${meta.height}. Crop it to a square first.`);
+  if (meta.width < 192) throw new ActionRefusal("The icon must be at least 192 × 192 pixels (512 × 512 is best).");
 
   const tenant = await basePrisma.tenant.findUnique({ where: { id: tenantId }, select: { name: true, brandIconRef: true } });
   if (!tenant) throw new ActionRefusal("Workspace not found.");

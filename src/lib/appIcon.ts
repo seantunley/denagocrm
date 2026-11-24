@@ -43,6 +43,12 @@ export function appIconUrl(brand: IconBrand, size: AppIconSize, maskable = false
   return `/api/brand/icon/${brand.tenantId}?s=${size}${maskable ? "&m=1" : ""}&v=${encodeURIComponent(version || "platform")}`;
 }
 
+/**
+ * An uploaded icon in its maskable form: launchers crop to a circle that keeps the middle 80%, so the art is drawn
+ * inside it — 10% each side — on its own backdrop colour (review of #1221).
+ */
+export const MASKABLE_ICON_PADDING = 0.1;
+
 /** Room left around a logo drawn on the square: maskable icons are cropped to a circle, so they need more. */
 export function logoPadding(maskable: boolean): number {
   return maskable ? 0.24 : 0.12;

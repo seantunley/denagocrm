@@ -32,6 +32,8 @@ export function installedAppIcons(brand: TenantBrand, platform: { src: string; s
   return [
     { src: appIconUrl(brand, 192), sizes: "192x192", type: "image/png" },
     { src: appIconUrl(brand, 512), sizes: "512x512", type: "image/png" },
+    // Both maskable sizes: a launcher that finds no maskable 192 uses the "any" icon on its own plate (review of #1221).
+    { src: appIconUrl(brand, 192, true), sizes: "192x192", type: "image/png", purpose: "maskable" as const },
     { src: appIconUrl(brand, 512, true), sizes: "512x512", type: "image/png", purpose: "maskable" as const },
   ];
 }

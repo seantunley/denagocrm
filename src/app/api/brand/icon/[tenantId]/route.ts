@@ -3,7 +3,7 @@ import sharp from "sharp";
 import { basePrisma } from "@/lib/db";
 import { readManagedBlob } from "@/lib/storage";
 import { brandLogoAsset } from "@/lib/tenantBrand";
-import { appIconSize, appIconUrl, brandIconAsset, logoBacking, logoPadding } from "@/lib/appIcon";
+import { MASKABLE_ICON_PADDING, appIconSize, appIconUrl, brandIconAsset, logoBacking, logoPadding } from "@/lib/appIcon";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -32,19 +32,20 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ tena
     const icon = brandIconAsset(tenant.brandIconRef);
     if (icon) {
       const bytes = await readManagedBlob(`branding/${tenantId}/${icon}`);
-      return png(await sharp(bytes).rotate().resize(size, size, { fit: "cover" }).png().toBuffer());
+      // Full-bleed as uploaded; the maskable form keeps the art inside the launcher's safe circle (review of #1221).
+      return png(maskable ? await onSquare(bytes, size, MASKABLE_ICON_PADDING) : await sharp(bytes).rotate().resize(size, size, { fit: "cover" }).png().toBuffer());
     }
     const logo = brandLogoAsset(tenant.brandLogoRef);
-    if (logo) return png(await logoOnSquare(await readManagedBlob(`branding/${tenantId}/${logo}`), size, maskable));
+    if (logo) return png(await onSquare(await readManagedBlob(`branding/${tenantId}/${logo}`), size, logoPadding(maskable)));
   } catch {
     // A missing or unreadable picture: the platform's icon, never an error in someone's tab.
   }
   return platform();
 }
 
-/** The logo, whole, centred on a square: its own backdrop colour when it has one, else dark or white to suit it. */
-async function logoOnSquare(bytes: Buffer, size: number, maskable: boolean): Promise<Buffer> {
-  const inner = Math.round(size * (1 - 2 * logoPadding(maskable)));
+/** A picture, whole, centred on a square with `padding` each side: its own backdrop colour, else dark or white to suit it. */
+async function onSquare(bytes: Buffer, size: number, padding: number): Promise<Buffer> {
+  const inner = Math.round(size * (1 - 2 * padding));
   const image = sharp(bytes, { density: 300 }).rotate();
   const { hasAlpha } = await image.metadata();
   let backing: string;
