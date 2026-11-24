@@ -74,7 +74,7 @@ export default function ProductForm({ variant = "compact" }: { variant?: Capture
             autoFocus={variant === "page"}
             value={name}
             onChange={(event) => setName(event.target.value)}
-            placeholder="e.g. Denago EV Rover XL"
+            placeholder="e.g. Model X 4-seater"
           />
         </CaptureField>
         <CaptureField label="SKU" hint="Optional internal catalogue or supplier reference.">
