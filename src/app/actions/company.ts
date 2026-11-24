@@ -36,7 +36,10 @@ export async function saveCompanyProfile(formData: FormData) {
   return withActingStaffScope(async () => {
     const user = await requireTenantOwner();
     const fields = Object.keys(COMPANY_KEYS) as (keyof CompanyProfile)[];
+    // Only the fields the form sent: the logo is uploaded separately (actions/workspaceLogo.ts), so a missing logo
+    // field must not blank the logo documents use.
     for (const field of fields) {
+      if (!formData.has(field)) continue;
       await putSetting(COMPANY_KEYS[field], String(formData.get(field) ?? "").trim());
     }
     await logAudit({ action: "company.profile_updated", summary: "Updated company profile", user });

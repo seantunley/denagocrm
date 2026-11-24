@@ -34,6 +34,7 @@ import { signatureBannerArticles } from "./articles/signature-banners";
 import { emailSignatureArticles } from "./articles/email-signatures";
 import { vehicleTransferArticles } from "./articles/vehicle-transfer";
 import { whatsappConnectArticles } from "./articles/whatsapp-connect";
+import { companyProfileArticles } from "./articles/company-profile";
 import { screenArticles } from "./articles/screens";
 
 // data/marketing.json is the original generated marketing set. Where an article
@@ -80,6 +81,8 @@ const REPLACED_GENERATED_SLUGS = new Set([
   "inbox-replying",
   // articles/administration.ts — the settings menu was regrouped
   "admin-settings-overview",
+  // articles/company-profile.ts — the logo upload and the sign-in screen editor
+  "admin-company-profile",
 ]);
 const generated = (articles: unknown) => (articles as HelpArticle[]).filter((article) => !REPLACED_GENERATED_SLUGS.has(article.slug));
 
@@ -123,6 +126,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
   ...dealWorkspaceArticles,
   ...customerEmailArticles,
   ...administrationArticles,
+  ...companyProfileArticles,
   // Screens that had no guide until the help review (2026-11-24).
   ...screenArticles,
 ];
