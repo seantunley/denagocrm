@@ -21,7 +21,7 @@ function askDax() {
   window.dispatchEvent(new CustomEvent("dax:ask", { detail: { question: ASK_FOR_PLAN } }));
 }
 
-export function DaxBriefCard({ brief }: { brief: DaxBrief }) {
+export function DaxBriefCard({ brief, assistantName }: { brief: DaxBrief; assistantName: string }) {
   const moneyFmt = useMoneyFormat();
   const empty = brief.items.length === 0 && !brief.team?.length;
   if (empty) {
@@ -87,7 +87,7 @@ export function DaxBriefCard({ brief }: { brief: DaxBrief }) {
         <Link href="/today" className="btn-secondary btn-sm">Review all</Link>
         <button type="button" onClick={askDax} className="btn-primary btn-sm">
           <DaxIcon className="size-4" />
-          Ask DAX for a plan
+          Ask {assistantName} for a plan
         </button>
       </div>
     </section>

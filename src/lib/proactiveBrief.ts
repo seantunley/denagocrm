@@ -2,6 +2,7 @@ import "server-only";
 import { basePrisma } from "./db";
 import { logError } from "./errorLog";
 import { sendPushToAll } from "./push";
+import { assistantNameFor } from "./assistantName";
 import { askCrm } from "./crmAssistant";
 import { assistantAskAllowed, assistantUserFor } from "./assistantUser";
 import { sendUpdatesToLinkedPhone } from "./assistantWhatsApp";
@@ -177,7 +178,7 @@ async function writeBrief(tenantId: string, userId: string, claimId: string, now
     }
   });
   // At the time the person set for it (07:30 by default — inside quiet hours, on purpose).
-  await sendPushToAll({ title: "DAX", body: "Your morning brief is ready.", url: "/assistant" }, "assistant", { tenantId, userId, evenAtNight: true }).catch(() => {});
+  await sendPushToAll({ title: await assistantNameFor(tenantId), body: "Your morning brief is ready.", url: "/assistant" }, "assistant", { tenantId, userId, evenAtNight: true }).catch(() => {});
   await sendUpdatesToLinkedPhone(tenantId, userId, { shouldStop: budget.shouldStop }).catch(() => {});
   return true;
 }

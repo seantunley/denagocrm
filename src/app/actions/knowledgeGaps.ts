@@ -15,7 +15,7 @@ export async function draftKnowledgeFromGap(gapId: string): Promise<ActionResult
     const tenantId = await actingTenantId();
     const result = await draftFromGap(tenantId, gapId);
     if (!result.ok) refuse(result.error);
-    await logAudit({ action: "bot.knowledge_drafted_from_questions", summary: `DAX drafted chatbot knowledge “${result.title}” from customer questions`, user: owner });
+    await logAudit({ action: "bot.knowledge_drafted_from_questions", summary: `The assistant drafted chatbot knowledge “${result.title}” from customer questions`, user: owner });
     revalidatePath("/chatbot/knowledge");
     return { success: `Drafted “${result.title}” — check it below, then approve it` };
   });

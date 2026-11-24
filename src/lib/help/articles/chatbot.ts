@@ -95,7 +95,7 @@ export const chatbotArticles: HelpArticle[] = [
       { type: "h", text: "Tell someone while the bot carries on" },
       { type: "p", text: "Add a **Tell someone** step (under CRM & automation), choose the person and write what to tell them — for example \"{{name}} just asked for the price list\". When a customer reaches the step, that person is told and the conversation simply carries on. It isn't a handoff: the customer isn't told, and the bot keeps going." },
       { type: "list", items: [
-        "It appears in their **Ask** history with a red dot and a link to the customer, on their phone if they've switched notifications on, and on their linked WhatsApp if they use DAX there.",
+        "It appears in their **Ask** history with a red dot and a link to the customer, on their phone if they've switched notifications on, and on their linked WhatsApp if they use the assistant there.",
         "Between 20:00 and 08:00 nothing pops up on a phone — it waits in Ask and reaches WhatsApp in the morning.",
         "It's logged on the customer's record with the person's name. The person must still be in the workspace and allowed to see customer conversations, or it isn't sent.",
         "On a phone, they can switch these off under notifications: **Chatbot alerts**.",
