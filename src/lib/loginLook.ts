@@ -78,7 +78,8 @@ export const LOGIN_TEXT_FIELDS = {
   heading: { max: 60, blank: "default" },
   subheading: { max: 120, blank: "hide" },
   buttonLabel: { max: 30, blank: "default" },
-  badge: { max: 30, blank: "hide" },
+  // 40, not 30: "Fourways · Ballito · Beacon Bay" (31) was cut to "Beacon Ba" (Sean, 2026-11-24).
+  badge: { max: 40, blank: "hide" },
   status: { max: 40, blank: "hide" },
   headline: { max: 80, blank: "hide" },
   headlineSoft: { max: 80, blank: "hide" },
