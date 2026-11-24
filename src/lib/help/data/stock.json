@@ -189,7 +189,7 @@
         ]
       },
       { "type": "p", "text": "If the unit has no stock number yet, one is given automatically: STK, the year and a running number, for example STK-2026-0001. Serial numbers are saved in capital letters." },
-      { "type": "callout", "tone": "warning", "text": "The condition notes you type here replace whatever is in the unit's **Internal notes**. If the unit already had notes you want to keep, copy them into the condition notes." },
+      { "type": "callout", "tone": "info", "text": "Condition notes are added to the unit's **Internal notes** under \"On arrival:\". Anything already in its notes is kept." },
       { "type": "h", "text": "What happens to a damaged unit" },
       { "type": "p", "text": "Open the damaged unit and click **Send for assessment**. It moves to **On hold**. When the damage has been dealt with, click **Resolve hold** to put it back into available stock." },
       { "type": "h", "text": "Adding a unit that is already on your floor" },
@@ -566,7 +566,7 @@
         ]
       },
       { "type": "p", "text": "Every adjustment is written to the audit log with the new balance. In the same window you can change the part's **Details** (click **Save**) or click **Remove part**." },
-      { "type": "callout", "tone": "warning", "text": "**Remove part** acts straight away, without asking you to confirm. A removed part disappears from the list and from job cards; an owner can restore it from **Trash**." },
+      { "type": "callout", "tone": "info", "text": "**Remove part** asks you to confirm first. A removed part disappears from the list and from job cards; an owner can restore it from **Trash**." },
       { "type": "h", "text": "Low stock" },
       { "type": "p", "text": "When a part's quantity is at or below its reorder level, its quantity shows highlighted with a ⚠ and it is counted under **Reorder alerts**. Parts with no reorder level never raise an alert." },
       { "type": "h", "text": "How job cards use parts" },

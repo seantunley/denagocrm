@@ -137,7 +137,7 @@ async function createDemo(source: string, vars: Record<string, string>, match: M
   if (await activityAlreadyExists(marker)) return { ok: true };
   await prisma.activity.create({
     data: {
-      type: "test_drive", summary: `Test drive — ${vars.model || "cart"}`,
+      type: "test_drive", summary: `Test drive — ${vars.model || "vehicle"}`,
       note: appendMarker([vars.model ? `Model: ${vars.model}` : null, vars.date ? `Preferred: ${vars.date}` : null, ...fileLines(vars)], marker),
       location: vars.location || null, dueDate: new Date(), status: "planned", leadId: lead.id, contactId: who.contactId,
       assignedToId: userId, createdById: userId,

@@ -82,12 +82,12 @@ export default async function WarrantyPage() {
         <h2 className="font-semibold">Warranties expiring or expired ({expiring.length})</h2>
         <ResponsiveEntityTable>
           <table className="table-base">
-            <thead><tr><th>Cart</th><th>Owner</th><th>Status</th><th>Expiry</th></tr></thead>
+            <thead><tr><th>Vehicle</th><th>Owner</th><th>Status</th><th>Expiry</th></tr></thead>
             <tbody>
               {expiring.length === 0 && <tr><td data-empty colSpan={4} className="text-center text-slate-400 py-6">No accessible warranties expiring soon.</td></tr>}
               {expiring.map(({ vehicle, warranty }) => (
                 <tr key={vehicle.id}>
-                  <td data-primary data-label="Cart"><Link href={`/vehicles/${vehicle.id}`} className="text-orange-400 hover:underline font-medium">{vehicle.model}</Link></td>
+                  <td data-primary data-label="Vehicle"><Link href={`/vehicles/${vehicle.id}`} className="text-orange-400 hover:underline font-medium">{vehicle.model}</Link></td>
                   <td data-label="Owner"><Link href={`/contacts/${vehicle.contactId}`} className="hover:underline">{contactName(vehicle.contact)}</Link></td>
                   <td data-label="Status"><span className={`badge ${warrantyColors[warranty.status]}`}>{warrantyLabels[warranty.status]}</span></td>
                   <td data-label="Expiry" className="text-slate-300">
@@ -105,12 +105,12 @@ export default async function WarrantyPage() {
         <h2 className="font-semibold">Open warranty claims ({claims.length})</h2>
         <ResponsiveEntityTable>
           <table className="table-base">
-            <thead><tr><th>Cart</th><th>Claimant</th><th>Fault</th><th>Status</th><th>Opened</th><th /></tr></thead>
+            <thead><tr><th>Vehicle</th><th>Claimant</th><th>Fault</th><th>Status</th><th>Opened</th><th /></tr></thead>
             <tbody>
               {claims.length === 0 && <tr><td data-empty colSpan={6} className="text-center text-slate-400 py-6">No accessible open claims.</td></tr>}
               {claims.map((claim) => (
                 <tr key={claim.id}>
-                  <td data-primary data-label="Cart"><Link href={`/vehicles/${claim.vehicleId}`} className="text-orange-400 hover:underline font-medium">{claim.vehicle.model}</Link></td>
+                  <td data-primary data-label="Vehicle"><Link href={`/vehicles/${claim.vehicleId}`} className="text-orange-400 hover:underline font-medium">{claim.vehicle.model}</Link></td>
                   <td data-label="Claimant">{contactName(claim.vehicle.contact)}</td>
                   <td data-label="Fault" className="max-w-xs truncate" title={claim.description}><Link href={`/warranty/${claim.id}`} className="text-slate-300 hover:text-orange-400 hover:underline">{claim.description}</Link></td>
                   <td data-label="Status"><span className={`badge ${claimColors[claim.status]}`}>{claim.status}</span></td>
@@ -190,7 +190,7 @@ export default async function WarrantyPage() {
           <SaveForm action={saveWarrantyPartList} success="Saved" resetOnSuccess={false} className="card space-y-3 max-w-xl">
             <p className="text-sm text-muted-foreground">
               The parts a warranty can cover, one per line — offered in the dropdowns on each product and vehicle. Set each
-              model&apos;s cover on its product page (for example Battery 5 years, Cart 2 years, Chassis lifetime).
+              model&apos;s cover on its product page (for example Battery 5 years, Motor 2 years, Chassis lifetime).
             </p>
             <textarea name="parts" className="input" rows={5} defaultValue={partList.join("\n")} />
             <SaveButton className="btn-primary btn-sm">Save parts</SaveButton>

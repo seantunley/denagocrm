@@ -151,7 +151,7 @@ export default function StockUnitForm({
       <CaptureSection
         icon={BatteryCharging}
         title="Supplied equipment"
-        description="Capture the serialized equipment handed over with this cart."
+        description="Capture the serialized equipment handed over with this unit."
       >
         <CaptureField label="Battery serial"><input name="batterySerial" className="input font-mono" placeholder="Battery identifier" /></CaptureField>
         <CaptureField label="Charger serial"><input name="chargerSerial" className="input font-mono" placeholder="Charger identifier" /></CaptureField>

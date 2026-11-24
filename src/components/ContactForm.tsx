@@ -281,7 +281,7 @@ export default function ContactForm({
             className="input"
             autoComplete="street-address"
             defaultValue={defaults.address ?? ""}
-            placeholder="e.g. 12 Fairway Drive, De Zalze Golf Estate"
+            placeholder="e.g. 12 Main Road, Lakeside Estate"
           />
         </Field>
         <Field label="Suburb">

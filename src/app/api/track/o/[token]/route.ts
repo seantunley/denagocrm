@@ -38,7 +38,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ token: 
               "utmSource", "utmMedium", "utmCampaign", "utmContent", "utmTerm", "eventKey", "metadata", "occurredAt"
             ) VALUES (
               ${`mt_${crypto.randomUUID()}`}, ${campaign.tenantId}, ${recipient.campaignId}, ${recipient.id}, ${recipient.contactId}, 'open',
-              ${campaign.utmSource || "denagocrm"}, ${campaign.utmMedium || campaign.channel}, ${campaign.utmCampaign || campaign.name},
+              ${campaign.utmSource || "crm"}, ${campaign.utmMedium || campaign.channel}, ${campaign.utmCampaign || campaign.name},
               ${campaign.utmContent}, ${campaign.utmTerm}, ${`open:${recipient.id}`}, '{}'::jsonb, CURRENT_TIMESTAMP
             ) ON CONFLICT ("eventKey") DO NOTHING
           `;

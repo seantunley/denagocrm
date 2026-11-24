@@ -77,7 +77,7 @@ export function TestDriveBookingTrigger({
           </div>
           <div>
             <label className="label">Branch / location</label>
-            <input name="branch" className="input" required placeholder="Cape Town showroom" />
+            <input name="branch" className="input" required placeholder="Main showroom" />
           </div>
           <div>
             <label className="label">Demo vehicle</label>

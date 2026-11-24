@@ -72,6 +72,7 @@ export type SparkStat = {
   label: string;
   value: number;
   display?: "int" | "zar";
+  currencyMark?: string;
   delta: number | null; // % vs same days last month
   href: string;
   spark: number[]; // daily series
@@ -80,17 +81,18 @@ export type SparkStat = {
   context?: string;
 };
 
-const zarCompact = (n: number) =>
+// `mark` is the workspace currency's symbol (currencySymbol); "R" only when a caller has none.
+const moneyCompact = (mark = "R") => (n: number) =>
   Math.abs(n) >= 1_000_000
-    ? `R${(n / 1_000_000).toFixed(1)}m`
+    ? `${mark}${(n / 1_000_000).toFixed(1)}m`
     : Math.abs(n) >= 1_000
-      ? `R${Math.round(n / 1_000)}k`
-      : `R${Math.round(n)}`;
+      ? `${mark}${Math.round(n / 1_000)}k`
+      : `${mark}${Math.round(n)}`;
 
 export function StatSparkCard({ stat, icon }: { stat: SparkStat; icon: React.ReactNode }) {
   const up = (stat.delta ?? 0) >= 0;
   const data = stat.spark.map((v, i) => ({ i, v }));
-  const fmt = stat.display === "zar" ? zarCompact : undefined;
+  const fmt = stat.display === "zar" ? moneyCompact(stat.currencyMark) : undefined;
   const reduced = useReducedMotion();
   const cardRef = useRef<HTMLAnchorElement>(null);
   // Subtle 3D tilt toward the cursor — pure transform, zero re-renders
@@ -241,6 +243,7 @@ export type RingDef = {
   actual: number;
   target: number; // 0 = not set
   display: "int" | "zar";
+  currencyMark?: string;
   color: string;
 };
 
@@ -251,7 +254,7 @@ function Ring({ def, index }: { def: RingDef; index: number }) {
   const R = 30;
   const C = 2 * Math.PI * R;
   const hit = def.target > 0 && def.actual >= def.target;
-  const fmt = def.display === "zar" ? zarCompact : (n: number) => String(Math.round(n));
+  const fmt = def.display === "zar" ? moneyCompact(def.currencyMark) : (n: number) => String(Math.round(n));
 
   return (
     <div className="flex min-w-0 flex-col items-center gap-1.5">

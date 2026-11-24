@@ -1230,7 +1230,7 @@ export function QuoteEditorDialog({
                                   <div className="mt-3 rounded-xl border border-primary/15 bg-primary/[0.045] p-3">
                                     <div className="flex items-center justify-between gap-3">
                                       <label className="label mb-0" htmlFor={`${line.key}-colour`}>Colour preference</label>
-                                      <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-primary">Catalogue EV</span>
+                                      <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-primary">Catalogue item</span>
                                     </div>
                                     <select
                                       id={`${line.key}-colour`}

@@ -193,7 +193,7 @@ export default async function FleetDetailPage({ params }: { params: Promise<{ id
     >
       <div className={`grid gap-3 ${warrantyOn ? "grid-cols-3" : "grid-cols-2"}`}>
         <div className="card">
-          <p className="text-xs uppercase tracking-wide text-slate-400">Carts</p>
+          <p className="text-xs uppercase tracking-wide text-slate-400">Vehicles</p>
           <p className="text-3xl font-bold mt-1">{fleet.vehicles.length}</p>
         </div>
         <div className="card">
@@ -428,7 +428,7 @@ export default async function FleetDetailPage({ params }: { params: Promise<{ id
                     <table className="table-base">
                       <thead>
                         <tr>
-                          <th>Cart</th>
+                          <th>Vehicle</th>
                           <th>Owner / contact</th>
                           <th>Service</th>
                           {warrantyOn && <th>Warranty</th>}
@@ -478,7 +478,7 @@ export default async function FleetDetailPage({ params }: { params: Promise<{ id
 
                 <div className="space-y-4">
                   <div className="card">
-                    <h2 className="font-semibold mb-3">Add a cart</h2>
+                    <h2 className="font-semibold mb-3">Add a vehicle</h2>
                     <form action={assignVehicleToFleet.bind(null, fleet.id)} className="flex gap-2">
                       <select name="vehicleId" className="input flex-1" required defaultValue="">
                         <option value="" disabled>
@@ -493,7 +493,7 @@ export default async function FleetDetailPage({ params }: { params: Promise<{ id
                       <button className="btn-primary btn-sm">Add</button>
                     </form>
                     <p className="mt-2 text-xs text-muted-foreground">
-                      Only carts not already in a fleet are listed. Carts owned privately by a fleet
+                      Only vehicles not already in a fleet are listed. Vehicles owned privately by a fleet
                       contact stay on that contact.
                     </p>
                   </div>

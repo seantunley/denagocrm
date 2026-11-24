@@ -33,7 +33,7 @@ export default function BotAiPreviewConsole() {
             required
             maxLength={3000}
             defaultValue={state.question ?? ""}
-            placeholder="Example: Is the Rover XL road legal, and what warranty does the battery have?"
+            placeholder="Example: Is it road legal, and what warranty does the battery have?"
           />
         </div>
         <div className="grid gap-3 sm:grid-cols-2">

@@ -164,7 +164,7 @@ export default function SetAsideAttentionButton({
               placeholder={
                 snoozing
                   ? "e.g. Customer in Italy until the 19th — agreed to call then"
-                  : "e.g. Duplicate of the other Rover XL enquiry — working that one"
+                  : "e.g. Duplicate of their other enquiry — working that one"
               }
               aria-invalid={reasonProblem != null}
             />

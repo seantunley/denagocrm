@@ -171,7 +171,7 @@ export default function SegmentBuilder({ tags }: { tags: Tag[] }) {
         <legend className="label">Lifecycle signals</legend>
         <div className="grid gap-2 sm:grid-cols-3">
           <SignalChoice
-            label="Owns a cart"
+            label="Owns a vehicle"
             description="Has a vehicle on record"
             checked={criteria.hasVehicle}
             onChange={(checked) => setCriteria({ ...criteria, hasVehicle: checked })}

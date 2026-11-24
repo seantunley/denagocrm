@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import { AlertTriangle, BadgeDollarSign, Boxes, PackageCheck, Plus } from "lucide-react";
 import ModalTrigger from "@/components/Modal";
+import ConfirmDelete from "@/components/ConfirmDelete";
 import PartForm from "@/components/PartForm";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { currencySymbol, formatZAR, type MoneyFormat } from "@/lib/format";
@@ -132,9 +133,14 @@ export default async function PartsPage() {
                           <PartFields p={p} moneyFmt={moneyFmt} />
                           <SaveButton className="btn-secondary btn-sm">Save</SaveButton>
                         </SaveForm>
-                        <form action={deletePart.bind(null, p.id)}>
-                          <button className="btn-danger btn-sm">Remove part</button>
-                        </form>
+                        <ConfirmDelete
+                          action={deletePart.bind(null, p.id)}
+                          title={`Remove ${p.name}?`}
+                          trigger="Remove part"
+                          triggerClass="btn-danger btn-sm"
+                          confirmLabel="Remove"
+                          success="Part removed"
+                        />
                       </div>
                     </ModalTrigger>
                   </td>

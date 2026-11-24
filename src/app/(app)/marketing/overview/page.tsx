@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { BadgePoundSterling, ChartNoAxesCombined, MousePointerClick, UsersRound } from "lucide-react";
+import { Banknote, ChartNoAxesCombined, MousePointerClick, UsersRound } from "lucide-react";
 import { requirePermission } from "@/lib/permissions";
 import { getActiveTenantId } from "@/lib/auth";
 import { loadMarketingOverview } from "@/lib/marketingOverview";
@@ -39,7 +39,7 @@ export default async function MarketingOverviewPage({ searchParams }: { searchPa
     <MetricStrip glow="left">
       <MetricCard icon={ChartNoAxesCombined} label="Campaign activity" value={data.campaigns.campaigns} detail={`${data.campaigns.delivered || data.campaigns.sent} delivered`} />
       <MetricCard icon={UsersRound} label="Attributed outcomes" value={data.campaigns.conversions} detail={`${data.campaigns.sales} sales from campaign leads`} accent={data.campaigns.conversions > 0} />
-      <MetricCard icon={BadgePoundSterling} label="Attributed revenue" value={money(data.campaigns.attributedRevenueCents)} detail={data.efficiency.roas === null ? "ROAS not available" : `${data.efficiency.roas}× return on spend`} />
+      <MetricCard icon={Banknote} label="Attributed revenue" value={money(data.campaigns.attributedRevenueCents)} detail={data.efficiency.roas === null ? "ROAS not available" : `${data.efficiency.roas}× return on spend`} />
       <MetricCard icon={MousePointerClick} label="Engagement" value={data.campaigns.clicked} detail={data.efficiency.costPerLeadCents === null ? "Cost per lead not available" : `${money(data.efficiency.costPerLeadCents)} per lead`} />
     </MetricStrip>
 

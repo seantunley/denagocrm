@@ -57,7 +57,7 @@ export default async function DemoFleetPage() {
         {canManage && (
           <ModalTrigger label={<><Plus className="size-4" />Add demo vehicle</>} title="Add demo vehicle" buttonClass={buttonVariants({ size: "sm" })}>
             <SaveForm action={createDemoVehicle} success="Added to the demo fleet" className="grid gap-3 sm:grid-cols-2">
-              <div className="sm:col-span-2"><label className="label">Display name</label><input name="name" className="input" required placeholder="Rover XL Demo 1" /></div>
+              <div className="sm:col-span-2"><label className="label">Display name</label><input name="name" className="input" required placeholder="Demo vehicle 1" /></div>
               <div><label className="label">Product / model</label><select name="productId" className="input" defaultValue=""><option value="">No catalogue link</option>{products.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}</select></div>
               <div><label className="label">Stock unit</label><select name="stockUnitId" className="input" defaultValue=""><option value="">No stock-unit link</option>{stockUnits.map((unit) => <option key={unit.id} value={unit.id}>{unit.stockNumber ?? unit.serial ?? "Unit"} · {unit.product.name}</option>)}</select></div>
               <div><label className="label">VIN / serial</label><input name="vin" className="input" /></div>

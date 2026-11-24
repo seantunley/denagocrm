@@ -57,7 +57,7 @@ function criteriaSummary(criteria: SegmentCriteria): string {
   if (criteria.source) parts.push(`Source: ${criteria.source}`);
   if (criteria.tagId) parts.push("Tagged");
   if (criteria.province) parts.push(criteria.province);
-  if (criteria.hasVehicle) parts.push("Owns a cart");
+  if (criteria.hasVehicle) parts.push("Owns a vehicle");
   if (criteria.serviceDue) parts.push("Service due");
   if (criteria.wonOnly) parts.push("Bought before");
   return parts.join(" · ") || "All opted-in subscribers";

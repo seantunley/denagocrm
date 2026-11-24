@@ -2,7 +2,7 @@ import Link from "next/link";
 import {
   ArrowRight, CalendarDays, CheckCircle2, CircleDollarSign, Clock4, FileSignature, Flame, SquareKanban, Sun, Target, UserPlus,
 } from "lucide-react";
-import { formatZAR, formatZARCompact, type MoneyFormat } from "@/lib/format";
+import { currencySymbol, formatZAR, formatZARCompact, type MoneyFormat } from "@/lib/format";
 import { withCurrency } from "@/lib/currencyRules";
 import { ActivityRow } from "@/components/dashboard/sections";
 import { PipelineSnapshot, Stagger, StaggerItem, StatSparkCard } from "@/components/dashboard/widgets";
@@ -113,7 +113,7 @@ export function FocusHome({
               <StaggerItem key={n.key} className="min-w-[11rem] shrink-0 snap-start sm:min-w-0 sm:shrink">
                 <StatSparkCard
                   icon={ICONS[n.key]}
-                  stat={{ label: n.label, value: n.amount, display: n.display, delta: n.delta, href: n.href, spark: focus.sparks[n.key] ?? [], tone: n.alert ? "warn" : "default", context: n.context }}
+                  stat={{ label: n.label, value: n.amount, display: n.display, currencyMark: currencySymbol(moneyFmt), delta: n.delta, href: n.href, spark: focus.sparks[n.key] ?? [], tone: n.alert ? "warn" : "default", context: n.context }}
                 />
               </StaggerItem>
             ))}

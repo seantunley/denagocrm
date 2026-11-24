@@ -34,6 +34,10 @@ export type CampaignDraftEditorValue = {
 
 type SaveState = "idle" | "dirty" | "saving" | "saved" | "error";
 
+// Money is typed in the currency's units and stored in cents.
+const toAmount = (cents: number | null) => (cents == null ? "" : String(cents / 100));
+const toCents = (raw: string) => (raw === "" ? "" : String(Math.round(Number(raw) * 100)));
+
 function toForm(value: CampaignDraftEditorValue) {
   const form = new FormData();
   for (const [key, raw] of Object.entries(value)) {
@@ -104,9 +108,9 @@ export default function CampaignDraftEditor({ initial }: { initial: CampaignDraf
           <label className="space-y-1"><span className="label">Landing page</span><input className="input" type="url" value={value.landingPageUrl ?? ""} onChange={(e) => set("landingPageUrl", e.target.value)} /></label>
           <label className="space-y-1"><span className="label">CTA label</span><input className="input" value={value.primaryCtaLabel ?? ""} onChange={(e) => set("primaryCtaLabel", e.target.value)} /></label>
           <label className="space-y-1"><span className="label">CTA URL</span><input className="input" type="url" value={value.primaryCtaUrl ?? ""} onChange={(e) => set("primaryCtaUrl", e.target.value)} /></label>
-          <label className="space-y-1"><span className="label">Budget (cents)</span><input className="input" type="number" min="0" value={value.budgetCents ?? ""} onChange={(e) => set("budgetCents", e.target.value)} /></label>
+          <label className="space-y-1"><span className="label">Budget</span><input className="input" type="number" min="0" step="0.01" value={toAmount(value.budgetCents)} onChange={(e) => set("budgetCents", toCents(e.target.value))} /></label>
           <label className="space-y-1"><span className="label">Target leads</span><input className="input" type="number" min="0" value={value.targetLeadCount ?? ""} onChange={(e) => set("targetLeadCount", e.target.value)} /></label>
-          <label className="space-y-1"><span className="label">Target revenue (cents)</span><input className="input" type="number" min="0" value={value.targetRevenueCents ?? ""} onChange={(e) => set("targetRevenueCents", e.target.value)} /></label>
+          <label className="space-y-1"><span className="label">Target revenue</span><input className="input" type="number" min="0" step="0.01" value={toAmount(value.targetRevenueCents)} onChange={(e) => set("targetRevenueCents", toCents(e.target.value))} /></label>
           <label className="space-y-1"><span className="label">Success metric</span><input className="input" value={value.successMetric ?? ""} onChange={(e) => set("successMetric", e.target.value)} /></label>
         </div>
         <label className="space-y-1 block"><span className="label">Internal notes</span><textarea className="input min-h-24" value={value.internalNotes ?? ""} onChange={(e) => set("internalNotes", e.target.value)} /></label>
@@ -115,7 +119,7 @@ export default function CampaignDraftEditor({ initial }: { initial: CampaignDraf
       <section className="card space-y-4">
         <div><h2 className="font-semibold">2. Tracking and attribution</h2><p className="text-xs text-muted-foreground">Missing UTM values are safely defaulted at click time. Last-click attribution uses the selected lookback window.</p></div>
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          <label className="space-y-1"><span className="label">UTM source</span><input className="input" placeholder="denagocrm" value={value.utmSource ?? ""} onChange={(e) => set("utmSource", e.target.value)} /></label>
+          <label className="space-y-1"><span className="label">UTM source</span><input className="input" placeholder="crm" value={value.utmSource ?? ""} onChange={(e) => set("utmSource", e.target.value)} /></label>
           <label className="space-y-1"><span className="label">UTM medium</span><input className="input" placeholder={value.channel} value={value.utmMedium ?? ""} onChange={(e) => set("utmMedium", e.target.value)} /></label>
           <label className="space-y-1"><span className="label">UTM campaign</span><input className="input" placeholder="campaign-name" value={value.utmCampaign ?? ""} onChange={(e) => set("utmCampaign", e.target.value)} /></label>
           <label className="space-y-1"><span className="label">UTM content</span><input className="input" value={value.utmContent ?? ""} onChange={(e) => set("utmContent", e.target.value)} /></label>
@@ -136,7 +140,7 @@ export default function CampaignDraftEditor({ initial }: { initial: CampaignDraf
         {value.channel === "email" && <>
           <label className="space-y-1 block"><span className="label">Subject</span><input className="input" value={value.subject ?? ""} onChange={(e) => set("subject", e.target.value)} /></label>
           <label className="space-y-1 block"><span className="label">Preheader</span><input className="input" value={value.preheader ?? ""} onChange={(e) => set("preheader", e.target.value)} /></label>
-          <label className="space-y-1 block"><span className="label">Email HTML</span><textarea className="input min-h-72 font-mono text-xs" value={value.htmlBody ?? ""} onChange={(e) => set("htmlBody", e.target.value)} /></label>
+          <label className="space-y-1 block"><span className="label">Email content (HTML code)</span><textarea className="input min-h-72 font-mono text-xs" value={value.htmlBody ?? ""} onChange={(e) => set("htmlBody", e.target.value)} /></label>
         </>}
         <label className="space-y-1 block"><span className="label">{value.channel === "sms" ? "Message" : "Plain-text fallback"}</span><textarea className="input min-h-40" value={value.body} onChange={(e) => set("body", e.target.value)} /></label>
         {value.channel === "sms" && <p className="text-xs text-muted-foreground">{value.body.length} characters</p>}

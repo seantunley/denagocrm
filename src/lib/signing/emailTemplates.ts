@@ -121,7 +121,7 @@ export const SIGNING_FIELD_HELP: Record<string, string> = {
   code: "The 6-digit verification code (required)",
   total: "Quote total incl. VAT, e.g. R 125 000,00",
   company_contact: "Company name and phone, e.g. Acme on 021 000 0000",
-  model: "Vehicle model, e.g. Rover XL",
+  model: "Product or vehicle model",
   due_date: "Date the service is due",
   recall_title: "Recall title",
   recall_description: "What the recall is about",

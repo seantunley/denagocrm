@@ -14,7 +14,7 @@ const CHECKLIST = [
   "Keys handed over",
   "Owner's manual provided",
   "Controls & safety walkthrough done",
-  "Cart inspected — no visible damage",
+  "Vehicle inspected — no visible damage",
 ];
 
 /**

@@ -17,7 +17,7 @@ import { prisma } from "@/lib/db";
 import { accessibleInboxWhere } from "@/lib/permissions";
 import { getAiHealth } from "@/lib/systemHealth";
 import { getLastRun } from "@/lib/securityRunbook";
-import { formatDate, formatDateTime, contactName } from "@/lib/format";
+import { currencySymbol, formatDate, formatDateTime, contactName } from "@/lib/format";
 import { dueLabels, dueColors } from "@/lib/serviceDue";
 import {
   Stagger,
@@ -216,7 +216,8 @@ export const DASHBOARD_CARD_IMPLS: Record<DashboardCardId, DashboardCardImpl> = 
       const won = wonSplit.base;
       const wonValue = won.reduce((sum, w) => sum + w.valueCents, 0);
       // The wins this figure leaves out (other currencies), said rather than hidden.
-      const wonOthers = wonSplit.others.length ? formatTotals(wonSplit.others, await getRegionalSettings(), true) : "";
+      const moneyFmt = await getRegionalSettings();
+      const wonOthers = wonSplit.others.length ? formatTotals(wonSplit.others, moneyFmt, true) : "";
       const stats: { stat: SparkStat; icon: React.ReactNode }[] = [];
       if (seesLeads) {
         stats.push(
@@ -236,6 +237,7 @@ export const DASHBOARD_CARD_IMPLS: Record<DashboardCardId, DashboardCardImpl> = 
               label: "Won value (month)",
               value: Math.round(wonValue / 100),
               display: "zar",
+              currencyMark: currencySymbol(moneyFmt),
               delta: pctDelta(wonValue, prevWon),
               ...(wonOthers ? { context: `Plus ${wonOthers} in other currencies` } : {}),
               href: "/reports",
@@ -356,6 +358,7 @@ export const DASHBOARD_CARD_IMPLS: Record<DashboardCardId, DashboardCardImpl> = 
             actual: Math.round(won.reduce((s, w) => s + w.valueCents, 0) / 100),
             target: Math.round((tMap.get("sales_value") ?? 0) / 100),
             display: "zar",
+            currencyMark: currencySymbol(await getRegionalSettings()),
             color: "var(--chart-1)",
           },
         );
