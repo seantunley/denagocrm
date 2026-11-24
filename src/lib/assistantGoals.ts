@@ -109,7 +109,7 @@ export async function startDeliveryGoal(user: PermissionUser, quoteRef: string, 
   if (!(await isModuleEnabled("automotive"))) return { ok: false, error: "Deliveries are part of the Automotive module, which is off for this workspace." };
   if (!(await hasAnyPermission(user, "deliveries.view", "deliveries.manage"))) return { ok: false, error: "You don't have access to deliveries, so I can't follow one for you." };
   if (!(await switchedOn(tenantId, user.id))) {
-    return { ok: false, error: "A goal tells you how a delivery is going the way proactive DAX does — switch proactive DAX on for yourself on this page first." };
+    return { ok: false, error: "A goal tells you how a delivery is going the way the assistant's proactive updates do — switch those on for yourself on this page first." };
   }
   const ref = String(quoteRef ?? "").trim().slice(0, 64);
   const number = /^Q?-?\s*(\d{1,9})$/i.exec(ref)?.[1];

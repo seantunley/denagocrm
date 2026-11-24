@@ -61,12 +61,15 @@ export function formatLinkCode(n: number): string {
   return String(Math.trunc(n)).padStart(6, "0").slice(-6);
 }
 
-/** What the person sends, word for word. */
-export const linkCodeText = (code: string) => `DAX ${code}`;
+/** What the person sends, word for word. Never the assistant's name: that is each workspace's own and can change. */
+export const linkCodeText = (code: string) => `LINK ${code}`;
 
-/** "DAX 123456" (any case, spaces around) → "123456"; anything else → null. */
+/**
+ * "LINK 123456" (any case, spaces around) → "123456"; anything else → null. "DAX 123456" is still read: codes were
+ * issued in that form until 2026-11-24, and one may be mid-way through its 15 minutes when this ships.
+ */
 export function parseLinkCode(text: string | null | undefined): string | null {
-  const m = /^\s*DAX\s+(\d{6})\s*$/i.exec(String(text ?? ""));
+  const m = /^\s*(?:LINK|DAX)\s+(\d{6})\s*$/i.exec(String(text ?? ""));
   return m ? m[1] : null;
 }
 

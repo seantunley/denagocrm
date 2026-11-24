@@ -172,7 +172,7 @@ test("HONESTY: the ranked reasons are the only ones stated as fact; anything els
 /* ── Catch me up ─────────────────────────────────────────────────────────── */
 
 test("THE WINDOW: since their last question, at most 7 days back; the last 24 hours with none; a day they name replaces it", () => {
-  assert.deepEqual(catchUpSince(NOW, ago(1), null), { since: ago(1), basis: "their last question to DAX" });
+  assert.deepEqual(catchUpSince(NOW, ago(1), null), { since: ago(1), basis: "their last question to the assistant" });
   const capped = catchUpSince(NOW, ago(30), null);
   assert.equal(capped.since.getTime(), ago(7).getTime());
   assert.match(capped.basis, /at most 7 days/);

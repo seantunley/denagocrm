@@ -159,7 +159,7 @@ export const SCHEDULE_SKIPPED_NOTE =
  */
 export function scheduleFailureNote(error: string): string {
   if (error === AI_NOT_CONNECTED) {
-    return "I couldn't run this scheduled question: DAX isn't connected to an AI service for this workspace (Settings → Integrations).";
+    return "I couldn't run this scheduled question: the assistant isn't connected to an AI service for this workspace (Settings → Integrations).";
   }
   return "I couldn't run this scheduled question just now — the AI service didn't give me an answer. You can ask it yourself now.";
 }

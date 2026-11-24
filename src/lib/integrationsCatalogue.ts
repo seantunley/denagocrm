@@ -34,7 +34,7 @@ export const INTEGRATION_META: Record<string, IntegrationMeta> = {
   imap: { group: "email", purpose: "Bring replies from your mailbox into the Inbox.", mark: { text: "In", tone: "bg-orange-500/15 text-orange-300" } },
   xero: { group: "accounting", purpose: "Send invoices to Xero and bring payments back.", mark: { text: "Xe", tone: "bg-cyan-500/15 text-cyan-300" } },
   "ai-choice": { group: "ai", purpose: "Which AI runs the chatbot, invoice reading and message checks.", mark: { text: "AI", tone: "bg-primary/15 text-primary" } },
-  chatgpt: { group: "ai", purpose: "Run DAX and the AI helpers on your ChatGPT plan, with no per-use cost.", mark: { text: "GPT", tone: "bg-teal-500/15 text-teal-300" } },
+  chatgpt: { group: "ai", purpose: "Run the assistant and the AI helpers on your ChatGPT plan, with no per-use cost.", mark: { text: "GPT", tone: "bg-teal-500/15 text-teal-300" } },
   claude: { group: "ai", purpose: "Pay-per-use Claude, when chosen above or if ChatGPT isn't connected.", mark: { text: "Cl", tone: "bg-amber-500/15 text-amber-300" } },
   elevenlabs: { group: "ai", purpose: "Hear voice notes and reply with a voice.", mark: { text: "11", tone: "bg-fuchsia-500/15 text-fuchsia-300" } },
   "google-reviews": { group: "other", purpose: "Bring your Google reviews into the CRM.", mark: { text: "G★", tone: "bg-yellow-500/15 text-yellow-300" } },

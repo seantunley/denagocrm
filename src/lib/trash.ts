@@ -470,7 +470,7 @@ export async function purgeTrash(): Promise<number> {
         await tx.assistantTurn.deleteMany({ where: { conversationId: { in: ids }, tenantId: { in: tenants } } });
         return tx.assistantConversation.deleteMany({ where: { id: { in: ids }, tenantId: { in: tenants } } });
       }),
-    "DAX conversations",
+    "Assistant conversations",
   );
   return purged;
 }

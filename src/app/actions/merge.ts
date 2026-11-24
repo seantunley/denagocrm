@@ -118,11 +118,11 @@ export async function mergeContacts(keepId: string, otherIdsCsv: string, formDat
         await move(tx.emailDraft, "contactId", "email drafts and scheduled emails");
         // A DAX alert held overnight about this customer: its access is checked again against the record that
         // survives when it is sent — left on the deleted duplicate it would be dropped instead.
-        await move(tx.assistantProactiveAlert, "contactId", "held DAX alerts");
+        await move(tx.assistantProactiveAlert, "contactId", "held assistant alerts");
         // A DAX job sheet for this customer: "continue that quote" must reach the record that survives.
-        await move(tx.assistantTask, "contactId", "DAX job sheets");
+        await move(tx.assistantTask, "contactId", "assistant job sheets");
         // A DAX conversation about this customer: asking on the surviving record's page must pick it up again.
-        await move(tx.assistantConversation, "contactId", "DAX conversations");
+        await move(tx.assistantConversation, "contactId", "assistant conversations");
 
         // Referral has two contact links. Move both, then drop any self-referral
         // the merge created (referrer === referred → a customer referring itself,

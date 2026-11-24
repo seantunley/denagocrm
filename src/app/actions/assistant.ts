@@ -94,9 +94,9 @@ const untouched = (error: string) => ({ ok: false as const, error, unchanged: tr
  */
 const resumable = (error: string) => ({ ok: false as const, error, resumable: true as const });
 
-const BAD_SCREENSHOT = "That screenshot can't be attached — send it to DAX again.";
-const UPLOAD_GONE = "That file is no longer held (it is kept for a day) — send it to DAX again.";
-const FILE_UNSURE = "That didn't complete, and the file may have been filed anyway — so it won't be tried again. Check the record's documents, and send the file to DAX again if it's missing.";
+const BAD_SCREENSHOT = "That screenshot can't be attached — send it to the assistant again.";
+const UPLOAD_GONE = "That file is no longer held (it is kept for a day) — send it to the assistant again.";
+const FILE_UNSURE = "That didn't complete, and the file may have been filed anyway — so it won't be tried again. Check the record's documents, and send the file to the assistant again if it's missing.";
 
 /**
  * FILE A HELD UPLOAD ONCE (review of #934), through the documents form's own door (uploadDocument). Two rules:
@@ -421,7 +421,7 @@ export async function runAssistantAction(
           ...(card.vendorId ? { vendorId: card.vendorId } : {}),
         }, "file a document");
         if (filed === "gone") return untouched(UPLOAD_GONE);
-        if (filed === "busy") return { ok: false, error: "That file is still being filed, or the last try was cut off — check the record's documents in a moment, and send it to DAX again if it's missing." };
+        if (filed === "busy") return { ok: false, error: "That file is still being filed, or the last try was cut off — check the record's documents in a moment, and send it to the assistant again if it's missing." };
         if (filed === "already") return { ok: true, success: `Already filed on ${card.leadLabel}` };
         if (filed !== "filed") return { ok: false, error: filed.error };
         await logAudit({ action: "assistant.action_confirmed", summary: "Confirmed the assistant's proposal: file a document", user, ...("contactId" in target && target.contactId ? { contactId: String(target.contactId) } : {}), ...(card.leadId ? { leadId: card.leadId } : {}), metadata: { kind: card.kind, ...cardRecords(card) } });
@@ -808,7 +808,7 @@ export async function runAssistantAction(
         });
         const byId = new Map(products.map((product) => [product.id, product]));
         if (lines.some((line) => byId.get(line.productId)?.basePriceCents !== line.unitPriceCents)) {
-          return untouched("The catalogue changed since DAX suggested this — ask again to see today's prices.");
+          return untouched("The catalogue changed since the assistant suggested this — ask again to see today's prices.");
         }
         // The colour as saveQuoteDraft will check it (configured for the product, any case) — here, so a colour the
         // catalogue no longer has stops the Confirm BEFORE a customer record is made, not after.
@@ -943,7 +943,7 @@ export async function runAssistantAction(
         const quote = await prisma.quote.findFirst({ where: { id: String(card.quoteId ?? ""), deletedAt: null }, select: { id: true, number: true, status: true, leadId: true, contactId: true } });
         if (!quote || !(await canAccessQuote(user, quote.id))) return untouched("That quote is no longer there.");
         const linked = await prisma.assistantPhoneLink.findFirst({ where: { userId: user.id, verifiedAt: { not: null }, waId: { not: null } }, select: { id: true } });
-        if (!linked) return untouched("Link your WhatsApp first (Ask page → DAX on WhatsApp) — the PDF goes to your own linked number.");
+        if (!linked) return untouched("Link your WhatsApp first (the Ask page's WhatsApp card) — the PDF goes to your own linked number.");
         const tenantId = ownedWriteTenantId();
         const origin = (await tenantOrigin(tenantId).catch(() => "")).replace(/\/$/, "");
         await prisma.assistantTurn.create({
@@ -1035,7 +1035,7 @@ export async function runAssistantAction(
         });
         const byId = new Map(products.map((product) => [product.id, product]));
         if (lines.some((line) => byId.get(line.productId)?.basePriceCents !== line.unitPriceCents)) {
-          return untouched("The catalogue changed since DAX suggested this — ask again to see today's prices.");
+          return untouched("The catalogue changed since the assistant suggested this — ask again to see today's prices.");
         }
         const added = splitFreeFees(fees);
         const saved = await saveQuoteDraft({

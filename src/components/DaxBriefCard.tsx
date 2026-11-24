@@ -34,7 +34,7 @@ export function DaxBriefCard({ brief }: { brief: DaxBrief }) {
   }
 
   return (
-    <section className="card space-y-3" aria-label="DAX daily brief">
+    <section className="card space-y-3" aria-label="Daily brief">
       <div className="flex items-start gap-2">
         <DaxIcon className="mt-0.5 size-5 shrink-0 text-primary" />
         <div className="min-w-0">

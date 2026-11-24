@@ -105,7 +105,7 @@ export async function afterAnswer(who: Who, conversationId: string, question: st
 }
 
 export const SUMMARY_SYSTEM = [
-  "You keep the running summary of a conversation between a salesperson and DAX, their CRM assistant.",
+  "You keep the running summary of a conversation between a salesperson and their CRM assistant.",
   "You get the summary so far and the exchanges that have just fallen out of the assistant's view. Write the new summary: everything still useful from both.",
   "Keep: which customers, deals and quotes it was about; figures and dates that were given; what was decided; what is still open or was promised.",
   "Plain short lines, at most 1200 characters. No phone numbers or email addresses. Nothing that isn't in what you were given.",

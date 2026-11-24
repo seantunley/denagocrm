@@ -32,7 +32,7 @@ export function reviewSection(items: LearnedItem[], total: number): string {
   const more = total - items.length;
   return [
     "",
-    `🧠 To review — what DAX learned (${total})`,
+    `🧠 To review — what the assistant learned (${total})`,
     ...items.map((item, i) => `${i + 1}. ${learnedLine(item)}`),
     ...(more > 0 ? [`…and ${more} more in Settings → Assistant.`] : []),
     "On WhatsApp, reply “keep 1”, “drop 2”, “keep all” or “drop all” — or review them in Settings → Assistant. Until you keep one, only the person it came from gets it.",

@@ -23,7 +23,7 @@ export default async function TriagePage() {
     <div className="space-y-5">
       <PageHeader
         title="Work through who's waiting"
-        description="DAX goes through the deals that need you — customers waiting for a reply, overdue follow-ups, quotes about to expire — says what's holding each up, and prepares replies, follow-ups and hand-overs. Nothing happens until you tick it; messages only go when you press Send."
+        description="The assistant goes through the deals that need you — customers waiting for a reply, overdue follow-ups, quotes about to expire — says what's holding each up, and prepares replies, follow-ups and hand-overs. Nothing happens until you tick it; messages only go when you press Send."
       >
         <Link href="/assistant" className="btn-secondary btn-sm">Back to Ask</Link>
       </PageHeader>

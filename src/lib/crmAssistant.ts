@@ -418,7 +418,7 @@ export type AskOptions = {
 
 /** Said instead of a write-up while ChatGPT is failing (assistantBreaker). */
 export const DEGRADED_NOTE = "The AI service isn't answering just now, so this is straight from the CRM — no write-up. Try again in a few minutes for the full answer.";
-export const DEGRADED_ERROR = "DAX can't reach the AI service right now — it has failed several times in the last few minutes. Try again in a few minutes.";
+export const DEGRADED_ERROR = "The assistant can't reach the AI service right now — it has failed several times in the last few minutes. Try again in a few minutes.";
 /** The rows were found but couldn't be written up: shown with them. Only ever with rows — with none, say it failed. */
 export const NO_WRITE_UP_NOTE = "Here's what the CRM found. I couldn't write it up just now — the AI service didn't answer. Try again in a few minutes for the full answer.";
 

@@ -33,11 +33,11 @@ export function catchUpSince(now: Date, lastTurnAt: Date | null, sinceDay?: stri
     if (asked.getTime() > now.getTime()) return { since: startOfDay(johannesburgDateKey(now)), basis: "the start of today" };
     return { since: asked, basis: `the start of ${sinceDay}, as they asked` };
   }
-  if (!lastTurnAt) return { since: new Date(now.getTime() - CATCH_UP_DEFAULT_HOURS * 3_600_000), basis: "the last 24 hours — they have no earlier question to DAX" };
+  if (!lastTurnAt) return { since: new Date(now.getTime() - CATCH_UP_DEFAULT_HOURS * 3_600_000), basis: "the last 24 hours — they have no earlier question to the assistant" };
   if (lastTurnAt.getTime() < floor.getTime()) {
-    return { since: floor, basis: `${CATCH_UP_MAX_DAYS} days ago — their last question to DAX was longer ago, and a catch-up looks back at most ${CATCH_UP_MAX_DAYS} days` };
+    return { since: floor, basis: `${CATCH_UP_MAX_DAYS} days ago — their last question to the assistant was longer ago, and a catch-up looks back at most ${CATCH_UP_MAX_DAYS} days` };
   }
-  return { since: lastTurnAt, basis: "their last question to DAX" };
+  return { since: lastTurnAt, basis: "their last question to the assistant" };
 }
 
 export type CatchUpItem = { at: Date; type: "message" | "quote" | "deal" | "new_lead"; what: string; link: string; [fact: string]: unknown };

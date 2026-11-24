@@ -55,13 +55,13 @@ export async function answerReviewReply(tenantId: string, user: Person, text: st
   if (!reply) return null;
   const offer = readOffer(await getWorkspaceSetting(tenantId, reviewOfferKey(user.id)), new Date());
   if (!offer) return null;
-  if (!(await ownsWorkspace(tenantId, user))) return "Only the workspace owner can keep or drop what DAX learned.";
+  if (!(await ownsWorkspace(tenantId, user))) return "Only the workspace owner can keep or drop what the assistant learned.";
   const { ids, unknown } = idsFor(reply, offer);
   const done = await decide(tenantId, user, ids, reply.verdict);
   const left = await basePrisma.assistantNote.count({ where: { tenantId, status: "unreviewed" } });
   return [
     done.length
-      ? `${reply.verdict === "keep" ? "Kept — everyone's DAX uses it now" : "Dropped"}: ${done.length === 1 ? "1 thing" : `${done.length} things`}.`
+      ? `${reply.verdict === "keep" ? "Kept — the assistant uses it for everyone now" : "Dropped"}: ${done.length === 1 ? "1 thing" : `${done.length} things`}.`
       : "Nothing changed — those were already reviewed or are gone.",
     unknown.length ? `There was no number ${unknown.join(", ")} in the list.` : "",
     left ? `${left} still to review in Settings → Assistant.` : "Nothing left to review.",

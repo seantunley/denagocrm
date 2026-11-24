@@ -1015,7 +1015,7 @@ async function sendReportPdf(
     if (!(await staffPhoneStillSafe(tenantId, user.id, waId))) return;
     const sent = await sendWhatsAppDocument(waId, { content: pdf, filename: fileName, contentType: "application/pdf" }, `${title} — the PDF, for you.`);
     if (sent.ok) {
-      await logAudit({ action: "assistant.report_pdf_to_staff", summary: "Sent a DAX report PDF to the linked WhatsApp of the person who asked for it", user, entityType: "User", entityId: user.id }).catch(() => {});
+      await logAudit({ action: "assistant.report_pdf_to_staff", summary: "Sent an assistant report PDF to the linked WhatsApp of the person who asked for it", user, entityType: "User", entityId: user.id }).catch(() => {});
       return;
     }
     await logError("assistant-whatsapp", "report PDF send failed").catch(() => {});

@@ -898,7 +898,7 @@ export async function saveQuoteDraft(input: QuoteDraftInput): Promise<QuoteDraft
     return { ok: false, error: "That was already confirmed — open the quote to see it. Nothing was added twice.", repeated: true };
   }
   if (result === SHEET_GONE) {
-    return { ok: false, error: "That job sheet is no longer there, so nothing was made — ask DAX again." };
+    return { ok: false, error: "That job sheet is no longer there, so nothing was made — ask the assistant again." };
   }
   if (result instanceof Unrepriced) {
     return { ok: false, error: result.message };

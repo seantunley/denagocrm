@@ -250,7 +250,7 @@ export async function setMyProactive(on: boolean) {
         });
         revalidatePath("/assistant");
       }
-      return { success: on === true ? "On — DAX will come to you when a customer acts" : "Off" };
+      return { success: on === true ? "On — the assistant will come to you when a customer acts" : "Off" };
     }),
   );
 }
@@ -355,7 +355,7 @@ export async function saveOutcomeLearning(formData: FormData) {
         await putWorkspaceSetting(tenantId, OUTCOME_LEARNING_KEY, on ? "on" : "off");
         await logAudit({
           action: on ? "assistant.outcome_learning_enabled" : "assistant.outcome_learning_disabled",
-          summary: on ? "Let DAX suggest playbook updates from won and lost deals" : "Turned off DAX suggesting playbook updates from won and lost deals",
+          summary: on ? "Let the assistant suggest playbook updates from won and lost deals" : "Turned off the assistant suggesting playbook updates from won and lost deals",
           user,
         });
         revalidatePath("/settings/assistant");

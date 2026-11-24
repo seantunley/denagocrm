@@ -31,7 +31,7 @@ export default function AssistantLearnedCard({ name, notes, canReview }: { name:
             {canReview && note.status !== "conflict" && (
               <span className="flex items-center gap-1.5">
                 <SaveForm action={approveAssistantNote.bind(null, note.id)} resetOnSuccess={false}>
-                  <SaveButton className="btn-secondary btn-sm inline-flex items-center gap-1" title="Everyone's DAX uses it from now on.">
+                  <SaveButton className="btn-secondary btn-sm inline-flex items-center gap-1" title="The assistant uses it for everyone from now on.">
                     <Check className="size-3.5" /> Keep
                   </SaveButton>
                 </SaveForm>

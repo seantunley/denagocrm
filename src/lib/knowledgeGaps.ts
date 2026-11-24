@@ -145,7 +145,7 @@ async function draftClaimed(tenantId: string, gapId: string, token: string): Pro
       return { ok: false, error: answer.failure === "no_credit" ? "The Anthropic account is out of credit — top it up, or switch to ChatGPT (Settings → Integrations)." : "The AI service didn't answer. Try again in a minute." };
     }
     const draft = parseDraft(answer.text);
-    if (!draft) return { ok: false, error: "DAX couldn't draft an answer for that one — write it yourself under Add knowledge draft." };
+    if (!draft) return { ok: false, error: "The assistant couldn't draft an answer for that one — write it yourself under Add knowledge draft." };
     // The draft and "drafted" in ONE transaction, and only while this request still holds the claim: a claim lost
     // meanwhile rolls the draft back, so a gap never gets two.
     const saved = await basePrisma.$transaction(async (tx) => {
@@ -156,7 +156,7 @@ async function draftClaimed(tenantId: string, gapId: string, token: string): Pro
           content: draft.content,
           status: "draft",
           sourceType: "manual",
-          sourceLabel: `Drafted by DAX from ${gap.count} customer question${gap.count === 1 ? "" : "s"}${draft.check ? ` — check: ${draft.check}` : ""}`.slice(0, 500),
+          sourceLabel: `Drafted by the assistant from ${gap.count} customer question${gap.count === 1 ? "" : "s"}${draft.check ? ` — check: ${draft.check}` : ""}`.slice(0, 500),
         },
         select: { id: true },
       });
@@ -171,6 +171,6 @@ async function draftClaimed(tenantId: string, gapId: string, token: string): Pro
     return { ok: true, title: draft.title };
   } catch (error) {
     await logError("knowledge-gap", "drafting failed", error instanceof Error ? error.name : "unknown").catch(() => {});
-    return { ok: false, error: "DAX couldn't draft that just now. Try again in a minute." };
+    return { ok: false, error: "The assistant couldn't draft that just now. Try again in a minute." };
   }
 }
