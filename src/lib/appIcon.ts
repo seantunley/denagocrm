@@ -44,10 +44,12 @@ export function appIconUrl(brand: IconBrand, size: AppIconSize, maskable = false
 }
 
 /**
- * An uploaded icon in its maskable form: launchers crop to a circle that keeps the middle 80%, so the art is drawn
- * inside it — 10% each side — on its own backdrop colour (review of #1221).
+ * An uploaded icon in its maskable form. A launcher guarantees only a centred CIRCLE of radius 40% of the canvas
+ * (W3C appmanifest, icon masks and safe zone). A square fits wholly inside it when its half-width is 0.4/√2 ≈ 0.283,
+ * i.e. at least ~21.8% margin each side — so 22%, the whole uploaded picture inside the circle, only backdrop outside
+ * (review of #1221; 10% left the corners at radius 56.6%).
  */
-export const MASKABLE_ICON_PADDING = 0.1;
+export const MASKABLE_ICON_PADDING = 0.22;
 
 /** Room left around a logo drawn on the square: maskable icons are cropped to a circle, so they need more. */
 export function logoPadding(maskable: boolean): number {
