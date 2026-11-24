@@ -142,7 +142,7 @@ export default function EditScheduleDialog({ schedule }: { schedule: EditableSch
           <DialogClose asChild>
             <button type="button" className="btn-secondary" disabled={busy}>Cancel</button>
           </DialogClose>
-          <button type="button" className="btn-primary" disabled={busy || !valid} onClick={save}>
+          <button type="button" className="btn-primary" disabled={busy || !valid} title={busy || valid ? undefined : !form.question.trim() ? "Type the question first" : "Pick the date it runs"} onClick={save}>
             {busy && <Loader2 className="size-4 animate-spin" />}
             Save
           </button>

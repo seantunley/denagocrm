@@ -206,6 +206,7 @@ export default function ActivityTypesSettings({ initial }: { initial: ActivityTy
             type="button"
             onClick={add}
             disabled={!label.trim() || full}
+            title={full ? `The list is full (${MAX_ACTIVITY_TYPES})` : !label.trim() ? "Type a name first" : undefined}
             className="btn-secondary btn-sm inline-flex items-center gap-1 disabled:opacity-50"
           >
             <Plus className="size-3.5" />
@@ -224,6 +225,7 @@ export default function ActivityTypesSettings({ initial }: { initial: ActivityTy
           type="button"
           onClick={save}
           disabled={!dirty || saving}
+          title={!dirty && !saving ? "No changes to save" : undefined}
           className="btn-primary disabled:opacity-50"
         >
           {saving ? "Saving…" : "Save activity types"}

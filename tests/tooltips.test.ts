@@ -33,6 +33,37 @@ test("every icon-only or symbol-only button and link has a tooltip", () => {
   assert.deepEqual(missing, [], `Add a title="…" saying what it does:\n${missing.join("\n")}`);
 });
 
+/*
+ * Sean, 2026-11-24: "Greyed out buttons must show tooltips that explain why they are greyed out." A button greyed
+ * out for a REASON (nothing changed yet, a field still empty, a limit reached, a role that can't) carries a `title`
+ * naming it. Greyed only WHILE WORKING (pending, saving, busy…) needs none: the label already says "Saving…".
+ */
+const DISABLED = /<(button|Button|SaveButton)\b((?:[^<>]|\{(?:[^{}]|\{[^{}]*\})*\})*?)\bdisabled=\{((?:[^{}]|\{[^{}]*\})*)\}((?:[^<>]|\{(?:[^{}]|\{[^{}]*\})*\})*)>/g;
+const WORKING = /^(!*\(?)?(pending|isPending|saving|busy|loading|working|submitting|sending|uploading|deleting|testing|checking|starting|stopping|refreshing|generating|publishing|creating|requesting|resetting|confirming|disabling|previewing|sharing|reqPending|verPending|voicePending|photoPending|removePending|profilePending|emailPending|grokPending|passkey\.busy|busy !== null|!!busy|state === "busy"|state\.step === "checking"|linkBusy === [a-z.]+|busy === "[a-z]+"|busy === [a-z.]+|!dims|!compositionId)\)?$/;
+// Shared wrappers forward the caller's own `title`; the WhatsApp preview's buttons are greyed because it is a preview.
+const PASS_THROUGH = new Set(["src/components/SaveForm.tsx", "src/components/SaveSubmitButton.tsx", "src/components/PasskeyLoginButton.tsx", "src/components/WhatsAppPreview.tsx"]);
+
+test("a button greyed out for a reason says why on hover", () => {
+  const missing: string[] = [];
+  for (const file of files) {
+    if (PASS_THROUGH.has(file)) continue;
+    const source = readFileSync(file, "utf8");
+    DISABLED.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = DISABLED.exec(source))) {
+      const [, , before, condition, after] = match;
+      if (/\btitle=|disabledReason=/.test(before + after)) continue;
+      if (condition.split("||").every((part) => WORKING.test(part.replace(/\s+/g, " ").trim()))) continue;
+      missing.push(`${file}:${source.slice(0, match.index).split("\n").length}  disabled={${condition.trim()}}`);
+    }
+  }
+  assert.deepEqual(missing, [], `Add a title saying why it's greyed out, e.g. title={!dirty ? "No changes to save" : undefined}:\n${missing.join("\n")}`);
+});
+
+test("greyed-out buttons still react to hover, so their tooltip can show", () => {
+  assert.doesNotMatch(readFileSync("src/components/ui/button.tsx", "utf8"), /disabled:pointer-events-none/);
+});
+
 test("tooltips speak plainly — no internal or developer words", () => {
   const offenders: string[] = [];
   for (const file of files) {

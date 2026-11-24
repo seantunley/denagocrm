@@ -61,7 +61,7 @@ export default async function SurveyDistributionsPage() {
       <div><label className="text-xs font-medium uppercase text-muted-foreground">Schedule</label><input type="datetime-local" name="scheduledFor" className="input-base mt-1 w-full" /></div>
       <div><label className="text-xs font-medium uppercase text-muted-foreground">Reminder after hours</label><input type="number" name="reminderAfterHours" min="1" max="720" defaultValue="48" className="input-base mt-1 w-full" /></div>
       <div><label className="text-xs font-medium uppercase text-muted-foreground">Maximum reminders</label><input type="number" name="maxReminders" min="0" max="3" defaultValue="0" className="input-base mt-1 w-full" /></div>
-      <div className="md:col-span-2 xl:col-span-4"><SaveButton className="btn-primary" disabled={surveys.length === 0} pendingLabel="Creating…">Create queued distribution</SaveButton>{surveys.length === 0 && <span className="ml-3 text-sm text-muted-foreground">Publish a survey first.</span>}</div>
+      <div className="md:col-span-2 xl:col-span-4"><SaveButton className="btn-primary" disabled={surveys.length === 0} title={surveys.length === 0 ? "Create a survey first" : undefined} pendingLabel="Creating…">Create queued distribution</SaveButton>{surveys.length === 0 && <span className="ml-3 text-sm text-muted-foreground">Publish a survey first.</span>}</div>
     </SaveForm>
     </Surface>
 

@@ -1182,7 +1182,7 @@ export function QuoteEditorDialog({
                         </div>
                         {editable && (
                           <div className="flex flex-wrap gap-2">
-                            <Button type="button" variant="outline" size="sm" onClick={addProductLine} disabled={products.length === 0}><Plus />Product line</Button>
+                            <Button type="button" variant="outline" size="sm" onClick={addProductLine} disabled={products.length === 0} title={products.length === 0 ? "Your catalogue has no products yet — add them under Products" : undefined}><Plus />Product line</Button>
                             <Button type="button" variant="ghost" size="sm" onClick={addCustomLine}><Plus />Custom line</Button>
                           </div>
                         )}
@@ -1624,7 +1624,7 @@ export function QuoteEditorDialog({
             </div>
             <div className="flex gap-2">
               <Button type="button" variant="outline" className="flex-1 sm:flex-none" onClick={() => requestOpenChange(false)}>Close</Button>
-              {editable && <Button type="button" className="flex-1 sm:flex-none" onClick={() => save("draft")} disabled={isPending || !dirty}><Save />{isPending ? "Saving…" : savedQuote ? "Save changes" : "Save draft"}</Button>}
+              {editable && <Button type="button" className="flex-1 sm:flex-none" onClick={() => save("draft")} disabled={isPending || !dirty} title={!isPending && !dirty ? "No changes to save" : undefined}><Save />{isPending ? "Saving…" : savedQuote ? "Save changes" : "Save draft"}</Button>}
             </div>
           </footer>
         </ResponsiveDialogContent>

@@ -116,6 +116,7 @@ function CaptureBody({ pathname, can, onClose, children }: {
                   key={key}
                   type="button"
                   disabled={!target}
+                  title={target ? undefined : "Choose who this is for first"}
                   onClick={() => setMode(key)}
                   className="flex min-h-24 flex-col items-start justify-between gap-2 rounded-xl border border-border bg-card p-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-50"
                 >
@@ -385,7 +386,7 @@ function NextStepStrip({ target, canSchedule, onDone }: { target: CaptureRecord;
       </div>
       <div className="grid grid-cols-[1fr_2fr] gap-2">
         <button type="button" onClick={onDone} disabled={pending} className="btn-secondary min-h-12 justify-center">Skip</button>
-        <button type="button" onClick={schedule} disabled={pending || !when} className="btn-primary min-h-12 justify-center">
+        <button type="button" onClick={schedule} disabled={pending || !when} title={!pending && !when ? "Pick a date and time first" : undefined} className="btn-primary min-h-12 justify-center">
           {pending ? <><Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />Scheduling…</> : "Schedule"}
         </button>
       </div>

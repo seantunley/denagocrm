@@ -14,7 +14,7 @@ export default function RecallNotifyButton({
   return (
     <form action={action} className="inline-flex items-center gap-2">
       <input type="hidden" name="recallId" value={recallId} />
-      <button className="btn-secondary btn-sm" disabled={pending || affected === 0}>
+      <button className="btn-secondary btn-sm" disabled={pending || affected === 0} title={!pending && affected === 0 ? "No vehicles are affected by this recall" : undefined}>
         {pending ? "Sending…" : `Notify ${affected} owner${affected === 1 ? "" : "s"}`}
       </button>
       {state && <span className="text-xs text-emerald-400">Sent {state.sent}, skipped {state.skipped}</span>}

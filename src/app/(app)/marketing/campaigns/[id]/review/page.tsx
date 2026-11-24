@@ -41,10 +41,10 @@ export default async function ReviewCampaignPage({ params }: { params: Promise<{
 
       <section className="card space-y-4">
         <h2 className="font-semibold">Workflow actions</h2>
-        {campaign.status === "draft" || campaign.status === "changes_requested" ? <SaveForm action={submitCampaignForReview.bind(null, id)}><SaveButton className="btn-primary" disabled={errors.length > 0} pendingLabel="Submitting…">Submit for review</SaveButton></SaveForm> : null}
+        {campaign.status === "draft" || campaign.status === "changes_requested" ? <SaveForm action={submitCampaignForReview.bind(null, id)}><SaveButton className="btn-primary" disabled={errors.length > 0} title={errors.length > 0 ? "Fix the problems listed on this page first" : undefined} pendingLabel="Submitting…">Submit for review</SaveButton></SaveForm> : null}
         {campaign.status === "in_review" ? <div className="grid gap-4 md:grid-cols-2">
           <SaveForm action={requestCampaignChanges.bind(null, id)} className="space-y-2"><label className="space-y-1 block"><span className="label">Required changes</span><textarea name="note" className="input min-h-24" required /></label><SaveButton className="btn-secondary" pendingLabel="Sending back…">Request changes</SaveButton></SaveForm>
-          <SaveForm action={approveCampaign.bind(null, id)} className="space-y-2"><label className="space-y-1 block"><span className="label">Approval note</span><textarea name="note" className="input min-h-24" /></label><SaveButton className="btn-primary" disabled={errors.length > 0} pendingLabel="Approving…">Approve campaign</SaveButton></SaveForm>
+          <SaveForm action={approveCampaign.bind(null, id)} className="space-y-2"><label className="space-y-1 block"><span className="label">Approval note</span><textarea name="note" className="input min-h-24" /></label><SaveButton className="btn-primary" disabled={errors.length > 0} title={errors.length > 0 ? "Fix the problems listed on this page first" : undefined} pendingLabel="Approving…">Approve campaign</SaveButton></SaveForm>
         </div> : null}
         {campaign.status === "approved" ? <div className="grid gap-4 md:grid-cols-2">
           <SaveForm action={sendApprovedCampaignNow.bind(null, id)} className="card border-primary/30 space-y-2"><p className="font-medium">Send now</p><p className="text-xs text-muted-foreground">Freezes the audience and queues recipients. Delivery remains asynchronous.</p><SaveButton className="btn-primary" pendingLabel="Queuing…">Queue campaign</SaveButton></SaveForm>

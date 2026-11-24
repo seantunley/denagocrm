@@ -68,7 +68,7 @@ export function StockReceiveForm({
         <div><label className="label">Receipt / waybill ref</label><input name="receiptReference" className="input" /></div>
         <div><label className="label">Notes</label><input name="notes" className="input" /></div>
       </div>
-      <SaveButton className="btn-primary btn-sm" disabled={total === 0} pendingLabel="Receiving…">
+      <SaveButton className="btn-primary btn-sm" disabled={total === 0} title={total === 0 ? "Enter how many arrived first" : undefined} pendingLabel="Receiving…">
         Receive {total} unit{total === 1 ? "" : "s"}
       </SaveButton>
     </SaveForm>

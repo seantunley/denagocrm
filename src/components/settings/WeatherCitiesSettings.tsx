@@ -171,6 +171,7 @@ export default function WeatherCitiesSettings({ initial }: { initial: WeatherCit
         type="button"
         onClick={save}
         disabled={!dirty || saving}
+        title={!dirty && !saving ? "No changes to save" : undefined}
         className="btn btn-primary disabled:opacity-50"
       >
         {saving ? "Saving…" : "Save cities"}

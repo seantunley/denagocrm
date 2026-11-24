@@ -148,6 +148,7 @@ export default function ConversationCollab({
               type="button"
               className="btn-secondary btn-sm shrink-0"
               disabled={pending || !note.trim()}
+              title={!pending && !note.trim() ? "Write a note first" : undefined}
               onClick={() =>
                 run(async () => {
                   const result = await addConversationNote(collaboration.conversationId, note, mentions);

@@ -110,7 +110,7 @@ export function TextPromptDialog({
           <DialogClose asChild>
             <button type="button" className="btn-secondary" disabled={busy}>Cancel</button>
           </DialogClose>
-          <button type="button" className="btn-primary" disabled={busy || (required && !value.trim())} onClick={submit}>
+          <button type="button" className="btn-primary" disabled={busy || (required && !value.trim())} title={!busy && required && !value.trim() ? "This can't be left blank" : undefined} onClick={submit}>
             {busy && <Loader2 className="size-4 animate-spin" />}
             {submitLabel}
           </button>

@@ -354,8 +354,8 @@ export default function EmailComposer({ defaultTo, templates, smtpConfigured, le
                   {!choice.ask && deals.length === 1 && <p className="pl-[76px] text-xs text-muted-foreground">Regarding: {deals[0].label}</p>}
                 </div>
                 <div className="flex flex-wrap items-center gap-1 border-t border-border px-3 py-1.5">
-                  <button type="button" onClick={() => setTemplateOpen(true)} disabled={!templates.length} className={TOOL}><LayoutTemplate className="size-4" />Use template<ChevronDown className="size-3" /></button>
-                  <button type="button" onClick={() => setAttachOpen(true)} disabled={!libraryDocs.length && !quotes.length} className={TOOL}><FileText className="size-4" />Library & quotes</button>
+                  <button type="button" onClick={() => setTemplateOpen(true)} disabled={!templates.length} title={templates.length ? undefined : "No email templates yet — add one under Settings"} className={TOOL}><LayoutTemplate className="size-4" />Use template<ChevronDown className="size-3" /></button>
+                  <button type="button" onClick={() => setAttachOpen(true)} disabled={!libraryDocs.length && !quotes.length} title={!libraryDocs.length && !quotes.length ? "Nothing to attach — no library documents or quotes yet" : undefined} className={TOOL}><FileText className="size-4" />Library & quotes</button>
                   {banners.length > 0 && <label className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">Banner<select className="max-w-44 rounded-md border border-border bg-card px-2 py-1.5 text-foreground" value={banner} onChange={(event) => update({ banner: event.target.value })}><option value="">{banners[0].name} (default)</option>{banners.slice(1).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}<option value="none">No banner</option></select></label>}
                 </div>
                 <EmailRibbon key={editor ? "ready" : "waiting"} editor={editor} onImageProblem={setImageProblem} insert={<button type="button" onClick={() => uploadRef.current?.click()} className={TOOL} title={`Up to ${EMAIL_UPLOAD_MAX_FILES} files, ${EMAIL_UPLOAD_MAX_BYTES / 1024 / 1024} MB total`}><Paperclip className="size-4" />Attach file</button>} />
@@ -395,7 +395,7 @@ export default function EmailComposer({ defaultTo, templates, smtpConfigured, le
                 <div className="mt-2 flex flex-wrap items-center gap-2">
                   {quickSendTimes(new Date()).map((option) => <button key={option.label} type="button" className="btn-secondary btn-sm" onClick={() => setLaterAt(localInputValue(option.at))}>{option.label}</button>)}
                   <input type="datetime-local" step={1800} aria-label="Send at" className="input h-8 w-auto py-0 text-sm" value={laterAt} onChange={(event) => setLaterAt(event.target.value)} />
-                  <button type="button" className="btn-primary btn-sm gap-1.5" disabled={!laterAt || busy} onClick={() => {
+                  <button type="button" className="btn-primary btn-sm gap-1.5" disabled={!laterAt || busy} title={!laterAt && !busy ? "Pick when to send it first" : undefined} onClick={() => {
                     // A time between runs goes at the next one: say so by showing it, rather than surprising anyone.
                     const at = nextHalfHour(new Date(laterAt));
                     setLaterAt(localInputValue(at));
@@ -409,7 +409,7 @@ export default function EmailComposer({ defaultTo, templates, smtpConfigured, le
               {previewError && <p role="alert" className="text-xs text-red-300">{previewError}</p>}
               {imageProblem && <p role="alert" className="text-xs text-amber-300">{imageProblem} <button type="button" className="underline" onClick={() => setImageProblem("")}>Dismiss</button></p>}
               <div className="flex flex-wrap items-center gap-2">
-                <button type="submit" className="btn-primary gap-2" disabled={busy || Boolean(state?.ok)}><Send className="size-4" />{pending ? "Sending…" : checking ? "Checking…" : "Send email"}</button>
+                <button type="submit" className="btn-primary gap-2" disabled={busy || Boolean(state?.ok)} title={!busy && state?.ok ? "Already sent" : undefined}><Send className="size-4" />{pending ? "Sending…" : checking ? "Checking…" : "Send email"}</button>
                 <button type="button" onClick={() => setScheduleOpen((shown) => !shown)} aria-expanded={scheduleOpen} className="btn-secondary gap-1.5" disabled={busy || Boolean(state?.ok)} title="Send it later, at a time you choose"><Clock className="size-4" />Send later</button>
                 <button type="button" onClick={() => void showPreview()} className="btn-secondary gap-1.5" disabled={previewing || busy}><Eye className="size-4" />{previewing ? "Preparing…" : "Preview"}</button>
                 <AiCheckButton getDraft={() => editor?.getText() ?? ""} getAttachments={() => allFiles.map((f) => f.name)} contactId={contactId} leadId={leadId} configured={aiConfigured} label="Check wording" />
@@ -435,13 +435,13 @@ export default function EmailComposer({ defaultTo, templates, smtpConfigured, le
             {!filteredTemplates.length && <p className="p-2 text-sm text-muted-foreground">No templates match your search.</p>}
           </div><div className="min-h-48 rounded-lg border border-border p-4">{template ? <><p className="text-sm font-semibold">{template.subject}</p><p className="mt-3 max-h-64 overflow-y-auto whitespace-pre-wrap break-words text-sm text-muted-foreground">{template.body}</p></> : <p className="text-sm text-muted-foreground">Select a template to preview it.</p>}</div></div>
           {confirmTemplate && <p role="alert" className="text-sm text-amber-300">Applying this template will replace your current subject and message.</p>}
-          <div className="flex justify-end gap-2"><button type="button" className="btn-secondary" onClick={() => setTemplateOpen(false)}>Cancel</button><button type="button" className="btn-primary" disabled={!template} onClick={() => { if ((subject.trim() || !editor?.isEmpty) && !confirmTemplate) setConfirmTemplate(true); else applyTemplate(); }}>{confirmTemplate ? "Replace subject & message" : "Use template"}</button></div>
+          <div className="flex justify-end gap-2"><button type="button" className="btn-secondary" onClick={() => setTemplateOpen(false)}>Cancel</button><button type="button" className="btn-primary" disabled={!template} title={template ? undefined : "Choose a template first"} onClick={() => { if ((subject.trim() || !editor?.isEmpty) && !confirmTemplate) setConfirmTemplate(true); else applyTemplate(); }}>{confirmTemplate ? "Replace subject & message" : "Use template"}</button></div>
         </DialogContent></Dialog>
         <Dialog open={Boolean(preview && preview.sentState === state)} onOpenChange={(next) => { if (!next) setPreview(null); }}><DialogContent className="max-h-[92dvh] overflow-y-auto sm:max-w-4xl">
           <DialogTitle>Email preview</DialogTitle><DialogDescription>What the customer receives, including your signature and banner.</DialogDescription>
           {preview && <><dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs"><dt>From</dt><dd className="break-all">{identity?.from}</dd><dt>To</dt><dd className="break-all">{preview.to}</dd>{preview.cc && <><dt>Cc</dt><dd className="break-all">{preview.cc}</dd></>}{preview.bcc && <><dt>Bcc (private)</dt><dd className="break-all">{preview.bcc}</dd></>}{preview.replyTo && <><dt>Reply-to</dt><dd className="break-all">{preview.replyTo}</dd></>}<dt>Subject</dt><dd>{subject}</dd>{allFiles.length > 0 && <><dt>{secure ? "Secure links" : "Attachments"}</dt><dd className="break-all">{allFiles.map((file) => file.name).join(", ")}</dd></>}</dl>
             <iframe title="Email preview" sandbox="" srcDoc={preview.html} className="h-[55dvh] w-full rounded-lg border border-border bg-white" />
-            <div className="flex gap-2"><button type="button" className="btn-primary" disabled={busy || Boolean(state?.ok)} onClick={() => void submit()}>Send email</button><button type="button" className="btn-secondary" onClick={() => setPreview(null)}>Back to editing</button></div></>}
+            <div className="flex gap-2"><button type="button" className="btn-primary" disabled={busy || Boolean(state?.ok)} title={!busy && state?.ok ? "Already sent" : undefined} onClick={() => void submit()}>Send email</button><button type="button" className="btn-secondary" onClick={() => setPreview(null)}>Back to editing</button></div></>}
         </DialogContent></Dialog>
         <Dialog open={discardOpen} onOpenChange={setDiscardOpen}><DialogContent>
           <DialogTitle>Discard this email?</DialogTitle><DialogDescription>This deletes the message, its attachments and its saved draft. Use the close button to keep it as a draft instead.</DialogDescription>

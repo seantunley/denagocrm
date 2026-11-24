@@ -527,6 +527,7 @@ export default function TemplateEditor({
             type="button"
             onClick={addItem}
             disabled={items.length >= CHECKLIST_LIMITS.itemsPerTemplate}
+            title={items.length >= CHECKLIST_LIMITS.itemsPerTemplate ? `A checklist can have up to ${CHECKLIST_LIMITS.itemsPerTemplate} steps` : undefined}
             className="btn-secondary btn-sm"
           >
             <Plus className="size-3.5" aria-hidden="true" />

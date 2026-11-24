@@ -193,7 +193,7 @@ export default async function FlowRoutesPage() {
               <div><label className="label" htmlFor="qr-name">Name</label><input id="qr-name" name="name" className="input" required minLength={2} maxLength={60} placeholder="Showroom poster" /></div>
               <div><label className="label" htmlFor="qr-message">Message it types for them</label><input id="qr-message" name="message" className="input" required minLength={5} maxLength={200} defaultValue={`Hi ${businessName}, please send me the brochure`} /></div>
               <div><label className="label" htmlFor="qr-flow">Flow it starts</label><select id="qr-flow" name="flowId" className="input" required disabled={!whatsappFlows.length}><option value="">Choose a flow</option>{whatsappFlows.map((flow) => <option key={flow.id} value={flow.id}>{flow.name}</option>)}</select></div>
-              <SaveButton className="btn-primary btn-sm sm:col-span-3" disabled={!whatsappFlows.length}>Make QR code</SaveButton>
+              <SaveButton className="btn-primary btn-sm sm:col-span-3" disabled={!whatsappFlows.length} title={whatsappFlows.length ? undefined : "Publish a WhatsApp chatbot flow first"}>Make QR code</SaveButton>
             </SaveForm>
             {!whatsappFlows.length ? <p className="mt-2 text-[11px] text-amber-300">Publish a WhatsApp flow first — e.g. one that sends your brochure, price list and contact card.</p> : null}
             </details>
@@ -222,7 +222,7 @@ export default async function FlowRoutesPage() {
                     <div><label className="label" htmlFor={`${channel}-route-pattern`}>Value to match</label><input id={`${channel}-route-pattern`} name="pattern" className="input" required minLength={2} maxLength={180} placeholder="warranty" /></div>
                     <div><label className="label" htmlFor={`${channel}-route-flow`}>Published flow</label><select id={`${channel}-route-flow`} name="flowId" className="input" required disabled={!eligible.length}><option value="">Choose a flow</option>{eligible.map((flow) => <option key={flow.id} value={flow.id}>{flow.name}</option>)}</select></div>
                     <div><label className="label" htmlFor={`${channel}-route-priority`}>Priority</label><input id={`${channel}-route-priority`} name="priority" className="input" type="number" min={0} max={10000} defaultValue={100} /></div>
-                    <SaveButton className="btn-primary btn-sm sm:col-span-2" disabled={!eligible.length}>Add or replace route</SaveButton>
+                    <SaveButton className="btn-primary btn-sm sm:col-span-2" disabled={!eligible.length} title={eligible.length ? undefined : "Publish a chatbot flow for this channel first"}>Add or replace route</SaveButton>
                   </SaveForm>
                   {!eligible.length ? <p className="mt-2 text-[11px] text-amber-300">Publish a {channelLabel[channel]} flow before adding routes.</p> : null}
                 </div>

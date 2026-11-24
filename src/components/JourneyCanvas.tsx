@@ -571,8 +571,8 @@ function Canvas({ steps, onChange, renderEditor, saveButton }: CanvasProps) {
                   <div className="grid grid-cols-2 gap-2 border-t border-white/[0.08] pt-4">
                     <button type="button" className="btn-secondary btn-sm" onClick={() => add("wait", { list: at.list, index: at.index })}><Plus className="size-3.5" />Step before</button>
                     <button type="button" className="btn-secondary btn-sm" onClick={() => add("wait", { list: at.list, index: at.index + 1 })}><Plus className="size-3.5" />Step after</button>
-                    <button type="button" className="btn-secondary btn-sm" disabled={at.index === 0} onClick={() => apply(moveStep(steps, at.step.id, at.list, at.index - 1))}><ArrowUp className="size-3.5" />Earlier</button>
-                    <button type="button" className="btn-secondary btn-sm" disabled={at.index === siblings.length - 1} onClick={() => apply(moveStep(steps, at.step.id, at.list, at.index + 2))}><ArrowDown className="size-3.5" />Later</button>
+                    <button type="button" className="btn-secondary btn-sm" disabled={at.index === 0} title={at.index === 0 ? "Already the first step" : undefined} onClick={() => apply(moveStep(steps, at.step.id, at.list, at.index - 1))}><ArrowUp className="size-3.5" />Earlier</button>
+                    <button type="button" className="btn-secondary btn-sm" disabled={at.index === siblings.length - 1} title={at.index === siblings.length - 1 ? "Already the last step" : undefined} onClick={() => apply(moveStep(steps, at.step.id, at.list, at.index + 2))}><ArrowDown className="size-3.5" />Later</button>
                   </div>
                   <button
                     type="button"

@@ -295,7 +295,7 @@ export default async function TestDriveDetailPage({ params }: { params: Promise<
                   <input name="intendedRoute" className="input" placeholder="Intended route or destination" />
                 </div>
                 <div className="sm:col-span-2">
-                  <SaveButton className="btn-primary w-full" disabled={!readyForCheckout} pendingLabel="Checking out…">Check vehicle out</SaveButton>
+                  <SaveButton className="btn-primary w-full" disabled={!readyForCheckout} title={readyForCheckout ? undefined : "Complete every item in the readiness checklist first"} pendingLabel="Checking out…">Check vehicle out</SaveButton>
                 </div>
               </SaveForm>
             ) : <p className="mt-4 text-sm text-muted-foreground">The handover was not completed.</p>}

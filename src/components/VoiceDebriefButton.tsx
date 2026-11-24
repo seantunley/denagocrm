@@ -162,7 +162,7 @@ export default function VoiceDebriefButton({
           <button type="button" className="btn-secondary btn-sm" onClick={() => setDraft(null)} disabled={saving}>
             Discard
           </button>
-          <button type="button" className="btn-primary btn-sm" onClick={save} disabled={saving || !draft.summary.trim()}>
+          <button type="button" className="btn-primary btn-sm" onClick={save} disabled={saving || !draft.summary.trim()} title={!saving && !draft.summary.trim() ? "Add a summary first" : undefined}>
             {saving ? <Loader2 className="size-4 animate-spin" /> : draft.followUpDate ? "Save and book follow-up" : "Save"}
           </button>
         </div>
@@ -219,7 +219,7 @@ export default function VoiceDebriefButton({
         {error && <p className="text-xs text-destructive">{error}</p>}
         <div className="flex justify-end gap-2">
           <button type="button" className="btn-secondary btn-sm" onClick={() => { setMode(null); setError(null); }}>Cancel</button>
-          <button type="button" className="btn-primary btn-sm" onClick={writeTyped} disabled={!typed.trim()}>Write it up</button>
+          <button type="button" className="btn-primary btn-sm" onClick={writeTyped} disabled={!typed.trim()} title={typed.trim() ? undefined : "Type what happened first"}>Write it up</button>
         </div>
       </div>
     );

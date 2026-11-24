@@ -289,6 +289,7 @@ export default function JourneyBuilder({
           type="button"
           className="btn-secondary btn-sm"
           disabled={triggers.length >= JOURNEY_LIMITS.triggers}
+          title={triggers.length >= JOURNEY_LIMITS.triggers ? `A journey can have up to ${JOURNEY_LIMITS.triggers} triggers` : undefined}
           onClick={() => setTriggers((current) => [...current, { type: "lead_created", config: {} }])}
         >
           + Add another trigger
@@ -755,7 +756,7 @@ function StepFields({ step, onChange, depth, lists, hideNested = false }: { step
             <div key={i} className="grid md:grid-cols-[1fr_2fr_auto] gap-2">
               <input className="input" aria-label="Variable name" placeholder="name (letters, numbers, _)" value={name} onChange={(e) => save(entries.map((entry, j) => (j === i ? [e.target.value.trim(), entry[1]] as const : entry)))} />
               <input className="input" aria-label="Value" placeholder="Value — may use {{first_name}} and the other placeholders" maxLength={JOURNEY_LIMITS.variableChars} value={template} onChange={(e) => save(entries.map((entry, j) => (j === i ? [entry[0], e.target.value] as const : entry)))} />
-              <button type="button" className="text-xs text-red-400 px-2 disabled:opacity-40" disabled={entries.length === 1} onClick={() => save(entries.filter((_, j) => j !== i))}>Remove</button>
+              <button type="button" className="text-xs text-red-400 px-2 disabled:opacity-40" disabled={entries.length === 1} title={entries.length === 1 ? "At least one is needed" : undefined} onClick={() => save(entries.filter((_, j) => j !== i))}>Remove</button>
             </div>
           ))}
           {entries.length < JOURNEY_LIMITS.variables && <button type="button" className="btn-secondary btn-sm" onClick={() => save([...entries, [`var${entries.length + 1}`, ""]])}>+ Variable</button>}
@@ -774,7 +775,7 @@ function StepFields({ step, onChange, depth, lists, hideNested = false }: { step
             <div key={i} className="rounded-lg border border-slate-700/70 p-3 space-y-2">
               <div className="flex items-center justify-between">
                 <p className="text-sm font-medium text-slate-200">Branch {i + 1}</p>
-                <button type="button" className="text-xs text-red-400 disabled:opacity-40" disabled={options.length === 1} onClick={() => set("options", options.filter((_, j) => j !== i))}>Remove branch</button>
+                <button type="button" className="text-xs text-red-400 disabled:opacity-40" disabled={options.length === 1} title={options.length === 1 ? "A split needs at least one branch" : undefined} onClick={() => set("options", options.filter((_, j) => j !== i))}>Remove branch</button>
               </div>
               {option.conditions == null ? (
                 <p className="text-xs text-slate-400">Everyone who gets here. <button type="button" className="text-orange-300 underline" onClick={() => setOption(i, { ...option, conditions: emptyGroup() })}>Add conditions</button></p>

@@ -1546,6 +1546,7 @@ export default function CalendarWorkspace({
                         variant="outline"
                         onClick={rescheduleSelected}
                         disabled={isPending || !rescheduleValue}
+                        title={!isPending && !rescheduleValue ? "Pick the new date and time first" : undefined}
                       >
                         <Clock4 className="size-4" />
                         Move

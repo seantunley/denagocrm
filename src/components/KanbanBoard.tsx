@@ -1768,7 +1768,7 @@ function StageRuleReasonDialog({
               <Button type="button" variant="outline" onClick={onCancel}>
                 Cancel
               </Button>
-              <Button type="button" disabled={!enough} onClick={() => onConfirm(reason.trim())}>
+              <Button type="button" disabled={!enough} title={enough ? undefined : `Give a reason of at least ${MIN_OVERRIDE_REASON} characters first`} onClick={() => onConfirm(reason.trim())}>
                 Move anyway
               </Button>
             </div>
@@ -1825,6 +1825,7 @@ function LeadOutcomeDialog({
                 type="button"
                 variant="destructive"
                 disabled={!reason.trim()}
+              title={reason.trim() ? undefined : "Give a reason first"}
                 onClick={() => onConfirm(reason.trim())}
               >
                 Mark lost

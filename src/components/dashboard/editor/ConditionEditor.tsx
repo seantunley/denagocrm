@@ -571,7 +571,7 @@ function TagListBody({
           placeholder={placeholder}
           className="h-8 text-xs"
         />
-        <Button type="submit" size="sm" variant="secondary" disabled={!draft.trim()}>
+        <Button type="submit" size="sm" variant="secondary" disabled={!draft.trim()} title={draft.trim() ? undefined : "Type a value first"}>
           Add
         </Button>
       </form>
@@ -752,7 +752,7 @@ function ComposeTagInput({
           placeholder={COMPOSE_PLACEHOLDER[kind]}
           className="h-8 text-xs"
         />
-        <Button type="submit" size="sm" disabled={!draft.trim()}>
+        <Button type="submit" size="sm" disabled={!draft.trim()} title={draft.trim() ? undefined : "Type a value first"}>
           Add
         </Button>
         <Button type="button" size="sm" variant="ghost" onClick={onCancel}>

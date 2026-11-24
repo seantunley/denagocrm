@@ -266,6 +266,7 @@ export default function StageRulesEditor({
               type="button"
               className="btn-secondary btn-sm"
               disabled={rows.length >= MAX_STAGE_CRITERIA}
+            title={rows.length >= MAX_STAGE_CRITERIA ? `A stage can have up to ${MAX_STAGE_CRITERIA} conditions` : undefined}
               onClick={() =>
                 setRows([
                   ...rows,

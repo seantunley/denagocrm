@@ -206,7 +206,7 @@ export default function FlowSimulator({
           <div className="flex gap-2">
             <input className="input flex-1" value={text} disabled={!started || pending || ended} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); submitText(); } }} placeholder={ended ? "Simulation ended" : "Type the customer's reply…"} />
             <button type="button" onClick={attachSample} disabled={!started || pending || ended} className="btn-secondary btn-sm" title="Pretend the customer sent a file" aria-label="Pretend the customer sent a file"><FileUp className="size-4" /></button>
-            <button type="button" onClick={submitText} disabled={!started || pending || ended || !text.trim()} className="btn-primary btn-sm"><Send className="size-4" />Send</button>
+            <button type="button" onClick={submitText} disabled={!started || pending || ended || !text.trim()} title={pending ? undefined : !started ? "Start the test first" : ended ? "The test has ended — start again" : !text.trim() ? "Type a message first" : undefined} className="btn-primary btn-sm"><Send className="size-4" />Send</button>
           </div>
         </div>
       </section>

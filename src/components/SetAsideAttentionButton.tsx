@@ -176,7 +176,7 @@ export default function SetAsideAttentionButton({
               <button type="button" className="btn-ghost" onClick={() => setOpen(false)} disabled={pending}>
                 Cancel
               </button>
-              <button type="button" className="btn-primary" onClick={submit} disabled={!ready || pending}>
+              <button type="button" className="btn-primary" onClick={submit} disabled={!ready || pending} title={ready || pending ? undefined : (attentionReasonError(reason, mode) ?? dateProblem ?? undefined)}>
                 {pending ? "Saving…" : snoozing ? "Snooze" : "Dismiss"}
               </button>
             </div>

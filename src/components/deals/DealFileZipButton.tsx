@@ -69,7 +69,7 @@ export default function DealFileZipButton({ quoteId }: { quoteId: string }) {
       {message?.error && <p className="text-red-400">{message.error}</p>}
       {message?.done && <p className="text-emerald-400">{message.done}</p>}
       <div className="flex gap-2">
-        <button type="submit" disabled={busy || zipPasswordProblem(password, confirm) !== null} className="btn-primary btn-sm">
+        <button type="submit" disabled={busy || zipPasswordProblem(password, confirm) !== null} title={busy ? undefined : (zipPasswordProblem(password, confirm) ?? undefined)} className="btn-primary btn-sm">
           <Download className="size-3.5" />{busy ? "Preparing…" : "Download"}
         </button>
         <button type="button" onClick={() => { setOpen(false); setPassword(""); setConfirm(""); }} className="btn-secondary btn-sm">Close</button>

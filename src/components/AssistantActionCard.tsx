@@ -188,6 +188,7 @@ export default function AssistantActionCard({
                 type="button"
                 onClick={send}
                 disabled={pending || !draft.to || !body.trim() || (draft.channel === "email" && !subject.trim())}
+                title={pending ? undefined : !draft.to ? "There's no one to send it to" : !body.trim() ? "Write the message first" : draft.channel === "email" && !subject.trim() ? "Add a subject first" : undefined}
                 className="btn-primary btn-sm inline-flex items-center gap-1"
               >
                 {pending ? <Loader2 className="size-3.5 animate-spin" /> : <Send className="size-3.5" />} Send {draft.channel === "whatsapp" ? "WhatsApp" : "email"}

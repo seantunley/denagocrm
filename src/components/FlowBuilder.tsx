@@ -1269,7 +1269,7 @@ function DocumentFilesField({ node, documents, onChange }: {
           <button type="button" className="btn-secondary btn-sm" onClick={() => setMore(more.filter((_, i) => i !== at))} aria-label={`Remove file ${at + 2}`}>Remove</button>
         </div>
       ))}
-      <button type="button" className="btn-secondary btn-sm" disabled={!node.documentId || more.length + 1 >= MAX_DOCUMENTS_PER_STEP} onClick={() => setMore([...more, { documentId: "" }])}>+ Add another file</button>
+      <button type="button" className="btn-secondary btn-sm" disabled={!node.documentId || more.length + 1 >= MAX_DOCUMENTS_PER_STEP} title={!node.documentId ? "Choose the first file first" : more.length + 1 >= MAX_DOCUMENTS_PER_STEP ? `A step can send up to ${MAX_DOCUMENTS_PER_STEP} files` : undefined} onClick={() => setMore([...more, { documentId: "" }])}>+ Add another file</button>
       {more.length + 1 >= MAX_DOCUMENTS_PER_STEP && <p className="text-xs text-slate-500">Up to {MAX_DOCUMENTS_PER_STEP} files per step.</p>}
     </div>
   );

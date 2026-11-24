@@ -50,10 +50,10 @@ export default function VoicePicker({ voices, current }: { voices: Voice[] | nul
             <input name="value" className="input" value={voiceId} onChange={(e) => setVoiceId(e.target.value)} placeholder="Voice ID from elevenlabs.io" />
           )}
         </div>
-        <button type="button" onClick={() => play("en")} disabled={pending || !voiceId} className="btn-secondary inline-flex items-center gap-1">
+        <button type="button" onClick={() => play("en")} disabled={pending || !voiceId} title={!pending && !voiceId ? "Choose a voice first" : undefined} className="btn-secondary inline-flex items-center gap-1">
           {pending ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />} Play a sample
         </button>
-        <button type="button" onClick={() => play("af")} disabled={pending || !voiceId} className="btn-secondary btn-sm">
+        <button type="button" onClick={() => play("af")} disabled={pending || !voiceId} title={!pending && !voiceId ? "Choose a voice first" : undefined} className="btn-secondary btn-sm">
           Afrikaans
         </button>
         <SaveButton className="btn-primary">Save</SaveButton>

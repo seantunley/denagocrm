@@ -86,7 +86,7 @@ export function DesignSection({ block, floating }: { block: DocumentBlock; float
             <span className={lbl}>Fill</span>
             <div className="flex items-center gap-1.5">
               <input type="color" aria-label="Fill colour" value={s.background || "#ffffff"} onChange={(e) => set({ background: e.target.value })} className="h-8 flex-1 rounded border border-slate-300" />
-              <button type="button" className="rounded border border-slate-300 px-2 py-1 text-[11px] text-slate-600 hover:bg-slate-50 disabled:opacity-40" disabled={!s.background} onClick={() => set({ background: undefined })}>None</button>
+              <button type="button" className="rounded border border-slate-300 px-2 py-1 text-[11px] text-slate-600 hover:bg-slate-50 disabled:opacity-40" disabled={!s.background} title={s.background ? "Remove the background colour" : "No background colour set"} onClick={() => set({ background: undefined })}>None</button>
             </div>
           </div>
           <div className={row}>
@@ -131,7 +131,7 @@ export function DesignSection({ block, floating }: { block: DocumentBlock; float
         <button type="button" className="flex-1 rounded-md border border-slate-300 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-40" disabled={!clipboard} title={clipboard ? "Replace this block's style with the copied one" : "Copy a style first"}
           // Paste REPLACES the look and leaves where the block sits (its width, its place on the row) alone.
           onClick={() => clipboard && updateBlock(block.id, { settings: { ...withoutStyle(s), ...clipboard } } as Partial<DocumentBlock>)}>Paste style</button>
-        <button type="button" className="flex-1 rounded-md border border-slate-300 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-40" disabled={count === 0} onClick={() => updateBlock(block.id, { settings: withoutStyle(s) } as Partial<DocumentBlock>)}>Reset style</button>
+        <button type="button" className="flex-1 rounded-md border border-slate-300 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-40" disabled={count === 0} title={count === 0 ? "This block has no style of its own to clear" : undefined} onClick={() => updateBlock(block.id, { settings: withoutStyle(s) } as Partial<DocumentBlock>)}>Reset style</button>
       </div>
     </div>
   );
