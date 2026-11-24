@@ -516,17 +516,20 @@ export default function AssistantChat({
 
   const composer = (
     <>
+      {/* TWO ROWS where there is no room for one: the message box on its own line, the tools and Send beneath it.
+          In the side panel (always narrow) and on a phone, four tools and Send on the box's own row left it about
+          ninety pixels wide — too narrow to read its own placeholder (2026-11-24). A wide Ask page keeps one row. */}
       <form
-        className={compact ? "flex items-center gap-2 rounded-xl border border-border bg-card p-1.5" : "card flex items-center gap-2 p-2"}
+        className={compact ? "flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card p-1.5" : "card flex flex-wrap items-center gap-2 p-2 sm:flex-nowrap"}
         onSubmit={(event) => {
           event.preventDefault();
           ask(question);
         }}
       >
-        {!compact && <DaxIcon className="ml-2 size-4 shrink-0 text-primary" />}
+        {!compact && <DaxIcon className="ml-2 hidden size-4 shrink-0 text-primary sm:block" />}
         <input
           ref={input}
-          className="h-10 min-w-0 flex-1 bg-transparent px-2 text-sm outline-none"
+          className={`h-10 min-w-0 flex-1 bg-transparent px-2 text-sm outline-none ${compact ? "basis-full" : "basis-full sm:basis-0"}`}
           placeholder={pending ? `Type your next message — it goes when ${name} is done` : compact ? `Message ${name}…` : `Ask ${name} — e.g. "What should I do with Anna?"`}
           value={question}
           onChange={(event) => setQuestion(event.target.value)}
@@ -575,7 +578,7 @@ export default function AssistantChat({
             <Smile className="size-4" />
           </button>
           {emojiOpen && (
-            <div className="absolute bottom-12 right-0 z-10 grid w-48 grid-cols-4 gap-1 rounded-xl border border-border bg-card p-2 shadow-lg">
+            <div className={`absolute bottom-12 z-10 grid w-48 grid-cols-4 gap-1 rounded-xl border border-border bg-card p-2 shadow-lg ${compact ? "left-0" : "left-0 sm:left-auto sm:right-0"}`}>
               {EMOJIS.map((emoji) => (
                 <button
                   key={emoji}
@@ -614,7 +617,7 @@ export default function AssistantChat({
             {hearing ? <Loader2 className="size-4 animate-spin" /> : voice.recording || handsFreeRunning ? <Square className="size-4" /> : <Mic className="size-4" />}
           </button>
         )}
-        <button type="submit" className="btn-primary h-10 px-4 text-sm" disabled={!question.trim() && !image} title={pending ? `Goes as soon as ${name} is done` : undefined}>
+        <button type="submit" className={`btn-primary h-10 px-4 text-sm ${compact ? "ml-auto" : "ml-auto sm:ml-0"}`} disabled={!question.trim() && !image} title={pending ? `Goes as soon as ${name} is done` : undefined}>
           {pending ? "Queue" : compact ? "Send" : "Ask"}
         </button>
       </form>
