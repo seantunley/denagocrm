@@ -80,5 +80,9 @@ test("wired: the owner's brief carries it, WhatsApp answers the reply first, the
 
   const page = src("src/app/(app)/settings/assistant/page.tsx");
   assert.ok(page.indexOf("<AssistantLearnedReview notes={learned} />") < page.indexOf("action={saveAssistantProfile}"), "first on the page");
-  assert.ok(page.indexOf("<AssistantLearnedReview") < page.indexOf("<details"), "not folded under Advanced");
+  // The page is tabs now (2026-11-24): "not buried" means it is the FIRST tab — the one the page opens on — not a
+  // panel under Advanced, and nothing folds it away.
+  assert.match(page, /tabs=\{\[\s*\{ id: "learned", label: "What it has learned"/, "the first tab");
+  assert.match(page, /learned: <AssistantLearnedReview notes=\{learned\} \/>,/);
+  assert.ok(page.indexOf("learned: <AssistantLearnedReview") < page.indexOf("advanced: ("), "its own tab, not under Advanced");
 });
