@@ -574,12 +574,23 @@ export default async function TenantProfilePage({
                         </SaveButton>
                       </SaveForm>
                     )}
-                    {/* The square app icon (lib/appIcon.ts): tab, installed app, notifications. */}
-                    <div className="flex items-center gap-3 border-t border-border/60 pt-3">
+                  </div>
+
+                  {/* The square app icon (lib/appIcon.ts): its own card — it was a line inside Logo and easy to miss
+                      (Sean, 2026-11-24: "Still no place to upload the square logo"). */}
+                  <div className="card p-5 space-y-3">
+                    <div>
+                      <h2 className="font-semibold">App icon (square logo)</h2>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        The browser tab, the installed app on a phone and its notifications. Square PNG, JPEG or WebP, at
+                        least 192 × 192 (512 × 512 is best). Without one, the logo is placed on a square.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-3">
                       {/* eslint-disable-next-line @next/next/no-img-element -- drawn by /api/brand/icon */}
-                      <img src={appIconUrl(brand, 192)} alt="" className="size-12 rounded-lg border border-border" />
+                      <img src={appIconUrl(brand, 192)} alt="" className="size-16 rounded-xl border border-border" />
                       <p className="text-xs text-muted-foreground">
-                        App icon — {brand.iconRef ? "its own" : brand.logoRef ? "made from the logo" : "the platform's"}. Square, at least 192 × 192.
+                        Now: {brand.iconRef ? "its own icon" : brand.logoRef ? "made from the logo" : "the platform's icon"}
                       </p>
                     </div>
                     <SaveForm action={setTenantAppIconAction.bind(null, tenant.id)} success="App icon updated" resetOnSuccess={false} className="flex items-center gap-2">
