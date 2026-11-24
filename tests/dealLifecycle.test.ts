@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { AUTOMOTIVE_LIFECYCLE, dealBlockers, dealMilestones, readyForDelivery, type DealFacts } from "../src/lib/dealMilestones";
-import { LIFECYCLE_TEMPLATES, lifecycleFor, lifecycleTemplate } from "../src/lib/dealLifecycle";
+import { LIFECYCLE_TEMPLATES, lifecycleFor, lifecycleTemplate, readinessLabels } from "../src/lib/dealLifecycle";
 
 /** Brief §5 (Phase 4): industry lifecycles without breaking the automotive rules. */
 const ALL = new Set(["automotive", "commerce", "finance"]);
@@ -62,4 +62,31 @@ test("every template's labels cover every step; the owner chooses, audited, per 
   // Both screens read the workspace's lifecycle.
   assert.match(readFileSync("src/lib/dealsCentre.ts", "utf8"), /lifecycle: await getDealLifecycle\(\)/);
   assert.match(readFileSync("src/app/(app)/deals/[id]/page.tsx", "utf8"), /const lifecycle = await getDealLifecycle\(\)/);
+});
+
+test("the readiness card speaks the lifecycle: its names, its steps, and 'not needed' for a deposit nobody asked", () => {
+  const expected = {
+    automotive: ["Ready for delivery?", "Accepted", "Deposit received", "Delivery booked"],
+    services: ["Ready for completion?", "Engagement", "Retainer received", "Completion booked"],
+    wholesale: ["Ready for dispatch?", "Order confirmed", "Payment received", "Dispatch booked"],
+    property: ["Ready for handover?", "Offer accepted", "Deposit received", "Handover booked"],
+  } as const;
+  for (const [key, words] of Object.entries(expected)) {
+    const lifecycle = lifecycleFor(key as keyof typeof expected, ALL);
+    const ready = readinessLabels(lifecycle);
+    assert.deepEqual([ready.title, ready.accepted, ready.deposit, ready.delivery], [...words], key);
+    // With a deposit asked and unpaid: a step to do and a blocker. With none asked: skipped, no blocker.
+    const owed = dealMilestones(facts({ depositPaid: false }), lifecycle).find((s) => s.key === "deposit")!;
+    assert.deepEqual([owed.done, owed.skipped], [false, false], key);
+    assert.ok(dealBlockers(facts({ depositPaid: false }), lifecycle).some((b) => b.key === "deposit"), key);
+    const none = dealMilestones(facts({ depositCents: 0, depositPaid: false }), lifecycle).find((s) => s.key === "deposit")!;
+    assert.equal(none.skipped, true, key);
+    assert.ok(!dealBlockers(facts({ depositCents: 0, depositPaid: false }), lifecycle).some((b) => b.key === "deposit"), key);
+  }
+  const page = readFileSync("src/app/(app)/deals/[id]/page.tsx", "utf8");
+  assert.match(page, /\{ready\.title\}/);
+  assert.match(page, /skipped=\{depositStep\.skipped\} label=\{ready\.deposit\}/);
+  assert.match(page, /label=\{ready\.delivery\}/);
+  // No fixed vehicle words left on the card.
+  assert.doesNotMatch(page, /Ready to deliver\?|"Agreement accepted"|label="Deposit received"|label="Delivery booked"|No deposit receipt recorded/);
 });

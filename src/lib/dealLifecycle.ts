@@ -45,6 +45,22 @@ export const lifecycleTemplate = (value: string | null | undefined): LifecycleTe
   value && value in LIFECYCLE_TEMPLATES ? (value as LifecycleTemplate) : "automotive";
 
 /**
+ * The deal page's "Ready to …?" card in the workspace's own words — the same names
+ * the journey uses, so the two never disagree (review of #1231).
+ */
+export function readinessLabels({ labels }: Lifecycle) {
+  return {
+    title: `Ready for ${labels.delivery.toLowerCase()}?`,
+    accepted: labels.accepted,
+    deposit: `${labels.deposit} received`,
+    stock: `${labels.stock} allocated`,
+    pdi: `${labels.pdi} complete`,
+    delivery: `${labels.delivery} booked`,
+    noDeliveryDate: `No ${labels.delivery.toLowerCase()} date set`,
+  };
+}
+
+/**
  * The lifecycle in force: the template's steps, less any whose module is off —
  * stock needs Stock & inventory, PDI needs Automotive. A switched-off module never
  * asks for a step nobody can do (§5: "disabled modules do not generate impossible actions").
