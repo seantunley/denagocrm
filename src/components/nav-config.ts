@@ -154,6 +154,8 @@ export function buildNav(
   // moving them off the home screen did not move them out of sight.
   insightLinks.push({ href: "/d/home", label: "Dashboards", icon: LayoutDashboard, keywords: ["dashboard", "charts", "cards", "widgets"] });
   if (can("reports.view", "reports.view_all", "reports.view_team")) {
+    // The management template (lib/dashboard/templates.ts) — offered on the same permissions.
+    insightLinks.push({ href: "/d/command-centre", label: "Command Centre", icon: LayoutDashboard, keywords: ["command centre", "command center", "overview", "kpi", "management"] });
     insightLinks.push({ href: "/reports", label: "Reports", icon: ChartColumnIncreasing });
     insightLinks.push({ href: "/targets", label: "Targets", icon: Target });
   }

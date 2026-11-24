@@ -87,6 +87,15 @@ export const DASHBOARD_CARD_IDS = [
   "service-stats",
   "service-agenda",
   "service-due",
+  // The Command Centre cards (lib/dashboard/commandCards.tsx). Template-only:
+  // not on the standard Home dashboard — see `templateOnly`.
+  "cc-headlines",
+  "cc-revenue-trend",
+  "cc-operations",
+  "cc-exceptions",
+  "cc-team-workload",
+  "cc-top-risks",
+  "cc-forecast",
 ] as const;
 
 export type DashboardCardId = (typeof DASHBOARD_CARD_IDS)[number];
@@ -135,6 +144,12 @@ export type DashboardCardMeta = {
    * one.
    */
   condition?: JourneyConditionGroup;
+  /**
+   * Offered in the add-card picker and used by the role templates
+   * (./templates.ts), but NOT placed on the standard Home dashboard. Adding a
+   * card to the catalogue must not quietly grow every user's home screen.
+   */
+  templateOnly?: true;
 };
 
 /**
@@ -250,18 +265,79 @@ export const DASHBOARD_CARDS: readonly DashboardCardMeta[] = [
     module: "automotive",
     span: 1,
   },
+
+  /* ── Command Centre (brief §8). Definitions: ./commandCentre.ts ── */
+  {
+    id: "cc-headlines",
+    title: "Business headlines",
+    description: "Won this month, win rate, open pipeline and on-time delivery — each with what it is measured against.",
+    // Each tile is gated on its own record type by the loader.
+    permissions: ["leads.view_all", "leads.view_owned", "deliveries.view", "deliveries.manage"],
+    span: 3,
+    templateOnly: true,
+  },
+  {
+    id: "cc-revenue-trend",
+    title: "Won value by month",
+    description: "Deals won in each of the last twelve months. Recorded wins only — no projection.",
+    permissions: ["leads.view_all", "leads.view_owned"],
+    span: 2,
+    templateOnly: true,
+  },
+  {
+    id: "cc-operations",
+    title: "Operations status",
+    description: "Accepted deals awaiting delivery, overdue deliveries, deposits not recorded, open job cards and help-desk cases.",
+    // The union of the strands; the loader gates each one on its own permission and module.
+    permissions: ["deliveries.view", "deliveries.manage", "jobcards.view_all", "jobcards.view_owned", "cases.view_all", "cases.view_owned"],
+    span: 1,
+    templateOnly: true,
+  },
+  {
+    id: "cc-exceptions",
+    title: "Management by exception",
+    description: "Open deals on the Attention list, grouped by the reason they are there.",
+    permissions: ["leads.view_all", "leads.view_owned"],
+    span: 2,
+    templateOnly: true,
+  },
+  {
+    id: "cc-team-workload",
+    title: "Team workload",
+    description: "Open deals, deals needing attention and overdue follow-ups per person.",
+    permissions: ["leads.view_all", "leads.view_owned"],
+    span: 1,
+    templateOnly: true,
+  },
+  {
+    id: "cc-top-risks",
+    title: "Deals most at risk",
+    description: "The top of the Attention list, with each deal's value and its main reason.",
+    permissions: ["leads.view_all", "leads.view_owned"],
+    span: 2,
+    templateOnly: true,
+  },
+  {
+    id: "cc-forecast",
+    title: "Forecast vs target",
+    description: "This month's sales target beside what is won, committed and weighted in the forecast.",
+    permissions: ["forecast.view", "forecast.manage"],
+    span: 1,
+    templateOnly: true,
+  },
 ];
 
 /**
- * A new user's dashboard, which is deliberately the FULL catalogue in catalogue
+ * A new user's dashboard, which is deliberately the catalogue in catalogue
  * order — the same content, in the same grouping, the fixed dashboard showed.
+ * Template-only cards are left out: they belong to the role templates.
  * Permission and module filtering then removes what this particular user may not
  * see, so "the default" is one list rather than a per-role matrix that could
  * drift out of step with the permission checks.
  *
  * This is also what "Reset to default" restores.
  */
-export const DEFAULT_LAYOUT: readonly DashboardCardId[] = DASHBOARD_CARD_IDS;
+export const DEFAULT_LAYOUT: readonly DashboardCardId[] = DASHBOARD_CARDS.filter((card) => !card.templateOnly).map((card) => card.id);
 
 /**
  * Hard ceiling on cards in a saved layout.
