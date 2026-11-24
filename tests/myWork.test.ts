@@ -85,6 +85,9 @@ test("every source asks its own page's permission, and module, before reading", 
   ]) assert.match(load, gate);
   // Narrowed to what the record's own list would show, not just "assigned to me".
   assert.equal(load.match(/\.\.\.within\(/g)?.length, 4);
+  // Every direct read names the acting workspace — not left to enforcement being on.
+  assert.equal(load.match(/prisma\.\w+\.findMany\(/g)?.length, 5);
+  assert.equal(load.match(/tenantId: await actingTenantId\(\)/g)?.length, 5);
 });
 
 test("an activity opens its lead or contact only when I may open it; otherwise Activities", () => {

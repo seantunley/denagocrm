@@ -1,5 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/db";
+import { actingTenantId } from "@/lib/actingTenant";
 import { contactName } from "@/lib/format";
 import { loadTodayLeads } from "@/lib/leadScoreLoader";
 import { loadAttentionList } from "@/lib/attention/load";
@@ -73,6 +74,7 @@ async function myActivities(user: PermissionUser, now: Date): Promise<WorkItem[]
   if (!(await hasAnyPermission(user, "activities.view", "activities.manage"))) return [];
   const rows = await prisma.activity.findMany({
     where: {
+      tenantId: await actingTenantId(),
       assignedToId: user.id,
       status: "planned",
       availabilityBlock: false,
@@ -109,7 +111,7 @@ async function quotesAwaitingSignature(user: PermissionUser): Promise<WorkItem[]
   if (!(await hasAnyPermission(user, "quotes.view_all", "quotes.view_owned"))) return [];
   const quoteIds = await getAccessibleQuoteIds(user);
   const rows = await prisma.quote.findMany({
-    where: { ...within(quoteIds), status: "sent", signedAt: null, supersededAt: null, deletedAt: null, lead: { assignedToId: user.id } },
+    where: { tenantId: await actingTenantId(), ...within(quoteIds), status: "sent", signedAt: null, supersededAt: null, deletedAt: null, lead: { assignedToId: user.id } },
     select: { id: true, number: true, validUntil: true, contact: PERSON },
     orderBy: { sentAt: "asc" },
   });
@@ -131,7 +133,7 @@ async function myDeliveries(user: PermissionUser): Promise<WorkItem[]> {
   if (!(await hasAnyPermission(user, "deliveries.view", "deliveries.manage"))) return [];
   const quoteIds = await getAccessibleQuoteIds(user);
   const rows = await prisma.quote.findMany({
-    where: { ...within(quoteIds), status: "accepted", deliveredAt: null, supersededAt: null, deletedAt: null, lead: { assignedToId: user.id } },
+    where: { tenantId: await actingTenantId(), ...within(quoteIds), status: "accepted", deliveredAt: null, supersededAt: null, deletedAt: null, lead: { assignedToId: user.id } },
     select: { id: true, number: true, deliveryScheduledFor: true, contact: PERSON },
     orderBy: { deliveryScheduledFor: { sort: "asc", nulls: "last" } },
   });
@@ -151,7 +153,7 @@ async function myJobCards(user: PermissionUser): Promise<WorkItem[]> {
   if (!(await hasAnyPermission(user, "jobcards.view_all", "jobcards.view_owned"))) return [];
   const jobIds = await getAccessibleJobCardIds(user);
   const rows = await prisma.jobCard.findMany({
-    where: { ...within(jobIds), technicianId: user.id, deletedAt: null, status: { notIn: ["collected", "cancelled"] } },
+    where: { tenantId: await actingTenantId(), ...within(jobIds), technicianId: user.id, deletedAt: null, status: { notIn: ["collected", "cancelled"] } },
     select: { id: true, number: true, status: true, priority: true, contact: PERSON },
     orderBy: { openedAt: "asc" },
   });
@@ -172,7 +174,7 @@ async function myCases(user: PermissionUser): Promise<WorkItem[]> {
   if (!(await hasAnyPermission(user, "cases.view_all", "cases.view_owned"))) return [];
   const caseIds = await getAccessibleCaseIds(user);
   const rows = await prisma.customerCase.findMany({
-    where: { ...within(caseIds), assignedToId: user.id, closedAt: null, status: { in: ["new", "open", "waiting_internal", "waiting_customer"] } },
+    where: { tenantId: await actingTenantId(), ...within(caseIds), assignedToId: user.id, closedAt: null, status: { in: ["new", "open", "waiting_internal", "waiting_customer"] } },
     select: { id: true, number: true, subject: true, status: true, priority: true },
     orderBy: { createdAt: "asc" },
   });
