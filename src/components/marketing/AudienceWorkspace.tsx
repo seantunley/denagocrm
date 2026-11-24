@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { currencySymbol } from "@/lib/format";
 import type { WorkspaceRegions } from "@/lib/regions";
+import { regionsInRules, withKeptRegions } from "@/lib/regionRules";
 import { useMoneyFormat } from "@/components/MoneyFormatProvider";
 import { useRouter } from "next/navigation";
 import {
@@ -86,11 +87,13 @@ const OPERATOR_LABELS: Record<string, string> = {
   less_or_equal: "is at most",
 };
 
-function definitions(tags: Option[], products: Option[], regions: WorkspaceRegions): FieldDefinition[] {
+function definitions(tags: Option[], products: Option[], regions: WorkspaceRegions, savedRegions: string[]): FieldDefinition[] {
+  // Settings → Regions, plus every region a saved audience already uses — so a saved rule always opens as itself,
+  // with its own value, however the list has changed. No list and no saved use: no region rule to offer.
+  const regionOptions = withKeptRegions(regions.options, savedRegions);
   return [
-    // Settings → Regions; no list, no rule to offer.
-    ...(regions.options.length
-      ? [{ value: "province", label: regions.label, kind: "select" as const, options: regions.options.map((value) => ({ value, label: value })), help: `Customer ${regions.label.toLowerCase()}` }]
+    ...(regionOptions.length
+      ? [{ value: "province", label: regions.label, kind: "select" as const, options: regionOptions.map((value) => ({ value, label: value })), help: `Customer ${regions.label.toLowerCase()}` }]
       : []),
     { value: "source", label: "Lead source", kind: "select", options: SOURCES.map((value) => ({ value, label: title(value) })), help: "Where the customer originally came from" },
     { value: "tag", label: "Customer tag", kind: "select", options: tags.map((tag) => ({ value: tag.id, label: tag.name })), help: "Only tags owned by this tenant are offered" },
@@ -161,7 +164,10 @@ function formattedAt(value: string | null) {
 
 export default function AudienceWorkspace({ audiences, tags, products, regions }: { audiences: Audience[]; tags: Option[]; products: Option[]; regions: WorkspaceRegions }) {
   const router = useRouter();
-  const fields = useMemo(() => definitions(tags, products, regions), [tags, products, regions]);
+  const fields = useMemo(
+    () => definitions(tags, products, regions, audiences.flatMap((audience) => regionsInRules(audience.ruleTree))),
+    [tags, products, regions, audiences],
+  );
   const [editor, setEditor] = useState<"new" | string | null>(audiences.length === 0 ? "new" : null);
   const [name, setName] = useState("");
   const [tree, setTree] = useState<AudienceGroup>(() => makeGroup(fields));

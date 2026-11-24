@@ -53,8 +53,37 @@ export function regionLabel(saved: string | null, currency: string | null): stri
   return cleanRegionLabel(saved) || (isRand(currency) ? "Province" : "Region");
 }
 
+/**
+ * Every region a saved audience rule names (field "province", one value or an "is any of" list), across groups and
+ * exclusions. The audience builder keeps these choosable, so an emptied or shortened list never turns a saved rule
+ * into a different field or drops its value (review of #1215).
+ */
+export function regionsInRules(tree: unknown): string[] {
+  const found: string[] = [];
+  const walk = (node: unknown) => {
+    if (!node || typeof node !== "object") return;
+    const { field, value, rules, exclusions } = node as { field?: unknown; value?: unknown; rules?: unknown; exclusions?: unknown };
+    if (field === "province") for (const v of Array.isArray(value) ? value : [value]) if (typeof v === "string" && v.trim()) found.push(v.trim());
+    for (const child of [rules, exclusions]) if (Array.isArray(child)) child.forEach(walk);
+  };
+  walk(tree);
+  return found;
+}
+
+/** The list followed by any extra values (saved rules, a contact's own), deduplicated in any case. */
+export function withKeptRegions(list: string[], kept: string[]): string[] {
+  const seen = new Set(list.map((region) => region.toLowerCase()));
+  const out = [...list];
+  for (const region of kept) {
+    if (seen.has(region.toLowerCase())) continue;
+    seen.add(region.toLowerCase());
+    out.push(region);
+  }
+  return out;
+}
+
 /** The choices for one contact: the list, plus the value it already has if the list dropped it — so a save never wipes it. */
 export function regionChoices(list: string[], current: string | null | undefined): string[] {
   const value = tidy(current, 80);
-  return value && !list.some((region) => region.toLowerCase() === value.toLowerCase()) ? [...list, value] : list;
+  return value ? withKeptRegions(list, [value]) : list;
 }
