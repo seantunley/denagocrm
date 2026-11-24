@@ -86,7 +86,7 @@ export function DataGrid<Row>({
           <MobileDataHeader
             title={cells[primary.id]?.(row)}
             aside={
-              <Link href={rowHref(row)} aria-label={`Open ${rowLabel(row)}`} className="flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground">
+              <Link href={rowHref(row)} aria-label={`Open ${rowLabel(row)}`} title={`Open ${rowLabel(row)}`} className="flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground">
                 <ArrowRight className="size-4" />
               </Link>
             }
