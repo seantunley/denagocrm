@@ -49,7 +49,7 @@ export const homeArticles: HelpArticle[] = [
         ],
       },
       { type: "h", text: "Follow-up prompts and the daily brief" },
-      { type: "p", text: "If you have overdue follow-ups, prompts for them appear above everything else so they cannot be missed. At the foot of the page, **DAX's brief for today** folds open when the assistant has more to tell you, and **Dashboards** takes you to your charts and cards." },
+      { type: "p", text: "If you have overdue follow-ups, prompts for them appear above everything else so they cannot be missed. At the foot of the page, the assistant's **brief for today** (headed with its name) folds open when the assistant has more to tell you, and **Dashboards** takes you to your charts and cards." },
       { type: "callout", tone: "tip", text: "Home is the same for everyone and is not arranged by hand. To build a screen of your own, use Dashboards — see **Your dashboards: how they are put together**." },
     ],
   },

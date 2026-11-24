@@ -13,6 +13,8 @@ import { loadDaxBrief, type DaxBrief } from "@/lib/daxBrief";
 import { logError } from "@/lib/errorLog";
 import { DaxBriefCard } from "@/components/DaxBriefCard";
 import { getRegionalSettings } from "@/lib/settings";
+import { getActiveTenantId } from "@/lib/auth";
+import { assistantNameFor } from "@/lib/assistantName";
 
 /**
  * The DAX brief, or nothing. Only where DAX exists (the automation module) and
@@ -86,7 +88,7 @@ export default async function HomePage({
   );
   const greeting = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
   const firstName = user.name.split(/\s+/)[0];
-  const [brief, focus] = await Promise.all([briefPromise, focusPromise]);
+  const [brief, focus, assistantName] = await Promise.all([briefPromise, focusPromise, getActiveTenantId().then(assistantNameFor)]);
   const briefHasMore = !!brief && (brief.items.length > 0 || !!brief.team?.length);
 
   return (
@@ -109,8 +111,8 @@ export default async function HomePage({
       <footer className="space-y-3">
         {briefHasMore && brief && (
           <details className="group rounded-2xl border border-border bg-card px-4 py-3 sm:px-5">
-            <summary className="cursor-pointer text-sm font-semibold text-foreground">DAX&apos;s brief for today</summary>
-            <div className="mt-3"><DaxBriefCard brief={brief} /></div>
+            <summary className="cursor-pointer text-sm font-semibold text-foreground">{assistantName}&apos;s brief for today</summary>
+            <div className="mt-3"><DaxBriefCard brief={brief} assistantName={assistantName} /></div>
           </details>
         )}
         {/* Dashboards are a desktop feature: not offered on a phone (lib/phoneScope.ts). */}

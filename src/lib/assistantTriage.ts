@@ -82,7 +82,7 @@ export async function prepareTriage(user: PermissionUser): Promise<{ ok: true; i
     reasoningEffort: "medium",
     timeoutMs: 120_000,
   });
-  if ("error" in reply) return { ok: false, error: `DAX couldn't prepare this (${reply.error}). Try again in a minute.` };
+  if ("error" in reply) return { ok: false, error: `The assistant couldn't prepare this (${reply.error}). Try again in a minute.` };
 
   const proposals = parseTriageReply(reply.text, deals.map((d) => d.id));
   const items: TriageItem[] = [];
@@ -103,7 +103,7 @@ export async function prepareTriage(user: PermissionUser): Promise<{ ok: true; i
   const details: TriageDetails = { items, preparedAt: new Date().toISOString() };
   // One current run: the older one closed and this one made in ONE step, one preparation at a time (triageStore.ts).
   const id = await replaceTriageRun(tenantId, user.id, `Triage · ${items.length} deal${items.length === 1 ? "" : "s"}`, details);
-  await logAudit({ action: "assistant.triage_prepared", summary: `DAX prepared a triage of ${items.length} deals`, user });
+  await logAudit({ action: "assistant.triage_prepared", summary: `The assistant prepared a triage of ${items.length} deals`, user });
   return { ok: true, id, deals: items.length };
 }
 

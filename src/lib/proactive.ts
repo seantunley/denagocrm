@@ -2,6 +2,7 @@ import "server-only";
 import { basePrisma } from "./db";
 import { logError } from "./errorLog";
 import { sendPushToAll } from "./push";
+import { assistantNameFor } from "./assistantName";
 import { tenantOrigin } from "./tenantOrigin";
 import { runInTenantScope } from "./tenantScope";
 import { assistantUserFor } from "./assistantUser";
@@ -215,7 +216,7 @@ export async function deliver(tenantId: string, alertId: string): Promise<boolea
     return true;
   });
   if (!sent) return false;
-  await sendPushToAll({ title: "DAX", body: proactivePush(alert.kind as ProactiveEvent["kind"]), url: "/assistant" }, "assistant", { tenantId, userId: alert.userId }).catch(() => {});
+  await sendPushToAll({ title: await assistantNameFor(tenantId), body: proactivePush(alert.kind as ProactiveEvent["kind"]), url: "/assistant" }, "assistant", { tenantId, userId: alert.userId }).catch(() => {});
   await sendUpdatesToLinkedPhone(tenantId, alert.userId).catch(() => {});
   return true;
 }
