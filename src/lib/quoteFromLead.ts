@@ -72,12 +72,16 @@ export async function quoteWordingSettings(): Promise<WordingSettings> {
   return { validDays: quoteValidDays(validDaysRaw), vatRatePct: regional.vatRatePct };
 }
 
-/** The same defaults, shaped for the quote editor (a date input wants yyyy-mm-dd). */
-export function editorDefaults(defaults: QuoteFromLeadDefaults) {
+/**
+ * The same defaults, shaped for the quote editor (a date input wants yyyy-mm-dd). `businessName`: the name the
+ * printed quote carries (Company Profile), shown at the top of the editor's preview.
+ */
+export function editorDefaults(defaults: QuoteFromLeadDefaults, businessName = "") {
   return {
     validUntil: calendarDateIn(defaults.validUntil, defaults.regional.timeZone),
     terms: defaults.terms,
     regional: defaults.regional,
+    businessName,
   };
 }
 

@@ -38,6 +38,8 @@ const SLUG_MODULE: Record<string, ModuleId> = {
   "referrals-overview": "marketing", // /referrals
   "admin-portal-access": "portal", // customer portal access, gone if portal is off
   "warranty-claims-recalls": "warranty", // /warranty — its own module since 2026-11-21
+  "invoices-overview": "automotive", // /invoices, with /deliveries
+  suppliers: "suppliers", // Settings → Suppliers
 };
 
 // Slug-prefix overrides: whole article families that split out of a mixed

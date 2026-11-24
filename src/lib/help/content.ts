@@ -34,6 +34,8 @@ import { signatureBannerArticles } from "./articles/signature-banners";
 import { emailSignatureArticles } from "./articles/email-signatures";
 import { vehicleTransferArticles } from "./articles/vehicle-transfer";
 import { whatsappConnectArticles } from "./articles/whatsapp-connect";
+import { companyProfileArticles } from "./articles/company-profile";
+import { screenArticles } from "./articles/screens";
 
 // data/marketing.json is the original generated marketing set. Where an article
 // has since been re-authored by hand under the SAME slug, the generated one is
@@ -75,6 +77,8 @@ const REPLACED_GENERATED_SLUGS = new Set([
   "signing-workflows-builder",
   "inbox-overview",
   "inbox-replying",
+  // articles/company-profile.ts — the logo upload and the sign-in screen editor
+  "admin-company-profile",
   // admin-documents-templates, admin-signing-workflows and admin-settings-overview were replaced the same way and
   // their old copies are now gone from admin.json (help review, 2026-11-24).
 ]);
@@ -120,6 +124,9 @@ export const HELP_ARTICLES: HelpArticle[] = [
   ...dealWorkspaceArticles,
   ...customerEmailArticles,
   ...administrationArticles,
+  ...companyProfileArticles,
+  // Screens that had no guide until the help review (2026-11-24).
+  ...screenArticles,
 ];
 
 const BY_SLUG = new Map(HELP_ARTICLES.map((article) => [article.slug, article]));
