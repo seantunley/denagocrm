@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { currentMilestone, dealBlockers, dealMilestones, readyForDelivery, type DealFacts } from "../src/lib/dealMilestones";
-import { dealTotals, dealsView } from "../src/lib/dealsCentreRules";
+import { currentMilestone, dealBlockers, dealMilestones, dealProgress, readyForDelivery, type DealFacts } from "../src/lib/dealMilestones";
+import { blockerCounts, dealTotals, dealsView } from "../src/lib/dealsCentreRules";
 
 /** Brief §3 (Deals Centre) and the shared milestone rules §4/§5 build on. */
 const facts = (over: Partial<DealFacts> = {}): DealFacts => ({
@@ -34,16 +34,22 @@ test("milestones: the deal page's rules, with a step that does not apply SKIPPED
 });
 
 test("blockers are facts the deal has — and none once it is delivered", () => {
-  assert.deepEqual(dealBlockers(facts({ accepted: false })), ["Not accepted yet"]);
-  assert.deepEqual(dealBlockers(facts({ depositPaid: false, financeHolds: true, stock: [], deliveryBooked: false })), [
+  const texts = (f: DealFacts) => dealBlockers(f).map((b) => b.text);
+  assert.deepEqual(dealBlockers(facts({ accepted: false })), [{ key: "accept", text: "Not accepted yet" }]);
+  assert.deepEqual(texts(facts({ depositPaid: false, financeHolds: true, stock: [], deliveryBooked: false })), [
     "Deposit not received",
     "Finance not approved — delivery is held",
     "No stock allocated",
     "Delivery not booked",
   ]);
-  assert.deepEqual(dealBlockers(facts({ depositCents: 0, depositPaid: false })), [], "no deposit asked is not a missing deposit");
-  assert.deepEqual(dealBlockers(facts({ stock: [{ pdiStatus: "in_progress" }] })), ["PDI not passed"]);
-  assert.deepEqual(dealBlockers(facts({ delivered: true, accepted: false })), []);
+  assert.deepEqual(texts(facts({ depositCents: 0, depositPaid: false })), [], "no deposit asked is not a missing deposit");
+  assert.deepEqual(texts(facts({ stock: [{ pdiStatus: "in_progress" }] })), ["PDI not passed"]);
+  assert.deepEqual(texts(facts({ delivered: true, accepted: false })), []);
+  // Progress counts only the steps that apply.
+  assert.deepEqual(dealProgress(dealMilestones(facts({ depositCents: 0, depositPaid: false, stock: [] }))), { done: 2, of: 5 });
+  assert.deepEqual(blockerCounts([{ blockers: dealBlockers(facts({ stock: [] })) }, { blockers: dealBlockers(facts({ accepted: false })) }]), {
+    accept: 1, deposit: 0, finance: 0, stock: 1, pdi: 0, delivery: 0,
+  });
   assert.equal(readyForDelivery(facts()), true);
   assert.equal(readyForDelivery(facts({ financeHolds: true })), false, "finance holds delivery");
   assert.equal(readyForDelivery(facts({ depositCents: 0, depositPaid: false })), true);
@@ -75,7 +81,10 @@ test("the loader reads the quote list's own scope and the canonical money rules"
   const loader = readFileSync("src/lib/dealsCentre.ts", "utf8");
   // RBAC + search + current revisions only (supersededAt: null) — the quotes list's own filter.
   assert.match(loader, /const \{ where: scope \} = await quoteListFilter\(user, \{ q \}\)/);
-  assert.match(loader, /AND: \[scope, viewWhere\(view, pendingFinance\)\]/);
+  // Every in-play view, count and card is a cut of ONE read, under the quote list's scope.
+  assert.match(loader, /const inPlay = await readRows\(\{ AND: \[scope, IN_PLAY\] \}, financeByQuote\)/);
+  assert.match(loader, /const IN_PLAY: Prisma\.QuoteWhereInput = \{ status: \{ in: \["sent", "accepted"\] \}, deliveredAt: null \}/);
+  assert.match(loader, /prisma\.quote\.count\(\{ where: scope \}\)/);
   assert.match(loader, /Math\.round\(payableTotalCents\(quote\)\)/);
   assert.match(loader, /receivedCents\(quote, payments\)/);
   assert.match(loader, /stockReservations: \{ where: \{ status: "active" \}/, "a released reservation allocates nothing");

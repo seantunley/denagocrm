@@ -65,16 +65,26 @@ export function currentMilestone(milestones: Milestone[]): Milestone {
  * go and do. Nothing for a delivered deal. Missing data is never a blocker here:
  * every line reads a field the deal actually has.
  */
-export function dealBlockers(facts: DealFacts, labels: Record<MilestoneKey, string> = DEFAULT_MILESTONE_LABELS): string[] {
+export const BLOCKER_KEYS = ["accept", "deposit", "finance", "stock", "pdi", "delivery"] as const;
+export type BlockerKey = (typeof BLOCKER_KEYS)[number];
+export type Blocker = { key: BlockerKey; text: string };
+
+export function dealBlockers(facts: DealFacts, labels: Record<MilestoneKey, string> = DEFAULT_MILESTONE_LABELS): Blocker[] {
   if (facts.delivered) return [];
-  if (!facts.accepted) return [`Not ${labels.accepted.toLowerCase()} yet`];
-  const out: string[] = [];
-  if (facts.depositCents > 0 && !facts.depositPaid) out.push(`${labels.deposit} not received`);
-  if (facts.financeHolds) out.push("Finance not approved — delivery is held");
-  if (facts.stock.length === 0) out.push(`No ${labels.stock.toLowerCase()} allocated`);
-  else if (!pdiReady(facts.stock)) out.push(`${labels.pdi} not passed`);
-  if (!facts.deliveryBooked) out.push(`${labels.delivery} not booked`);
+  if (!facts.accepted) return [{ key: "accept", text: `Not ${labels.accepted.toLowerCase()} yet` }];
+  const out: Blocker[] = [];
+  if (facts.depositCents > 0 && !facts.depositPaid) out.push({ key: "deposit", text: `${labels.deposit} not received` });
+  if (facts.financeHolds) out.push({ key: "finance", text: "Finance not approved — delivery is held" });
+  if (facts.stock.length === 0) out.push({ key: "stock", text: `No ${labels.stock.toLowerCase()} allocated` });
+  else if (!pdiReady(facts.stock)) out.push({ key: "pdi", text: `${labels.pdi} not passed` });
+  if (!facts.deliveryBooked) out.push({ key: "delivery", text: `${labels.delivery} not booked` });
   return out;
+}
+
+/** How far along: steps done out of the steps that apply (a skipped step counts in neither). */
+export function dealProgress(milestones: Milestone[]): { done: number; of: number } {
+  const applies = milestones.filter((step) => !step.skipped);
+  return { done: applies.filter((step) => step.done).length, of: applies.length };
 }
 
 /** Ready to hand over: accepted, deposit in (or none asked), unit allocated and through PDI, finance not holding it. */

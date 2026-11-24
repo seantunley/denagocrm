@@ -3,12 +3,12 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { receivedCents } from "@/lib/accountStatement";
 import { financeBlocksDelivery, financeIsClosed } from "@/lib/dealFinanceRules";
-import { dealBlockers, readyForDelivery, type DealFacts } from "@/lib/dealMilestones";
+import { currentMilestone, dealBlockers, dealMilestones, dealProgress, readyForDelivery, type BlockerKey, type DealFacts } from "@/lib/dealMilestones";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import type { PermissionUser } from "@/lib/permissions";
 import { payableTotalCents } from "@/lib/pricing";
 import { quoteListFilter } from "@/lib/quoteListQuery";
-import { dealTotals, type DealRow, type DealsView } from "./dealsCentreRules";
+import { DEALS_VIEWS, blockerCounts, dealTotals, inView, type DealRow, type DealsView } from "./dealsCentreRules";
 
 /**
  * The Deals Centre (brief §3): the quotes a person may see, as deals — what each
@@ -47,27 +47,15 @@ const SELECT = {
 
 type Row = Prisma.QuoteGetPayload<{ select: typeof SELECT }>;
 
-/** Where the view lives in the database; "ready" and "blocked" are worked out from the facts after. */
-function viewWhere(view: DealsView, financeQuoteIds: string[]): Prisma.QuoteWhereInput {
-  switch (view) {
-    case "active":
-      return { status: { in: ["sent", "accepted"] }, deliveredAt: null };
-    case "accepted":
-    case "ready":
-    case "blocked":
-      return { status: "accepted", deliveredAt: null };
-    case "deposit":
-      return { status: "accepted", deliveredAt: null, depositPaidAt: null, depositType: { not: null }, depositValue: { gt: 0 } };
-    case "finance":
-      return { status: { in: ["sent", "accepted"] }, deliveredAt: null, id: { in: financeQuoteIds } };
-    case "completed":
-      return { deliveredAt: { not: null } };
-    case "all":
-      return {};
-  }
-}
+/** Deals in play: sent or accepted, not handed over. Every view but Completed and All is a cut of these. */
+const IN_PLAY: Prisma.QuoteWhereInput = { status: { in: ["sent", "accepted"] }, deliveredAt: null };
 
-export async function loadDealsCentre(user: PermissionUser, view: DealsView, { q }: { q?: string }) {
+/**
+ * Everything the Deals Centre shows. The deals in play are read ONCE and every
+ * in-play view, tab count, headline number, the blockers panel and the cards are
+ * cuts of that one set — so they can never disagree with each other.
+ */
+export async function loadDealsCentre(user: PermissionUser, view: DealsView, { q, blocker }: { q?: string; blocker?: BlockerKey }) {
   const financeOn = await isModuleEnabled("finance");
   // Live finance by quote (Finance module): what holds delivery, and the "Finance pending" view.
   const finances = financeOn
@@ -75,26 +63,40 @@ export async function loadDealsCentre(user: PermissionUser, view: DealsView, { q
     : [];
   const financeByQuote = new Map<string, string>();
   for (const row of finances) if (row.quoteId && !financeByQuote.has(row.quoteId)) financeByQuote.set(row.quoteId, row.status);
-  const pendingFinance = [...financeByQuote].filter(([, status]) => !financeIsClosed(status)).map(([id]) => id);
 
   const { where: scope } = await quoteListFilter(user, { q });
-  const where: Prisma.QuoteWhereInput = { AND: [scope, viewWhere(view, pendingFinance)] };
+  const inPlay = await readRows({ AND: [scope, IN_PLAY] }, financeByQuote);
+  const [completedCount, allCount] = await Promise.all([
+    prisma.quote.count({ where: { AND: [scope, { deliveredAt: { not: null } }] } }),
+    prisma.quote.count({ where: scope }),
+  ]);
 
-  // ponytail: totals are summed over every quote in the view (items loaded to price them) — fine for the hundreds a
-  // workspace has in play; for "All"/"Completed" on a very large workspace, store a priced total on the quote instead.
-  const all = await prisma.quote.findMany({ where, select: SELECT, orderBy: [{ createdAt: "desc" }, { id: "desc" }] });
-  const payments = all.length
-    ? await prisma.quotePayment.findMany({ where: { quoteId: { in: all.map((quote) => quote.id) } }, select: { quoteId: true, amountCents: true, voidedAt: true } })
+  // ponytail: Completed and All price every quote they hold (items loaded) — fine for a workspace's history in the
+  // thousands; past that, store a priced total on the quote instead.
+  let rows =
+    view === "completed"
+      ? await readRows({ AND: [scope, { deliveredAt: { not: null } }] }, financeByQuote)
+      : view === "all"
+        ? await readRows(scope, financeByQuote)
+        : inPlay.filter((row) => inView(row, view));
+  if (blocker) rows = rows.filter((row) => row.blockers.some((b) => b.key === blocker));
+
+  const counts = Object.fromEntries(DEALS_VIEWS.map((v) => [v.key, inPlay.filter((row) => inView(row, v.key)).length])) as Record<DealsView, number>;
+  counts.completed = completedCount;
+  counts.all = allCount;
+
+  // The page pages these (listPaging), so the totals above it always cover the whole view.
+  return { rows, inPlay, counts, totals: dealTotals(rows), blockers: blockerCounts(inPlay), financeOn };
+}
+
+async function readRows(where: Prisma.QuoteWhereInput, financeByQuote: Map<string, string>): Promise<DealRow[]> {
+  const quotes = await prisma.quote.findMany({ where, select: SELECT, orderBy: [{ createdAt: "desc" }, { id: "desc" }] });
+  const payments = quotes.length
+    ? await prisma.quotePayment.findMany({ where: { quoteId: { in: quotes.map((quote) => quote.id) } }, select: { quoteId: true, amountCents: true, voidedAt: true } })
     : [];
   const paymentsOf = new Map<string, { amountCents: number; voidedAt: Date | null }[]>();
   for (const payment of payments) paymentsOf.set(payment.quoteId, [...(paymentsOf.get(payment.quoteId) ?? []), payment]);
-
-  let rows = all.map((quote) => toRow(quote, paymentsOf.get(quote.id) ?? [], financeByQuote.get(quote.id) ?? null));
-  if (view === "ready") rows = rows.filter((row) => row.ready);
-  if (view === "blocked") rows = rows.filter((row) => !row.ready);
-
-  // The page pages these (listPaging), so the totals above it always cover the whole view.
-  return { rows, totals: dealTotals(rows), financeOn };
+  return quotes.map((quote) => toRow(quote, paymentsOf.get(quote.id) ?? [], financeByQuote.get(quote.id) ?? null));
 }
 
 function toRow(quote: Row, payments: { amountCents: number; voidedAt: Date | null }[], financeStatus: string | null): DealRow {
@@ -120,6 +122,7 @@ function toRow(quote: Row, payments: { amountCents: number; voidedAt: Date | nul
     financeHolds: financeStatus ? financeBlocksDelivery(financeStatus) : false,
   };
   const received = quote.status === "accepted" ? receivedCents(quote, payments) : 0;
+  const milestones = dealMilestones(facts);
   return {
     id: quote.id,
     number: quote.number,
@@ -131,9 +134,13 @@ function toRow(quote: Row, payments: { amountCents: number; voidedAt: Date | nul
     receivedCents: received,
     balanceCents: quote.status === "accepted" ? total - received : 0,
     financeStatus,
+    financePending: Boolean(financeStatus) && !financeIsClosed(financeStatus!),
+    depositOutstanding: accepted && depositCents > 0 && !facts.depositPaid && !facts.delivered,
     deliveryScheduledFor: quote.deliveryScheduledFor,
     deliveredAt: quote.deliveredAt,
     blockers: dealBlockers(facts),
     ready: readyForDelivery(facts),
+    milestone: currentMilestone(milestones).label,
+    progress: dealProgress(milestones),
   };
 }

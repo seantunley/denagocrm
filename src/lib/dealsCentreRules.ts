@@ -1,4 +1,5 @@
 /** The Deals Centre's views and totals (brief §3). Pure — dealsCentre.ts loads, this decides. */
+import type { Blocker, BlockerKey } from "./dealMilestones";
 
 export const DEALS_VIEWS = [
   { key: "active", label: "Active", hint: "Quotes out with the customer and accepted deals not delivered yet." },
@@ -17,6 +18,16 @@ export function dealsView(show: string | undefined, financeOn: boolean): DealsVi
   return found?.key ?? "active";
 }
 
+/** The blockers panel: each kind, what it means, and where it is fixed. */
+export const BLOCKER_INFO: Record<BlockerKey, { title: string; detail: string; action?: { label: string; href: string } }> = {
+  accept: { title: "Not accepted yet", detail: "Quotes with the customer, waiting for a signature." },
+  deposit: { title: "Deposit not received", detail: "The deposit the quote asks for has not come in.", action: { label: "Delivery board", href: "/deliveries" } },
+  finance: { title: "Finance approval pending", detail: "The finance house has not approved — delivery is held.", action: { label: "Finance", href: "/finance" } },
+  stock: { title: "Stock not allocated", detail: "No unit sold or reserved against the deal.", action: { label: "Stock", href: "/stock" } },
+  pdi: { title: "PDI incomplete", detail: "An allocated unit has not passed pre-delivery inspection.", action: { label: "Stock", href: "/stock" } },
+  delivery: { title: "Delivery not booked", detail: "No delivery date set with the customer.", action: { label: "Delivery board", href: "/deliveries" } },
+};
+
 export type DealRow = {
   id: string;
   number: number;
@@ -29,11 +40,36 @@ export type DealRow = {
   /** What is still owed. Only an accepted quote is an invoice, so only it owes anything. */
   balanceCents: number;
   financeStatus: string | null;
+  financePending: boolean;
+  depositOutstanding: boolean;
   deliveryScheduledFor: Date | null;
   deliveredAt: Date | null;
-  blockers: string[];
+  blockers: Blocker[];
   ready: boolean;
+  /** The step the deal is on, and steps done out of the ones that apply. */
+  milestone: string;
+  progress: { done: number; of: number };
 };
+
+/** Which in-play rows a view shows. Completed and All are read from the database separately. */
+export function inView(row: DealRow, view: DealsView): boolean {
+  switch (view) {
+    case "active":
+      return true;
+    case "accepted":
+      return row.status === "accepted";
+    case "blocked":
+      return row.status === "accepted" && !row.ready;
+    case "deposit":
+      return row.depositOutstanding;
+    case "finance":
+      return row.financePending;
+    case "ready":
+      return row.ready;
+    default:
+      return false;
+  }
+}
 
 export type DealTotals = { currency: string | null; count: number; proposed: number; committed: number; received: number; owed: number };
 
@@ -59,4 +95,11 @@ export function dealTotals(rows: Pick<DealRow, "currency" | "status" | "totalCen
     out.set(key, t);
   }
   return [...out.values()];
+}
+
+/** How many in-play deals each blocker holds up. */
+export function blockerCounts(rows: Pick<DealRow, "blockers">[]): Record<BlockerKey, number> {
+  const out = { accept: 0, deposit: 0, finance: 0, stock: 0, pdi: 0, delivery: 0 } as Record<BlockerKey, number>;
+  for (const row of rows) for (const blocker of row.blockers) out[blocker.key] += 1;
+  return out;
 }
