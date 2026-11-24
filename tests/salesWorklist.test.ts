@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { daysSince, worklistOrderBy, worklistSort, worklistView, worklistWhere } from "../src/lib/salesWorklistRules";
+import { HEALTH, daysSince, urgencyOf, worklistOrderBy, worklistSort, worklistView, worklistWhere } from "../src/lib/salesWorklistRules";
 
 /** Brief §2 (denagocrm-intelligent-workspaces-revised.md); Sean 2026-11-24: board stays the default, list per person. */
 const NOW = new Date("2026-11-24T10:00:00+02:00");
@@ -31,6 +31,19 @@ test("each view is a filter on the real leads — open work only, except Nurturi
   assert.deepEqual(waiting.quotes.some, { status: "sent", signedAt: null, supersededAt: null, deletedAt: null });
   assert.deepEqual(worklistOrderBy("stage"), [{ stageEnteredAt: "asc" }, { id: "asc" }]);
   assert.equal(daysSince(new Date("2026-11-12T10:00:00+02:00"), NOW), 12);
+});
+
+test("health is the Attention Centre's band in words; urgency comes from it and the next step's timing", () => {
+  assert.equal(HEALTH.none.label, "Healthy");
+  assert.equal(HEALTH.urgent.label, "At risk");
+  const todayEnd = new Date("2026-11-25T00:00:00+02:00");
+  const step = (iso: string, allDay = false) => ({ dueDate: new Date(iso), allDay });
+  assert.equal(urgencyOf("urgent", step("2026-12-01T09:00:00+02:00"), NOW, todayEnd), "High");
+  assert.equal(urgencyOf("none", step("2026-11-24T08:00:00+02:00"), NOW, todayEnd), "High", "a step whose time has gone is late");
+  assert.equal(urgencyOf("none", step("2026-11-24T00:00:00+02:00", true), NOW, todayEnd), "Medium", "an all-day step today is not late yet");
+  assert.equal(urgencyOf("none", undefined, NOW, todayEnd), "Medium", "nothing planned is a gap");
+  assert.equal(urgencyOf("act", step("2026-12-01T09:00:00+02:00"), NOW, todayEnd), "Medium");
+  assert.equal(urgencyOf("none", step("2026-12-01T09:00:00+02:00"), NOW, todayEnd), "Low");
 });
 
 test("the list page: a view only ever NARROWS the filters and access, and paging and per-currency totals hold", () => {

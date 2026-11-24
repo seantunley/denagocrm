@@ -28,8 +28,12 @@ import { getRegionalSettings } from "@/lib/settings";
 import { formatDue } from "@/lib/format";
 import { isOverdueActivity } from "@/lib/activityDay";
 import { switchLeadsView } from "@/app/actions/leadsView";
-import { rankedLeads, riskReasons, worklistColumns } from "@/lib/salesWorklist";
-import { WORKLIST_SORTS, WORKLIST_VIEWS, daysSince, worklistOrderBy, worklistSort, worklistView, worklistWhere } from "@/lib/salesWorklistRules";
+import { attentionFor, rankedLeads, worklistColumns, worklistCounts } from "@/lib/salesWorklist";
+import { HEALTH, WORKLIST_SORTS, WORKLIST_VIEWS, daysSince, urgencyOf, worklistOrderBy, worklistSort, worklistView, worklistWhere } from "@/lib/salesWorklistRules";
+import { johannesburgStartOfDay } from "@/lib/activityDay";
+import { Plus, Zap } from "lucide-react";
+import { CentreCards, CentreHeader, CentreMain, Panel, ViewChips } from "@/components/centre";
+import { NextBestActions, SalesCentreCards, SalesCentreStats } from "./SalesCentreParts";
 
 export const metadata = { title: "Lead list" };
 
@@ -109,11 +113,15 @@ export default async function LeadListPage({ searchParams }: { searchParams: Pro
         .slice(skip, skip + take)
     : await prisma.lead.findMany({ where, include, orderBy: worklistOrderBy(sort), skip, take });
   const leadIds = leads.map((lead) => lead.id);
-  const [{ next, last }, risk] = await Promise.all([
+  const [{ next, last }, attention, counts] = await Promise.all([
     worklistColumns(leadIds),
-    ranked ? new Map<string, string>() : riskReasons(user, leads.filter((lead) => lead.status === "open").map((lead) => lead.id), now),
+    attentionFor(user, leads.filter((lead) => lead.status === "open").map((lead) => lead.id), now),
+    worklistCounts(user, filtersWhere, now),
   ]);
-  const why = ranked ? new Map(ranked.map((row) => [row.id, row.reason])) : risk;
+  const why = ranked
+    ? new Map(ranked.map((row) => [row.id, row.reason]))
+    : new Map([...attention].filter(([, a]) => a.reason).map(([id, a]) => [id, a.reason]));
+  const todayEnd = new Date(johannesburgStartOfDay(now).getTime() + 86_400_000);
 
   // `page` is navigation, not a filter: it must not end up in a saved view or
   // the active-filter badge.
@@ -128,32 +136,30 @@ export default async function LeadListPage({ searchParams }: { searchParams: Pro
   const filterProps = { params, status, source, pipelineId, stageId, pipelines, stages, moneyFmt, view, sort };
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-[-0.035em]">Lead list</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Your deals as a worklist: pick a view, filter, sort, and save it to come back to in one click.
-          </p>
-        </div>
-        <form action={switchLeadsView.bind(null, "board")}>
-          <button className="btn-secondary btn-sm" title="Show the deals as a board. The board opens for you from now on.">Board view</button>
-        </form>
-      </div>
+    <div className="space-y-5">
+      <CentreHeader
+        title="Sales Centre"
+        description="Your opportunities as a worklist: what to do next, what is late, what is at risk."
+        note="Ranked by the Today score and the Attention Centre"
+        actions={
+          <>
+            <form action={switchLeadsView.bind(null, "board")}>
+              <button className="btn-secondary btn-sm" title="Show the deals as a board. The board opens for you from now on.">Board view</button>
+            </form>
+            <Link href="/leads/new" className="btn-primary btn-sm"><Plus className="size-4" />New lead</Link>
+          </>
+        }
+      />
 
-      <nav className="flex flex-wrap gap-2" aria-label="Worklist views">
-        {WORKLIST_VIEWS.map((option) => (
-          <Link
-            key={option.key}
-            href={`/leads/list?show=${option.key}`}
-            title={option.hint}
-            aria-current={view === option.key ? "page" : undefined}
-            className={view === option.key ? "btn-primary btn-sm" : "btn-secondary btn-sm"}
-          >
-            {option.label}
-          </Link>
-        ))}
-      </nav>
+      <SalesCentreStats user={user} now={now} money={moneyFmt} />
+
+      <CentreMain aside={<NextBestActions user={user} now={now} />}>
+      <Panel icon={Zap} title="Opportunity worklist" description="Pick a view, filter and sort; save the ones you use.">
+      <ViewChips
+        label="Worklist views"
+        active={view}
+        chips={WORKLIST_VIEWS.map((option) => ({ key: option.key, label: option.label, hint: option.hint, href: `/leads/list?show=${option.key}`, count: counts[option.key] }))}
+      />
 
       {views.length > 0 && (
         <div className="flex flex-wrap items-center gap-2">
@@ -177,11 +183,17 @@ export default async function LeadListPage({ searchParams }: { searchParams: Pro
         </form>
       </MobileFilterDrawer>
 
-      <form method="GET" className="card hidden flex-wrap items-end gap-3 p-4 sm:flex">
-        <LeadFilterFields {...filterProps} />
-        <button className="btn-primary btn-sm">Filter</button>
-        {currentQuery && <Link href={`/leads/list?show=${view}`} className="btn-secondary btn-sm">Clear</Link>}
-      </form>
+      {/* Folded away until wanted (the mockup's list leads with the deals); open while a filter is on. */}
+      <details className="group mb-3 hidden sm:block" open={filters.some(([key]) => key !== "show")}>
+        <summary className="cursor-pointer select-none text-xs font-medium text-muted-foreground hover:text-foreground">
+          Filters and sort{activeFilterCount > 1 ? ` (${activeFilterCount - 1} on)` : ""}
+        </summary>
+        <form method="GET" className="mt-2 flex flex-wrap items-end gap-3 rounded-lg border border-border p-3">
+          <LeadFilterFields {...filterProps} />
+          <button className="btn-primary btn-sm">Filter</button>
+          {currentQuery && <Link href={`/leads/list?show=${view}`} className="btn-secondary btn-sm">Clear</Link>}
+        </form>
+      </details>
 
       {currentQuery && (
         <SaveForm success="View saved" action={saveView} className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -234,9 +246,9 @@ export default async function LeadListPage({ searchParams }: { searchParams: Pro
             </MobileDataList>
           }
           desktop={
-            <div className="card overflow-x-auto p-0">
+            <div className="overflow-x-auto">
               <table className="table-base">
-                <thead><tr><th>Lead</th><th>Stage</th><th className="text-right">Value</th><th>Owner</th><th>Next action</th><th>Last activity</th><th>Source</th><th>Contact</th></tr></thead>
+                <thead><tr><th>Customer / deal</th><th className="text-right">Amount</th><th>Stage</th><th>Owner</th><th>Health</th><th>Last activity</th><th>Next action</th></tr></thead>
                 <tbody>
                   {leads.map((lead) => (
                     <RecordContextMenu
@@ -248,22 +260,29 @@ export default async function LeadListPage({ searchParams }: { searchParams: Pro
                     <tr tabIndex={0} data-nav-row="" data-nav-href={`/leads/${lead.id}`} data-nav-lead={lead.id} className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary">
                       <td>
                         <Link href={`/leads/${lead.id}`} className="font-medium text-primary hover:underline">{lead.name}</Link>
-                        <p className="max-w-52 truncate text-xs text-muted-foreground">{lead.title}</p>
-                        {why.get(lead.id) && <p className="max-w-72 text-xs text-amber-700 dark:text-amber-400">{why.get(lead.id)}</p>}
+                        <p className="max-w-60 truncate text-xs text-muted-foreground">
+                          {lead.title}
+                          {lead.contact && lead.title ? " · " : ""}
+                          {lead.contact && <Link href={`/contacts/${lead.contact.id}`} className="hover:underline">{contactName(lead.contact)}</Link>}
+                        </p>
+                        {!lead.contact && <AddToContactsButton leadId={lead.id} />}
+                        {why.get(lead.id) && <p className="line-clamp-2 max-w-56 text-xs text-muted-foreground" title={why.get(lead.id)}>{why.get(lead.id)}</p>}
                       </td>
-                      <td>
+                      <td className="whitespace-nowrap text-right font-medium tabular-nums">{lead.valueCents > 0 ? formatZAR(lead.valueCents, withCurrency(moneyFmt, lead.currency)) : "—"}</td>
+                      <td className="whitespace-nowrap">
                         {lead.status === "open" ? <span className="badge text-white" style={{ backgroundColor: lead.stage.color }}>{lead.stage.name}</span> : <StatusPill tone={lead.status === "won" ? "success" : lead.status === "lost" ? "danger" : "info"}>{lead.status}</StatusPill>}
                         {lead.status === "open" && <p className="mt-0.5 text-xs text-muted-foreground">{daysSince(lead.stageEnteredAt, now)} d in stage</p>}
                       </td>
-                      <td className="text-right font-medium">{lead.valueCents > 0 ? formatZAR(lead.valueCents, withCurrency(moneyFmt, lead.currency)) : "—"}</td>
-                      <td className="text-sm text-muted-foreground">{lead.assignedTo?.name ?? "Unassigned"}</td>
-                      <td className="text-sm"><NextActionCell action={next.get(lead.id)} now={now} /></td>
-                      <td className="text-sm text-muted-foreground">{last.get(lead.id) ? formatDate(last.get(lead.id)) : "—"}</td>
-                      <td className="text-sm capitalize text-foreground/80">{lead.source}</td>
-                      <td>
-                        {lead.contact
-                          ? <Link href={`/contacts/${lead.contact.id}`} className="text-sm text-primary hover:underline">{contactName(lead.contact)}</Link>
-                          : <AddToContactsButton leadId={lead.id} />}
+                      <td className="whitespace-nowrap text-sm text-muted-foreground" title={lead.assignedTo?.name}>{lead.assignedTo?.name.split(/\s+/)[0] ?? "Unassigned"}</td>
+                      <td className="whitespace-nowrap">{lead.status === "open" ? <HealthPill band={attention.get(lead.id)?.band} /> : <span className="text-muted-foreground">—</span>}</td>
+                      <td className="whitespace-nowrap text-sm text-muted-foreground">{last.get(lead.id) ? formatDate(last.get(lead.id)) : "—"}</td>
+                      <td className="text-sm">
+                        <NextActionCell action={next.get(lead.id)} now={now} />
+                        {lead.status === "open" && (
+                          <span className="mt-1 block" title="Urgency: High when the Attention Centre says urgent or the next step is late; Medium when it says act, the step is today or nothing is planned.">
+                            <StatusPill tone={URGENCY_TONE[urgencyOf(attention.get(lead.id)?.band, next.get(lead.id), now, todayEnd)]}>{urgencyOf(attention.get(lead.id)?.band, next.get(lead.id), now, todayEnd)} urgency</StatusPill>
+                          </span>
+                        )}
                       </td>
                     </tr>
                     </RecordContextMenu>
@@ -276,8 +295,21 @@ export default async function LeadListPage({ searchParams }: { searchParams: Pro
           }
         />
       )}
+      </Panel>
+      </CentreMain>
+
+      <CentreCards>
+        <SalesCentreCards user={user} now={now} money={moneyFmt} />
+      </CentreCards>
     </div>
   );
+}
+
+const URGENCY_TONE = { High: "danger", Medium: "warning", Low: "neutral" } as const;
+
+function HealthPill({ band }: { band?: string }) {
+  const health = HEALTH[band ?? "none"] ?? HEALTH.none;
+  return <StatusPill tone={health.tone}>{health.label}</StatusPill>;
 }
 
 /** The next planned activity and when; red once its time has gone. None = say so, it is a gap. */
@@ -286,8 +318,8 @@ function NextActionCell({ action, now }: { action?: { summary: string; dueDate: 
   const late = isOverdueActivity(action, now);
   return (
     <span>
-      <span className="block max-w-56 truncate">{action.summary}</span>
-      <span className={`text-xs ${late ? "text-red-600 dark:text-red-400" : "text-muted-foreground"}`}>
+      <span className="block max-w-36 truncate" title={action.summary}>{action.summary}</span>
+      <span className={`whitespace-nowrap text-xs ${late ? "text-red-600 dark:text-red-400" : "text-muted-foreground"}`}>
         {action.allDay ? formatDate(action.dueDate) : formatDue(action.dueDate)}
         {late ? " · overdue" : ""}
       </span>

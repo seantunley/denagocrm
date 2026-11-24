@@ -85,6 +85,26 @@ export function worklistOrderBy(sort: WorklistSort): Prisma.LeadOrderByWithRelat
   }
 }
 
+/** The Attention Centre's band in words. No band = nothing wrong found. */
+export const HEALTH: Record<string, { label: string; tone: "success" | "info" | "warning" | "danger" }> = {
+  none: { label: "Healthy", tone: "success" },
+  watch: { label: "Watch", tone: "info" },
+  act: { label: "Needs action", tone: "warning" },
+  urgent: { label: "At risk", tone: "danger" },
+};
+
+/**
+ * How soon this deal needs a move, from facts: the Attention Centre says urgent or
+ * its next step is late → High; it says act, its next step is today, or nothing is
+ * planned at all → Medium; otherwise Low.
+ */
+export function urgencyOf(band: string | undefined, next: { dueDate: Date; allDay: boolean } | undefined, now: Date, todayEnd: Date): "High" | "Medium" | "Low" {
+  const late = next ? (next.allDay ? next.dueDate < new Date(todayEnd.getTime() - DAY) : next.dueDate < now) : false;
+  if (band === "urgent" || late) return "High";
+  if (band === "act" || !next || next.dueDate < todayEnd) return "Medium";
+  return "Low";
+}
+
 /** Whole days since `since`, for "in stage 12 d". */
 export function daysSince(since: Date, now: Date): number {
   return Math.max(0, Math.floor((now.getTime() - since.getTime()) / DAY));
