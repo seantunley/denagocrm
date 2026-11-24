@@ -135,7 +135,7 @@ test("ticks are kept in the browser, and a browser that refuses storage breaks n
 
 test("the help home has the page to itself; a guide keeps the side menu", () => {
   const frame = code("src/components/help/HelpFrame.tsx");
-  assert.match(frame, /if \(pathname === "\/help"\) return <div className="mx-auto w-full max-w-7xl">\{children\}<\/div>;/);
+  assert.match(frame, /if \(pathname === "\/help"\) return <div className="w-full">\{children\}<\/div>;/);
   assert.match(frame, /<aside[^>]*>\{nav\}<\/aside>/);
   assert.match(code("src/app/(app)/help/layout.tsx"), /<HelpFrame nav=\{<HelpNav groups=\{groups\} \/>\}>\{children\}<\/HelpFrame>/);
 });
@@ -184,6 +184,13 @@ test("a guide with no outline keeps no empty column for one", () => {
   const page = code("src/app/(app)/help/[slug]/page.tsx");
   assert.match(page, /const outline = headings\.length >= MIN_OUTLINE \? headings : null;/);
   assert.match(page, /<div className=\{outline \? "grid gap-10 xl:grid-cols-\[minmax\(0,1fr\)_14rem\]" : undefined\}>/);
-  assert.match(page, /!outline && "mx-auto"/);
+  assert.doesNotMatch(page, /max-w-3xl/, "the guide fills the width it has");
   assert.match(page, /\{outline && \(\s*<aside/);
+});
+
+test("the help centre is full width: no centred column on any of its pages", () => {
+  assert.doesNotMatch(code("src/components/help/HelpFrame.tsx"), /max-w-|mx-auto/);
+  for (const page of ["page.tsx", "[slug]/page.tsx", "whats-new/page.tsx", "ours/page.tsx", "ours/new/page.tsx", "ours/[id]/page.tsx", "ours/[id]/edit/page.tsx"]) {
+    assert.doesNotMatch(code(`src/app/(app)/help/${page}`), /mx-auto max-w-(3xl|6xl|7xl)/, page);
+  }
 });

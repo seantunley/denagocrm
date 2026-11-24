@@ -17,7 +17,7 @@ export default async function EditGuidePage({ params }: { params: Promise<{ id: 
   const guide = (await loadCustomGuides()).find((item) => item.id === id);
   if (!guide) notFound();
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <div className="space-y-6">
       <Link href={`/help/ours/${guide.id}`} className="inline-flex min-h-9 items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
         <ArrowLeft className="size-3.5" /> Back to the guide
       </Link>

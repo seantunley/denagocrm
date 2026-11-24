@@ -22,7 +22,7 @@ export default async function OurGuidePage({ params }: { params: Promise<{ id: s
   if (!guide) notFound();
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <div className="space-y-6">
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <Link href="/help/ours" className="inline-flex min-h-9 items-center gap-1 hover:text-foreground">
           <ArrowLeft className="size-3.5" /> Our own guides

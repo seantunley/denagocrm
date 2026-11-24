@@ -16,7 +16,7 @@ export default async function WhatsNewPage() {
   const days = [...new Set(entries.map((entry) => entry.date))];
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <div className="space-y-6">
       <Link href="/help" className="inline-flex min-h-9 items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
         <ArrowLeft className="size-3.5" /> Help
       </Link>
