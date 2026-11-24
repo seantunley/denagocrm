@@ -72,6 +72,9 @@ const PUBLIC_PATHS = [
   // stored in Tenant.brandLogoRef — see its header comment for why that is not a
   // public file reader.
   "/api/brand/logo",
+  // A workspace's app icon (tab, installed app, notifications) — asked for before anyone signs in, like the logo.
+  // Draws only the icon or logo the workspace's own row names; never a path from the request (lib/appIcon.ts).
+  "/api/brand/icon",
   // A workspace's sign-in pictures (background, card). Pre-auth like the logo; the route serves only the two files the
   // workspace's current sign-in settings name (lib/loginLook.ts isCurrentLoginImage).
   "/api/brand/login-image",

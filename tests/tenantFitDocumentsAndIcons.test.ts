@@ -68,12 +68,12 @@ test("Document Studio and its builder use the module rule", () => {
 });
 
 test("the tab icon and app names are the workspace's", () => {
-  assert.match(src("src/lib/tenantBrand.ts"), /return logo \? \{ icon: logo, apple: logo \} : \{ \.\.\.PLATFORM_ICONS \};/);
+  assert.match(src("src/lib/tenantBrand.ts"), /return \{ icon: appIconUrl\(brand, 192\), apple: appIconUrl\(brand, 180\) \};/);
   assert.match(src("src/app/layout.tsx"), /icons: brandIcons\(brand\),/);
-  assert.match(src("src/app/(app)/layout.tsx"), /return \{ title: brand\.displayName, icons: brandIcons\(brand\) \};/);
+  assert.match(src("src/app/(app)/layout.tsx"), /return \{ title: brand\.displayName, icons: brandIcons\(brand\), manifest: manifestHref\("\/manifest\.webmanifest", brand\.tenantId\) \};/);
   const messages = src("src/app/messages/layout.tsx");
   assert.match(messages, /const title = `\$\{brand\.tenantId \? brand\.displayName : PLATFORM_NAME\} Messages`;/);
-  for (const file of ["src/app/manifest.ts", "src/app/messages/manifest.webmanifest/route.ts", "src/app/messages/layout.tsx"]) {
+  for (const file of ["src/app/manifest.webmanifest/route.ts", "src/app/messages/manifest.webmanifest/route.ts", "src/app/messages/layout.tsx"]) {
     assert.doesNotMatch(src(file).replace(/\/\*[\s\S]*?\*\/|^\s*\/\/.*$/gm, ""), /"Denago|Denago Cape Town/, file);
   }
 });

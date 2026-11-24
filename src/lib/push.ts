@@ -5,6 +5,9 @@ import { isAllowedPushEndpoint } from "./pushEndpoint";
 import { currentScopeClass } from "./tenantWrite";
 import { tenantEnforcing } from "./tenantEnforcement";
 import { isQuietHour } from "./proactiveRules";
+import { currentTenantScope } from "./tenantScope";
+import { brandForTenant } from "./tenantBrand";
+import { appIconUrl } from "./appIcon";
 
 type PushRecipient = { id: string; userId: string; endpoint: string; p256dh: string; auth: string };
 
@@ -164,6 +167,11 @@ export async function sendPushToAll(
     // one person, so a blank id narrows to nobody instead of the whole workspace.
     .filter((sub) => options.userId == null || sub.userId === options.userId);
 
+  // The workspace's own icon on the notification (lib/appIcon.ts); a platform alert, or no workspace, keeps the
+  // platform's. The service worker falls back to it when this is absent.
+  const iconTenant = options.platform ? null : options.tenantId ?? currentTenantScope()?.tenantId ?? null;
+  const icon = iconTenant ? appIconUrl(await brandForTenant(iconTenant), 192) : undefined;
+
   let sent = 0;
   await Promise.all(
     subs.map(async (sub) => {
@@ -174,7 +182,7 @@ export async function sendPushToAll(
       try {
         await webpush.sendNotification(
           { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
-          JSON.stringify({ ...payload, kind }),
+          JSON.stringify({ ...payload, kind, ...(icon ? { icon } : {}) }),
           { timeout: PUSH_TIMEOUT_MS },
         );
         sent++;

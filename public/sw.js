@@ -1,4 +1,4 @@
-/* Denago CRM service worker — push notifications + installability (rev 5) */
+/* CRM service worker — push notifications + installability (rev 6: the workspace's own notification icon) */
 
 // Take over as soon as a new worker is deployed, instead of waiting for every
 // tab to close — otherwise notification icon/badge changes never reach an
@@ -18,7 +18,7 @@ self.addEventListener("fetch", () => {
 /**
  * ONE worker, TWO installed apps.
  *
- * The CRM and Denago Messages share this service worker — a browser allows one
+ * The CRM and Messages share this service worker — a browser allows one
  * per scope, and Messages is scoped under the CRM's origin. So the notification
  * cannot ask "which app am I?"; there is only one. What it can ask is what the
  * notification is ABOUT, and the server sends `kind` for exactly that.
@@ -52,10 +52,11 @@ self.addEventListener("push", (event) => {
   const testId = testIdFromUrl(url);
 
   const display = self.registration.showNotification(
-    data.title || (messaging ? "Denago Messages" : "Denago CRM"),
+    data.title || (messaging ? "Messages" : "CRM"),
     {
       body: data.body || "",
-      icon: messaging ? "/icons/messages-192.png" : "/icons/icon-192.png",
+      // The workspace's own icon when the server sent one (lib/push.ts); the platform's otherwise.
+      icon: data.icon || (messaging ? "/icons/messages-192.png" : "/icons/icon-192.png"),
       // Android tints a flat silhouette from the alpha channel for the status-bar
       // badge, so use the transparent mark rather than the full app tile.
       badge: messaging ? "/icons/messages-badge-96.png" : "/icons/badge-96.png",

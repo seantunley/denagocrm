@@ -20,10 +20,11 @@ test("the stock Vercel favicon is gone; /favicon.ico is the brand's icon", () =>
   assert.match(route, /NextResponse\.redirect\(new URL\(brandIcons\(brand\)\.icon, req\.url\), 307\)/);
 });
 
-test("the icon it answers with: the workspace logo, or the platform icon when there is none", () => {
+test("the icon it answers with: the workspace's app icon (lib/appIcon.ts), or the platform icon when none is named", () => {
   const unbranded = brandIcons({ tenantId: null, logoRef: null } as never);
   assert.equal(unbranded.icon, PLATFORM_ICONS.icon);
   assert.ok(existsSync(at(`public${PLATFORM_ICONS.icon}`)), "the platform icon file exists");
-  const branded = brandIcons({ tenantId: "tenant_a", logoRef: "logo.png" } as never);
-  assert.match(branded.icon, /^\/api\/brand\/logo\/tenant_a/);
+  const branded = brandIcons({ tenantId: "tenant_a", logoRef: "branding/tenant_a/logo-1700000000000.png" } as never);
+  assert.equal(branded.icon, "/api/brand/icon/tenant_a?s=192&v=logo-1700000000000.png");
+  assert.equal(branded.apple, "/api/brand/icon/tenant_a?s=180&v=logo-1700000000000.png");
 });

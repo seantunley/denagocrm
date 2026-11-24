@@ -2,6 +2,7 @@ import { cache } from "react";
 import { basePrisma } from "./db";
 import { PLATFORM_NAME, PLATFORM_TEAM_SIGNOFF } from "./platformIdentity";
 import { parseLoginLook, type LoginLook } from "./loginLook";
+import { appIconUrl } from "./appIcon";
 
 /**
  * WHOSE BRAND DOES THIS REQUEST RENDER?
@@ -65,6 +66,8 @@ export type TenantBrand = {
   primaryForeground: string | null;
   /** Blob pathname for the logo, or null to use the built-in asset. */
   logoRef: string | null;
+  /** Blob pathname of the workspace's own square app icon (lib/appIcon.ts), or null. */
+  iconRef?: string | null;
   /** The sign-in screen's wording and layout (lib/loginLook.ts). Read only where the sign-in page needs it. */
   login?: LoginLook;
 };
@@ -158,6 +161,7 @@ type BrandRow = {
   tenantId: string;
   brandPrimary: string | null;
   brandLogoRef: string | null;
+  brandIconRef?: string | null;
   brandDisplayName: string | null;
   brandTagline: string | null;
   /** Present only when the caller read it (the sign-in page). */
@@ -178,6 +182,7 @@ export function brandFromRow(row: BrandRow): TenantBrand {
     primary,
     primaryForeground: primary ? textOn(primary) : null,
     logoRef: row.brandLogoRef?.trim() || null,
+    iconRef: row.brandIconRef?.trim() || null,
     // Re-checked on read: the sign-in page is public (lib/loginLook.ts).
     ...("loginJson" in row ? { login: parseLoginLook(row.loginJson) } : {}),
   };
@@ -209,6 +214,7 @@ export const brandForHost = cache(async (host: string | null | undefined): Promi
           select: {
             brandPrimary: true,
             brandLogoRef: true,
+            brandIconRef: true,
             brandDisplayName: true,
             brandTagline: true,
             loginJson: true,
@@ -246,6 +252,7 @@ export const brandForTenant = cache(async (tenantId: string | null | undefined):
       select: {
         brandPrimary: true,
         brandLogoRef: true,
+        brandIconRef: true,
         brandDisplayName: true,
         brandTagline: true,
       },
@@ -357,15 +364,16 @@ export function brandLogoUrl(brand: TenantBrand): string | null {
     : `/api/brand/logo/${brand.tenantId}`;
 }
 
-/** The platform's own tab / home-screen icons, for an unbranded request. */
-export const PLATFORM_ICONS = { icon: "/icons/icon-192.png", apple: "/icons/apple-touch-icon.png" } as const;
+/** The platform's own tab / home-screen icons, for a request that names no workspace. */
+export const PLATFORM_ICONS = {
+  icon: appIconUrl({ tenantId: null, logoRef: null }, 192),
+  apple: appIconUrl({ tenantId: null, logoRef: null }, 180),
+} as const;
 
 /**
- * The browser-tab and home-screen icons for a brand: the workspace's logo when
- * it has one, the platform's otherwise. Every tenant's tabs and bookmarks used
- * to show the platform icon.
+ * The browser-tab and home-screen icons for a brand: the workspace's app icon (lib/appIcon.ts — its own icon, else its
+ * logo on a square), the platform's for a request that names no workspace.
  */
 export function brandIcons(brand: TenantBrand): { icon: string; apple: string } {
-  const logo = brandLogoUrl(brand);
-  return logo ? { icon: logo, apple: logo } : { ...PLATFORM_ICONS };
+  return { icon: appIconUrl(brand, 192), apple: appIconUrl(brand, 180) };
 }

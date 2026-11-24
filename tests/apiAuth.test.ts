@@ -30,6 +30,10 @@ const PUBLIC_PREFIXES = [
   // response, nosniff). It discloses what that tenant's own login page already
   // shows the world. Suspended tenants 404. See the route's header comment.
   "brand/logo",
+  // A workspace's app icon: public for the same reason as the logo (tabs and installed apps ask before sign-in). It
+  // draws only the icon or logo the workspace's own row names, path rebuilt from the tenant id; unknown or suspended
+  // workspaces get the platform's icon (src/app/api/brand/icon/[tenantId]/route.ts).
+  "brand/icon",
   // A workspace's sign-in pictures (background, card). Public for the same reason as the logo: the sign-in page renders
   // before anyone signs in. It streams only the two files the workspace's CURRENT sign-in settings name, its path
   // rebuilt from the tenant id and a strictly-shaped name; suspended tenants 404 (lib/loginLook.ts).
