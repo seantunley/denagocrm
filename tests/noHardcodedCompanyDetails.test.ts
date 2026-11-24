@@ -33,9 +33,6 @@ const ALLOWED: Record<string, string> = {
   // Staff-only screens: example placeholders and the platform's own webhook URLs.
   "src/components/settings/WorkspaceIntegrationRows.tsx": "staff (platform owner only) — the platform's webhook URLs on Settings → Integrations",
   "src/components/KanbanBoard.tsx": "staff — 16px lead-SOURCE glyph on the pipeline board (see appShellBranding.test.ts)",
-  "src/lib/help/data/admin.json": "staff — help centre",
-  "src/lib/help/data/channels.json": "staff — help centre (platform webhook URLs)",
-  "src/lib/help/data/marketing.json": "staff — help centre",
   "src/lib/provisioning.ts": "seed — the founding tenant's own row",
   // The PLATFORM's origin (crm.denagocpt.co.za), not a company detail: a fallback
   // when NEXT_PUBLIC_APP_URL is unset. Tenant links go through tenantOrigin().

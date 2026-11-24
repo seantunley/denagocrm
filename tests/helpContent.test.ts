@@ -125,3 +125,10 @@ test("Connect WhatsApp is documented and the Settings card links to it", async (
   const box = await readFile(new URL("../src/components/settings/WhatsAppConnectBox.tsx", import.meta.url), "utf8");
   assert.ok(box.includes('href="/help/connect-whatsapp-button"'), "the Settings card must link to the article");
 });
+
+// The Help Centre serves every workspace: it names no one business (Sean, 2026-11-23 — it said "Denago countersigns",
+// "every physical Denago unit" and Denago's own webhook address).
+test("no help article names a particular business", () => {
+  const named = HELP_ARTICLES.filter((article) => /denago/i.test(JSON.stringify(article))).map((article) => article.slug);
+  assert.deepEqual(named, []);
+});

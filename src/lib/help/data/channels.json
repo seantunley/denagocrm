@@ -49,7 +49,7 @@
       { "type": "h", "text": "On the CRM's side" },
       { "type": "steps", "items": [
         "Open **Settings → Integrations** and find the **Facebook & Instagram (Meta)** row.",
-        "Copy the **Webhook callback URL** shown there — it is `https://crm.denagocpt.co.za/api/webhooks/meta`.",
+        "Copy the **Webhook callback URL** exactly as shown there — it's your CRM's own address.",
         "Copy the **Verify token** shown in the same panel (use **Regenerate** if you want a fresh one — this invalidates the old one immediately).",
         "Paste your System user token into **Page access token** and click **Save**.",
         "Paste your **App secret** into the App secret field and click **Save**. This is what lets the CRM verify that incoming webhooks really came from Meta."
@@ -121,7 +121,7 @@
         "Open **Settings → Integrations** and find the **WhatsApp Business (Cloud API)** row.",
         "Paste the **Phone number ID** and click **Save**.",
         "Paste your permanent System user **Access token** and click **Save**.",
-        "Copy the WhatsApp **Webhook callback URL** shown there — `https://crm.denagocpt.co.za/api/webhooks/whatsapp`."
+        "Copy the WhatsApp **Webhook callback URL** exactly as shown there — it's your CRM's own address."
       ] },
       { "type": "h", "text": "Point Meta's webhook at the CRM" },
       { "type": "steps", "items": [
