@@ -70,6 +70,17 @@ export function regionsInRules(tree: unknown): string[] {
   return found;
 }
 
+/**
+ * Whether any saved rule uses the region field at all — including "is empty" / "is not empty", which name no region.
+ * The builder keeps the field for those too, so such a rule never opens as a different field (review of #1215).
+ */
+export function usesRegionRule(tree: unknown): boolean {
+  if (!tree || typeof tree !== "object") return false;
+  const { field, rules, exclusions } = tree as { field?: unknown; rules?: unknown; exclusions?: unknown };
+  if (field === "province") return true;
+  return [rules, exclusions].some((child) => Array.isArray(child) && child.some(usesRegionRule));
+}
+
 /** The list followed by any extra values (saved rules, a contact's own), deduplicated in any case. */
 export function withKeptRegions(list: string[], kept: string[]): string[] {
   const seen = new Set(list.map((region) => region.toLowerCase()));

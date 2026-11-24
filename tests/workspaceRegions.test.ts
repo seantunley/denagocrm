@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { SOUTH_AFRICAN_PROVINCES, parseRegions, regionChoices, regionLabel, regionsInRules, regionsOrDefault, withKeptRegions } from "../src/lib/regionRules";
+import { SOUTH_AFRICAN_PROVINCES, parseRegions, regionChoices, regionLabel, regionsInRules, regionsOrDefault, usesRegionRule, withKeptRegions } from "../src/lib/regionRules";
 
 // Sean, 2026-11-24: "Provinces: Yes, editable" — each workspace keeps its own list (Settings → Regions).
 
@@ -47,8 +47,20 @@ test("a saved audience's regions stay choosable after the list changes (review o
   assert.deepEqual(withKeptRegions([], regionsInRules({ operator: "AND", rules: [] })), []);
 
   const workspace = readFileSync("src/components/marketing/AudienceWorkspace.tsx", "utf8");
-  assert.match(workspace, /definitions\(tags, products, regions, audiences\.flatMap\(\(audience\) => regionsInRules\(audience\.ruleTree\)\)\)/);
+  assert.match(workspace, /audiences\.flatMap\(\(audience\) => regionsInRules\(audience\.ruleTree\)\),\s*audiences\.some\(\(audience\) => usesRegionRule\(audience\.ruleTree\)\),/);
   assert.match(workspace, /const regionOptions = withKeptRegions\(regions\.options, savedRegions\);/);
+});
+
+test("a saved region rule that names no region ('is empty') still opens as the region field (review of #1215)", () => {
+  const empty = { operator: "AND", rules: [{ field: "province", operator: "is_empty" }] };
+  const nestedNotEmpty = { operator: "AND", rules: [{ field: "source", operator: "equals", value: "website" }], exclusions: [{ operator: "OR", rules: [{ field: "province", operator: "is_not_empty" }] }] };
+  assert.deepEqual(regionsInRules(empty), [], "it names no region…");
+  assert.equal(usesRegionRule(empty), true, "…but it uses the field");
+  assert.equal(usesRegionRule(nestedNotEmpty), true, "nested in an exclusion too");
+  assert.equal(usesRegionRule({ operator: "AND", rules: [{ field: "source", operator: "equals", value: "website" }] }), false);
+  // With no choices the field is kept LAST: a new rule starts on the first field and must not start on an empty select.
+  const workspace = readFileSync("src/components/marketing/AudienceWorkspace.tsx", "utf8");
+  assert.match(workspace, /if \(regionOptions\.length\) return \[region, \.\.\.fields\];\s*return regionInUse \? \[\.\.\.fields, region\] : fields;/);
 });
 
 test("no screen carries its own province list, and settings are read for the named workspace", () => {
