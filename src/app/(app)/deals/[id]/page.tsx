@@ -30,7 +30,8 @@ import { isModuleEnabled } from "@/lib/modules/enabled";
 import { financeBlocksDelivery, financeStatusShort, quoteInPlay } from "@/lib/dealFinanceRules";
 import DealFinancePanel from "@/components/deals/DealFinancePanel";
 import DealNextActions, { type BlockerActions } from "@/components/deals/DealNextActions";
-import { currentMilestone, dealBlockers, dealMilestones, dealProgress, pdiReady as dealPdiReady } from "@/lib/dealMilestones";
+import { currentMilestone, dealBlockers, dealMilestones, dealProgress, pdiReady as dealPdiReady, type MilestoneKey } from "@/lib/dealMilestones";
+import { getDealLifecycle } from "@/lib/dealLifecycleServer";
 import { formatDate, formatDateTime, formatZAR } from "@/lib/format";
 import { loadBillToFleet, quoteBillTo } from "@/lib/quoteBillTo";
 import { payableTotalCents } from "@/lib/pricing";
@@ -283,10 +284,13 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
     financeHolds: finance ? financeBlocksDelivery(finance.status) : false,
   };
   const pdiReady = dealPdiReady(stock);
-  const journey = dealMilestones(facts);
+  // The workspace's lifecycle (brief §5): its step names, and which steps its deals have.
+  const lifecycle = await getDealLifecycle();
+  const hasStep = (step: MilestoneKey) => lifecycle.steps.includes(step);
+  const journey = dealMilestones(facts, lifecycle);
   const current = currentMilestone(journey);
   const progress = dealProgress(journey);
-  const blockers = dealBlockers(facts);
+  const blockers = dealBlockers(facts, lifecycle);
   // Each blocker's button goes where it is fixed — only for someone allowed to fix it there.
   const [canManageDeliveries, canSeeStock] = await Promise.all([
     hasAnyPermission(user, "deliveries.manage"),
@@ -623,8 +627,8 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
                     detail={`${finance.vendor.name}: ${financeStatusShort(finance.status)} since ${formatDate(finance.statusAt)}${financeBlocksDelivery(finance.status) ? " — delivery can be booked once it's approved" : ""}`}
                   />
                 )}
-                <ReadinessRow done={stockReady} label="Stock allocated" detail={stockReady ? stock.map((item) => item.stockNumber ?? item.product.name).join(", ") : "No physical unit assigned"} />
-                <ReadinessRow done={pdiReady} label="PDI complete" detail={stockReady ? (pdiReady ? "Allocated stock ready for delivery" : "Workshop preparation still outstanding") : "Requires stock allocation first"} />
+                {hasStep("stock") && <ReadinessRow done={stockReady} label={`${lifecycle.labels.stock} allocated`} detail={stockReady ? stock.map((item) => item.stockNumber ?? item.product.name).join(", ") : "No physical unit assigned"} />}
+                {hasStep("pdi") && <ReadinessRow done={pdiReady} label={`${lifecycle.labels.pdi} complete`} detail={stockReady ? (pdiReady ? "Allocated stock ready for delivery" : "Workshop preparation still outstanding") : "Requires stock allocation first"} />}
                 <ReadinessRow done={deliveryBooked} label="Delivery booked" detail={deliveryBooked ? formatDateTime(quote.deliveryScheduledFor) : "No delivery date scheduled"} />
               </div>
               {quote.status === "accepted" && <Link href="/deliveries" className="btn-primary btn-sm mt-4 w-full"><Truck className="size-4" />Open fulfilment</Link>}

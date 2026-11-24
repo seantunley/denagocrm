@@ -10,8 +10,9 @@ const page = readFileSync("src/app/(app)/deals/[id]/page.tsx", "utf8");
 const panel = readFileSync("src/components/deals/DealNextActions.tsx", "utf8");
 
 test("the journey, the step it is on and its blockers come from the shared rules, not a second copy", () => {
-  assert.match(page, /const journey = dealMilestones\(facts\)/);
-  assert.match(page, /const blockers = dealBlockers\(facts\)/);
+  // With the workspace's lifecycle (Phase 4).
+  assert.match(page, /const journey = dealMilestones\(facts, lifecycle\)/);
+  assert.match(page, /const blockers = dealBlockers\(facts, lifecycle\)/);
   assert.match(page, /financeHolds: finance \? financeBlocksDelivery\(finance\.status\) : false/);
   // The old inline journey is gone.
   assert.doesNotMatch(page, /\{ label: "Deposit", done: Boolean\(quote\.depositPaidAt\) \}/);
