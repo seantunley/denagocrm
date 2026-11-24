@@ -15,6 +15,7 @@ export default function WorkItemMenu({ itemKey, dismissable, fingerprint }: { it
           <SaveForm key={choice.days} action={setWorkDisposition} success="Snoozed" resetOnSuccess={false}>
             <input type="hidden" name="itemKey" value={itemKey} />
             <input type="hidden" name="choice" value={`snooze:${choice.days}`} />
+            <input type="hidden" name="fingerprint" value={fingerprint} />
             <SaveButton className="w-full rounded-md px-2 py-1.5 text-left text-xs hover:bg-muted">Snooze {choice.label.toLowerCase()}</SaveButton>
           </SaveForm>
         ))}

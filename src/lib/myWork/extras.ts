@@ -1,5 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/db";
+import { actingTenantId } from "@/lib/actingTenant";
 import { johannesburgStartOfDay } from "@/lib/activityDay";
 import { getEnabledModuleIds } from "@/lib/modules/enabled";
 import { hasAnyPermission, type PermissionUser } from "@/lib/permissions";
@@ -13,10 +14,15 @@ import type { Disposition } from "./dispositions";
 
 const DAY = 24 * 60 * 60 * 1000;
 
-/** My live snoozes and dismissals (the scoped client keeps them to this workspace). */
+/**
+ * Every read here names the acting workspace (tenantId) rather than relying on
+ * tenant enforcement being on — someone can work in more than one workspace.
+ */
+
+/** My live snoozes and dismissals in this workspace. */
 export async function myDispositions(user: PermissionUser, now: Date): Promise<Disposition[]> {
   return prisma.workDisposition.findMany({
-    where: { userId: user.id, until: { gt: now } },
+    where: { tenantId: await actingTenantId(), userId: user.id, until: { gt: now } },
     select: { itemKey: true, action: true, until: true, fingerprint: true },
   });
 }
@@ -27,15 +33,16 @@ export type DoneItem = { key: string; area: string; title: string; at: Date; hre
 export async function myDoneToday(user: PermissionUser, now: Date): Promise<DoneItem[]> {
   const since = johannesburgStartOfDay(now);
   const modules = await getEnabledModuleIds();
+  const tenantId = await actingTenantId();
   const [activities, cases, jobs] = await Promise.all([
     (await hasAnyPermission(user, "activities.view", "activities.manage"))
-      ? prisma.activity.findMany({ where: { assignedToId: user.id, status: "done", doneAt: { gte: since } }, select: { id: true, summary: true, doneAt: true, leadId: true } })
+      ? prisma.activity.findMany({ where: { tenantId, assignedToId: user.id, status: "done", doneAt: { gte: since } }, select: { id: true, summary: true, doneAt: true, leadId: true } })
       : [],
     modules.has("support") && (await hasAnyPermission(user, "cases.view_all", "cases.view_owned"))
-      ? prisma.customerCase.findMany({ where: { assignedToId: user.id, closedAt: { gte: since } }, select: { id: true, number: true, subject: true, closedAt: true } })
+      ? prisma.customerCase.findMany({ where: { tenantId, assignedToId: user.id, closedAt: { gte: since } }, select: { id: true, number: true, subject: true, closedAt: true } })
       : [],
     modules.has("automotive") && (await hasAnyPermission(user, "jobcards.view_all", "jobcards.view_owned"))
-      ? prisma.jobCard.findMany({ where: { technicianId: user.id, completedAt: { gte: since }, deletedAt: null }, select: { id: true, number: true, completedAt: true } })
+      ? prisma.jobCard.findMany({ where: { tenantId, technicianId: user.id, completedAt: { gte: since }, deletedAt: null }, select: { id: true, number: true, completedAt: true } })
       : [],
   ]);
   return [
@@ -46,19 +53,19 @@ export async function myDoneToday(user: PermissionUser, now: Date): Promise<Done
 }
 
 /**
- * How suggestions land (brief §7: "measure … dismissal rates"): over the last 30 days, across the workspace, how
- * often each kind of item was dismissed or snoozed. Owner only, counts only — nobody's customer is named. A high
- * dismissal count for a kind says its rule is noisy.
+ * How suggestions land (brief §7: "measure … dismissal rates"): the items people in this workspace set aside in
+ * the last 30 days, by kind — each item ONCE, by its latest choice (one row per person per item; a later choice
+ * replaces the earlier one). Owner only, counts only — nobody's customer is named. Many dismissals of one kind says
+ * its rule is noisy. The kind comes from the item's saved reason, kept on snoozes and dismissals alike.
  *
- * ponytail: counts the CHOICES people made, not every suggestion shown — a shown-log would be a write per page view.
- * Add one (or sample) if resolution rates per rule are wanted.
+ * ponytail: latest choice per item, not every click and not every suggestion shown — either needs an append-only
+ * log (a write per click / per page view). Add one if per-rule resolution rates are wanted.
  */
 export async function suggestionFeedback(user: PermissionUser, now: Date) {
   if (user.role !== "owner") return null;
   const rows = await prisma.workDisposition.findMany({
-    where: { updatedAt: { gte: new Date(now.getTime() - 30 * DAY) } },
+    where: { tenantId: await actingTenantId(), updatedAt: { gte: new Date(now.getTime() - 30 * DAY) } },
     select: { itemKey: true, action: true, fingerprint: true },
-    take: 5000,
   });
   const out = new Map<string, { kind: string; dismissed: number; snoozed: number }>();
   for (const row of rows) {
@@ -93,16 +100,17 @@ export async function teamWorkload(user: PermissionUser, now: Date): Promise<Tea
   if (user.role !== "owner") return null;
   const start = johannesburgStartOfDay(now);
   const modules = await getEnabledModuleIds();
-  const planned = { status: "planned", availabilityBlock: false } as const;
+  const tenantId = await actingTenantId();
+  const planned = { tenantId, status: "planned", availabilityBlock: false } as const;
   const [staff, overdue, today, cases, jobs] = await Promise.all([
     listActingTenantStaff(),
     prisma.activity.groupBy({ by: ["assignedToId"], where: { ...planned, dueDate: { lt: now } }, _count: { _all: true } }),
     prisma.activity.groupBy({ by: ["assignedToId"], where: { ...planned, dueDate: { gte: now, lt: new Date(start.getTime() + DAY) } }, _count: { _all: true } }),
     modules.has("support")
-      ? prisma.customerCase.groupBy({ by: ["assignedToId"], where: { closedAt: null, status: { in: ["new", "open", "waiting_internal"] } }, _count: { _all: true } })
+      ? prisma.customerCase.groupBy({ by: ["assignedToId"], where: { tenantId, closedAt: null, status: { in: ["new", "open", "waiting_internal"] } }, _count: { _all: true } })
       : [],
     modules.has("automotive")
-      ? prisma.jobCard.groupBy({ by: ["technicianId"], where: { deletedAt: null, status: { notIn: ["collected", "cancelled"] } }, _count: { _all: true } })
+      ? prisma.jobCard.groupBy({ by: ["technicianId"], where: { tenantId, deletedAt: null, status: { notIn: ["collected", "cancelled"] } }, _count: { _all: true } })
       : [],
   ]);
   const tally = (rows: { who: string | null; n: number }[]) => new Map(rows.map((row) => [row.who, row.n]));

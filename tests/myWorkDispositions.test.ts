@@ -68,3 +68,15 @@ test("Team is counts only, for the workspace owner", () => {
   assert.match(extras, /if \(user\.role !== "owner"\) return null;/);
   assert.doesNotMatch(extras.slice(extras.indexOf("export async function teamWorkload")), /findMany/, "no record content, only counts");
 });
+
+test("every My Work extra names the acting workspace; a snooze keeps the item's reason like a dismissal", () => {
+  const extras = readFileSync("src/lib/myWork/extras.ts", "utf8");
+  const reads = extras.match(/prisma\.\w+\.(findMany|groupBy)\(\{ (by: \[[^\]]+\], )?where: \{[^}]*/g) ?? [];
+  assert.equal(reads.length, 7);
+  for (const read of reads) assert.match(read, /where: \{ (tenantId[,:]|\.\.\.planned)/, read);
+  assert.match(extras, /const planned = \{ tenantId, /);
+  assert.match(extras, /workDisposition\.findMany\(\{\s*where: \{ tenantId: await actingTenantId\(\), userId: user\.id/);
+  const action = readFileSync("src/app/actions/myWork.ts", "utf8");
+  assert.match(action, /\{ action: "snoozed", until: snoozeUntil\(days, now\), fingerprint \}/);
+  assert.match(readFileSync("src/components/WorkItemMenu.tsx", "utf8"), /value=\{`snooze:\$\{choice\.days\}`\} \/>\s*<input type="hidden" name="fingerprint" value=\{fingerprint\} \/>/);
+});

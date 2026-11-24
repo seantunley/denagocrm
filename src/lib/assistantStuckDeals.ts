@@ -1,5 +1,6 @@
 import "server-only";
 import { prisma } from "./db";
+import { actingTenantId } from "./actingTenant";
 import { getAccessibleLeadIds, hasAnyPermission, type PermissionUser } from "./permissions";
 import { stuckLookup } from "./assistantStuckLookup";
 import { overLimit } from "./assistantStuck";
@@ -66,10 +67,11 @@ export async function myStuckDeals(user: PermissionUser, now = new Date(), limit
   if (!(await hasAnyPermission(user, "leads.view_all", "leads.view_owned"))) return [];
   const ids = await getAccessibleLeadIds(user);
   if (ids !== null && ids.length === 0) return [];
+  // Every open deal of mine is scored — no row cap — so the most stuck can never sit past a cut-off (review of #1233).
+  // Only my own open deals, four small columns each.
   const open = await prisma.lead.findMany({
-    where: { deletedAt: null, status: "open", assignedToId: user.id, ...(ids === null ? {} : { id: { in: ids } }) },
+    where: { tenantId: await actingTenantId(), deletedAt: null, status: "open", assignedToId: user.id, ...(ids === null ? {} : { id: { in: ids } }) },
     select: { id: true, name: true, stageEnteredAt: true, stage: { select: { name: true, staleAfterDays: true } } },
-    take: 500,
   });
   const worst = open
     .map((lead) => ({ ...lead, over: overLimit(lead.stageEnteredAt, lead.stage.staleAfterDays, now) }))

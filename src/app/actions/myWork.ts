@@ -25,6 +25,9 @@ export async function setWorkDisposition(formData: FormData) {
       const where = { tenantId_userId_itemKey: { tenantId, userId: user.id, itemKey: item.key } };
       const now = new Date();
       const choice = String(formData.get("choice") ?? "");
+      // The item's reason, numbers taken out (rules.fingerprintOf). Kept on snoozes too, so the owner's
+      // "how suggestions land" counts know which rule an item came from. It only ever affects the caller's own row.
+      const fingerprint = String(formData.get("fingerprint") ?? "").slice(0, 500) || null;
 
       if (choice === "restore") {
         await prisma.workDisposition.deleteMany({ where: { tenantId, userId: user.id, itemKey: item.key } });
@@ -34,7 +37,6 @@ export async function setWorkDisposition(formData: FormData) {
       if (choice === "dismiss") {
         // A task is done on its record, never dismissed (brief §6).
         if (!DISMISSABLE_SOURCES.has(item.type)) return { error: "A task leaves the list when it is done on its record — it can be snoozed, not dismissed." };
-        const fingerprint = String(formData.get("fingerprint") ?? "").slice(0, 500);
         const data = { action: "dismissed", until: dismissUntil(now), fingerprint };
         await prisma.workDisposition.upsert({ where, update: data, create: { tenantId, userId: user.id, itemKey: item.key, ...data } });
         revalidatePath("/work");
@@ -42,7 +44,7 @@ export async function setWorkDisposition(formData: FormData) {
       }
       const days = Number(choice.replace(/^snooze:/, ""));
       if (!choice.startsWith("snooze:") || !SNOOZE_CHOICES.some((c) => c.days === days)) return { error: "Pick how long to snooze it for." };
-      const data = { action: "snoozed", until: snoozeUntil(days, now), fingerprint: null };
+      const data = { action: "snoozed", until: snoozeUntil(days, now), fingerprint };
       await prisma.workDisposition.upsert({ where, update: data, create: { tenantId, userId: user.id, itemKey: item.key, ...data } });
       revalidatePath("/work");
       return { success: "Snoozed" };

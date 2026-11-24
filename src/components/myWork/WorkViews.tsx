@@ -80,7 +80,7 @@ export function TeamTable({ rows, feedback }: { rows: TeamRow[]; feedback?: { ki
     {feedback && (
       <div>
         <h3 className="text-sm font-semibold">How suggestions land — last 30 days</h3>
-        <p className="mb-2 text-xs text-muted-foreground">How often people dismissed or snoozed each kind of item on their lists. Many dismissals of one kind means its rule is noisy.</p>
+        <p className="mb-2 text-xs text-muted-foreground">Items people set aside, by kind — each item counted once, by its latest choice. Many dismissals of one kind means its rule is noisy.</p>
         {feedback.length === 0 ? (
           <CardEmpty>Nobody has dismissed or snoozed anything yet.</CardEmpty>
         ) : (
