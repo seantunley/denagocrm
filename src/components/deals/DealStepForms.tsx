@@ -14,7 +14,7 @@ import { allocateUnitToDeal } from "@/app/actions/dealSteps";
 export function RecordDepositForm({ quoteId, number, currencyLabel, className, label = "Record deposit" }: {
   quoteId: string;
   number: number;
-  /** "Amount received (R)" — the quote's own currency. */
+  /** The amount field's wording, with the quote's own currency symbol (the page builds it with currencySymbol). */
   currencyLabel: { placeholder: string; aria: string };
   className: string;
   label?: string;
