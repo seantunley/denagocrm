@@ -59,7 +59,10 @@ export function closeRecord() {
  * clicked), else on the link that opened it.
  */
 export function restoreList(lastOpen: string | null) {
-  const row = lastOpen ? document.querySelector<HTMLElement>(`[data-record-open="${CSS.escape(lastOpen)}"] a, a[data-record-open="${CSS.escape(lastOpen)}"]`) : null;
+  // The visible one: a list drawn twice (phone cards + desktop table, one hidden) has two.
+  const row = lastOpen
+    ? [...document.querySelectorAll<HTMLElement>(`[data-record-open="${CSS.escape(lastOpen)}"] a, a[data-record-open="${CSS.escape(lastOpen)}"]`)].find((el) => el.getClientRects().length > 0) ?? null
+    : null;
   const target = row ?? (opener?.isConnected ? opener : null);
   opener = null;
   const y = scrollY;

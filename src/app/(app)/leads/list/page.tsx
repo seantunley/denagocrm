@@ -1,4 +1,7 @@
 import Link from "next/link";
+import { Suspense } from "react";
+import OpenRecordLink from "@/components/records/OpenRecordLink";
+import RecordDrawer from "@/components/records/RecordDrawer";
 import { SaveForm, SaveButton } from "@/components/SaveForm";
 import { ListFilter } from "lucide-react";
 import { subDays } from "date-fns";
@@ -219,7 +222,7 @@ export default async function LeadListPage({ searchParams }: { searchParams: Pro
                 >
                 <MobileDataCard>
                   <MobileDataHeader
-                    title={<Link href={`/leads/${lead.id}`} className="text-primary hover:underline">{lead.name}</Link>}
+                    title={<span data-record-open={`lead:${lead.id}`}><OpenRecordLink record={{ type: "lead", id: lead.id }} className="text-primary hover:underline">{lead.name}</OpenRecordLink></span>}
                     detail={lead.title}
                     aside={<StatusPill tone={lead.status === "won" ? "success" : lead.status === "lost" ? "danger" : "info"}>{lead.status === "open" ? lead.stage.name : lead.status}</StatusPill>}
                   />
@@ -257,9 +260,10 @@ export default async function LeadListPage({ searchParams }: { searchParams: Pro
                       href={`/leads/${lead.id}`}
                       actions={leadListActions(lead.id, canEdit, canManageActivities)}
                     >
-                    <tr tabIndex={0} data-nav-row="" data-nav-href={`/leads/${lead.id}`} data-nav-lead={lead.id} className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary">
+                    <tr tabIndex={0} data-nav-row="" data-nav-href={`/leads/${lead.id}`} data-nav-lead={lead.id} data-record-open={`lead:${lead.id}`} className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary">
                       <td>
-                        <Link href={`/leads/${lead.id}`} className="font-medium text-primary hover:underline">{lead.name}</Link>
+                        {/* A click opens the deal beside the list (W2-03); Ctrl/middle-click and Enter on the row still open the full page. */}
+                        <OpenRecordLink record={{ type: "lead", id: lead.id }} className="font-medium text-primary hover:underline">{lead.name}</OpenRecordLink>
                         <p className="max-w-60 truncate text-xs text-muted-foreground">
                           {lead.title}
                           {lead.contact && lead.title ? " · " : ""}
@@ -301,6 +305,11 @@ export default async function LeadListPage({ searchParams }: { searchParams: Pro
       <CentreCards>
         <SalesCentreCards user={user} now={now} money={moneyFmt} />
       </CentreCards>
+
+      {/* The deal opened from the list (?open=lead:<id>): it re-checks access itself. */}
+      <Suspense fallback={null}>
+        <RecordDrawer />
+      </Suspense>
     </div>
   );
 }

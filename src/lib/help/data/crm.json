@@ -134,6 +134,8 @@
         ["All opportunities", "Every deal you can see, any status."]
       ] },
       { "type": "p", "text": "In any view, a deal the Attention Centre flags shows why under its name. **No next step** in the Next action column means nothing is planned for that deal." },
+      { "type": "h", "text": "Working a deal without leaving the list" },
+      { "type": "p", "text": "Click a deal's name, or **Open deal** under Next best actions, and the deal opens in a panel beside the list. There you can see why it is worth a move, its next steps and what was done lately, then log a call or send a WhatsApp or email, book the next step, mark a step done, move its stage or change its owner — whatever you are allowed to do. After you do something, **Next deal** takes you to the next one in the list; **Previous** and **Next** at the top step through it anyway. Close the panel (or press Back) and you are where you were in the list. A deal you are nurturing says so, and until when. Ctrl-click (Cmd-click on a Mac) a name, or press Enter on a row, to open the full lead page instead." },
       { "type": "h", "text": "Filtering and sorting" },
       { "type": "p", "text": "**Sort** orders the view by newest, oldest, highest value or longest in its stage. **Default order** is best first in My priorities and At risk, and newest first everywhere else. The filters below narrow the view you are in:" },
       { "type": "list", "items": [
