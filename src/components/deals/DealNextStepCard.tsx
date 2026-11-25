@@ -9,13 +9,14 @@ import { completeActivity, rescheduleActivity } from "@/app/actions/activities";
 import { Surface } from "@/components/visual-system";
 
 /**
- * "Your next step" on the deal page: the deal's next planned activity, a warning
- * when its date doesn't make sense (lib/dealStand.ts nextStepWarning), and the
- * moves that fix it here — through the existing activity actions, which check
- * access and the calendar again. Nothing is shown as done until the server says so.
+ * "Next step" on the deal page: the deal's next planned activity and who has it,
+ * a warning when its date doesn't make sense (lib/dealStand.ts nextStepWarning),
+ * and the moves that fix it here — through the existing activity actions, which
+ * check access and the calendar again. Nothing is shown as done until the server
+ * says so. Without Activities access the page passes only when (summary/type/who null).
  */
 export default function DealNextStepCard({ next, warning, tomorrow, canManage, scheduleHref }: {
-  next: { id: string; summary: string; type: string; when: string } | null;
+  next: { id: string; summary: string | null; type: string | null; who: string | null; when: string } | null;
   warning: string | null;
   /** Tomorrow's date (YYYY-MM-DD) in the workspace's time zone. */
   tomorrow: string;
@@ -49,15 +50,17 @@ export default function DealNextStepCard({ next, warning, tomorrow, canManage, s
   }
 
   return (
-    <Surface className="p-5" aria-label="Your next step">
+    <Surface className="p-5" aria-label="Next step">
       <div className="flex items-center gap-2">
         <Clock3 className="size-5 text-primary" aria-hidden="true" />
-        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Your next step</p>
+        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Next step</p>
       </div>
       {next ? (
         <div className="mt-3">
-          <p className="text-sm font-semibold">{next.summary}</p>
-          <p className="mt-1 text-xs text-muted-foreground">{next.type === "todo" ? "Task" : next.type} · {next.when}</p>
+          <p className="text-sm font-semibold">{next.summary ?? `Planned for ${next.when}`}</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {[next.type ? (next.type === "todo" ? "Task" : next.type) : null, next.summary ? next.when : null, next.who ? `with ${next.who}` : null].filter(Boolean).join(" · ")}
+          </p>
         </div>
       ) : (
         <p className="mt-3 text-sm text-muted-foreground">Nothing planned.</p>
@@ -66,13 +69,13 @@ export default function DealNextStepCard({ next, warning, tomorrow, canManage, s
       {error && <p role="alert" className="mt-2 text-xs text-red-400">{error}</p>}
       <div className="mt-4 flex flex-wrap gap-2">
         {next && canManage && warning && (
-          <button type="button" className="btn-primary btn-sm" onClick={() => run("move")} disabled={pending !== null}>
+          <button type="button" className="btn-primary btn-sm" onClick={() => run("move")} disabled={pending !== null} title={pending !== null ? "Saving the last change…" : undefined}>
             {pending === "move" ? "Moving…" : "Move to tomorrow 09:00"}
           </button>
         )}
         {scheduleHref && <Link href={scheduleHref} className="btn-secondary btn-sm">{next ? "Reschedule" : "Book the next step"}</Link>}
         {next && canManage && (
-          <button type="button" className="btn-secondary btn-sm" onClick={() => run("done")} disabled={pending !== null}>
+          <button type="button" className="btn-secondary btn-sm" onClick={() => run("done")} disabled={pending !== null} title={pending !== null ? "Saving the last change…" : undefined}>
             {pending === "done" ? "Working…" : "Mark done"}
           </button>
         )}

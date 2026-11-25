@@ -54,7 +54,8 @@ test("a lead's conversations, activities and source are shown only to someone wh
   assert.match(page, /quote\.lead && \(await hasAnyPermission\(user, "leads\.view_all", "leads\.view_owned"\)\) && \(await canAccessLead\(user, quote\.lead\.id\)\)/);
   // Everything lead-owned reads the gated `lead`, never `quote.lead` directly.
   assert.match(page, /\.\.\.lead\?\.communications\.map/);
-  assert.match(page, /lead\?\.activities\.find/);
+  // The next step is read for the gated lead only.
+  assert.match(page, /const nextActivity = lead\s*\? await prisma\.activity\.findFirst/);
   assert.doesNotMatch(page, /quote\.lead\?\.(communications|activities|source|email|phone)/);
   assert.doesNotMatch(page, /quote\.leadId &&/, "no link into a lead the viewer cannot open");
 });

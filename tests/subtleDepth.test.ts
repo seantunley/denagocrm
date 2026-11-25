@@ -1,7 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { tiltFromPointer } from "../src/lib/pointerTilt";
 
 const read = (path: string) => readFileSync(path, "utf8");
 const code = (path: string) => read(path).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
@@ -18,35 +17,18 @@ const utility = (name: string) => {
   throw new Error(`${name} never closes`);
 };
 
-const rect = { left: 100, top: 50, width: 200, height: 100 };
-
-test("the photo turns toward the pointer, at most the given degrees at the edge", () => {
-  assert.deepEqual(tiltFromPointer(rect, 200, 100, 3), { x: 0, y: 0 });
-  assert.deepEqual(tiltFromPointer(rect, 300, 50, 3), { x: 3, y: 3 });
-  assert.deepEqual(tiltFromPointer(rect, 100, 150, 3), { x: -3, y: -3 });
-  assert.deepEqual(tiltFromPointer(rect, 250, 75, 4), { x: 2, y: 2 });
-});
-
-test("a pointer outside the panel, an empty panel, or no allowance never turns it further", () => {
-  assert.deepEqual(tiltFromPointer(rect, 9999, -9999, 3), { x: 3, y: 3 });
-  assert.deepEqual(tiltFromPointer({ ...rect, width: 0 }, 200, 100, 3), { x: 0, y: 0 });
-  assert.deepEqual(tiltFromPointer(rect, 300, 50, 0), { x: 0, y: 0 });
-  assert.ok(!Object.is(tiltFromPointer(rect, 200, 100, 3).x, -0), "no negative zero in a CSS value");
-});
-
 test("the depth stylesheet is loaded by the main stylesheet, after Tailwind", () => {
   const globals = read("src/app/globals.css");
   assert.ok(globals.indexOf('@import "./depth.css";') > globals.indexOf('@import "tailwindcss";'));
 });
 
-test("nothing moves with reduced motion: the press, the hover lift, the tilt and the drift are all behind the check", () => {
+test("nothing moves with reduced motion: the press, the hover lift and the drift are all behind the check", () => {
   for (const name of ["depth-press", "depth-primary"]) {
     const body = utility(name);
     const moving = body.indexOf("transform:");
     assert.ok(moving > 0, `${name} moves`);
     assert.ok(body.lastIndexOf("prefers-reduced-motion: no-preference", moving) > 0, `${name} moves only with motion allowed`);
   }
-  assert.match(utility("depth-tilt"), /@media \(hover: hover\) and \(pointer: fine\) and \(prefers-reduced-motion: no-preference\) \{[\s\S]*transform: perspective/);
   assert.match(utility("depth-plane"), /@media \(prefers-reduced-motion: no-preference\) \{\s*animation: depth-drift/);
 });
 
@@ -99,13 +81,16 @@ test("a held card lifts and the place it will land waits as a well", () => {
   assert.match(canvas, /border-dashed border-primary bg-primary\/10 depth-well/);
 });
 
-test("the vehicle photo tilts only for a mouse, from the whole panel", () => {
-  const tilt = code("src/components/PointerTilt.tsx");
-  assert.match(tilt, /if \(event\.pointerType !== "mouse"/);
-  assert.match(tilt, /onPointerLeave=\{\(\) => set\("0deg", "0deg"\)\}/);
+test("the deal page's vehicle photo is a still, labelled thumbnail with a fallback (no tilting hero)", () => {
   const deal = code("src/app/(app)/deals/[id]/page.tsx");
-  assert.match(deal, /<img src=\{vehicleImage\} alt=\{vehicleName\} data-tilt-target/);
-  assert.match(deal, /<PointerTilt className="relative overflow-hidden/);
+  // A fixed small box that crops the photo, so a tall or wide picture can't push the page about.
+  assert.match(deal, /<div className="grid h-20 w-28 shrink-0 place-items-center overflow-hidden rounded-xl/);
+  assert.match(deal, /<img src=\{vehicleImage\} alt=\{vehicleName\} className="size-full object-cover" \/>/);
+  // No photo: an icon that a screen reader skips, not an empty box.
+  assert.match(deal, /<CarFront className="size-10" strokeWidth=\{1\.5\} aria-hidden="true" \/>/);
+  // The tilt went with the hero: nothing left that moves the photo.
+  assert.doesNotMatch(deal, /PointerTilt|data-tilt-target|depth-tilt/);
+  assert.doesNotMatch(code("src/app/depth.css"), /depth-tilt|--tilt-x/);
 });
 
 test("a picked-up card tilts and grows only when motion is allowed; the lift's shadow stays for everyone", () => {

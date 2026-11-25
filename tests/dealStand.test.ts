@@ -68,6 +68,28 @@ test("finance holding delivery is the headline; a finished deal says ready; deli
   assert.deepEqual(done.headline, { text: "Delivered 2026-12-01", tone: "success", detail: null });
 });
 
+test("declined and cancelled deals are over: no step is now or next, and nothing to chase or do", () => {
+  for (const status of ["declined", "cancelled"]) {
+    const s = stand({}, { status });
+    assert.equal(states(s), "quote:done accepted:later deposit:skipped stock:later pdi:later delivery:later", status);
+    assert.equal(s.steps.every((step) => step.action === null && step.who === null), true, status);
+    assert.deepEqual(s.holds, []);
+    assert.match(s.headline.text, status === "declined" ? /^Declined/ : /^Cancelled/);
+  }
+  // A sent and an accepted deal still work.
+  assert.equal(stand({}).steps[1].action, "accept");
+  assert.equal(stand({ accepted: true }).steps.find((step) => step.state === "now")!.action, "stock");
+});
+
+test("finance holding an accepted deal is on the panel as a hold with its own button, beside the steps", () => {
+  const held = stand({ accepted: true, stock: [{ pdiStatus: "passed" }], deliveryBooked: true, financeHolds: true });
+  assert.deepEqual(held.holds, [{ key: "finance", label: "Finance", detail: "Not approved yet — delivery waits for it", who: "Finance house", action: "finance" }]);
+  assert.equal(held.steps.find((step) => step.key === "delivery")!.state, "now", "the steps still say where it is");
+  assert.deepEqual(stand({ accepted: true }).holds, [], "no hold when finance is fine");
+  assert.deepEqual(stand({ financeHolds: true }).holds, [], "not before acceptance");
+  assert.deepEqual(stand({ accepted: true, delivered: true, financeHolds: true }).holds, [], "not once delivered");
+});
+
 test("the next-step warning: none planned, overdue, or after the quote expires while unaccepted", () => {
   const now = new Date("2026-11-24T10:00:00Z");
   const w = (over: Partial<Parameters<typeof nextStepWarning>[0]>) =>

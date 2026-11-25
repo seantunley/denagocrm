@@ -16,7 +16,7 @@ test("where the deal stands comes from the shared rules, once — not three copi
   assert.match(page, /const journey = dealMilestones\(facts, lifecycle\)/);
   assert.match(page, /const stand = dealStand\(\{\s*journey,/);
   assert.match(page, /financeHolds: finance \? financeBlocksDelivery\(finance\.status\) : false/);
-  assert.match(page, /<DealStandsPanel steps=\{stand\.steps\} progress=\{progress\} buttons=\{stepButtons\} \/>/);
+  assert.match(page, /<DealStandsPanel steps=\{stand\.steps\} holds=\{stand\.holds\} progress=\{progress\} buttons=\{stepButtons\} closed=\{closed\} \/>/);
   // The headline is the same account, not the raw quote status ("sent" while the strip said "Accepted").
   assert.match(page, /status=\{<StatusPill tone=\{stand\.headline\.tone\}>\{stand\.headline\.text\}<\/StatusPill>\}/);
   // The journey strip, "What is in the way" and "Ready to deliver?" are gone.
@@ -64,7 +64,37 @@ test("the next step card warns when its date doesn't make sense and fixes it thr
   assert.match(card, /await completeActivity\(next\.id, new FormData\(\)\)/);
   // Shown done only once the server said so.
   assert.match(card, /if \(!result\.ok\) return setError/);
-  assert.match(page, /canManage=\{canManageActivities\}/);
+  assert.match(page, /canManage=\{canViewActivities && canManageActivities\}/);
+});
+
+test("the next step is the deal's: its own planned-only, tenant-named read; what it says needs Activities access", () => {
+  // Not a capped include of every activity, where 20 done ones would hide a planned one.
+  assert.doesNotMatch(page, /activities: \{ orderBy: \{ dueDate: "asc" \}, take: 20 \}/);
+  assert.match(page, /prisma\.activity\.findFirst\(\{\s*where: \{ tenantId, leadId: lead\.id, status: "planned", availabilityBlock: false \},\s*orderBy: \[\{ dueDate: "asc" \}, \{ id: "asc" \}\]/);
+  // Whoever it is assigned to, named — not passed off as the viewer's.
+  assert.match(page, /who: canViewActivities \? \(nextActivity\.assignedToId === user\.id \? "You" : nextActivity\.assignedTo\.name\) : null/);
+  // Without Activities access: only when, as the page always showed; no summary, type, buttons or schedule link.
+  assert.match(page, /summary: canViewActivities \? nextActivity\.summary : null/);
+  assert.match(page, /type: canViewActivities \? nextActivity\.type : null/);
+  assert.match(page, /hasAnyPermission\(user, "activities\.view", "activities\.manage"\)/);
+  assert.match(page, /scheduleHref=\{canManageActivities \? `\/leads\/\$\{lead\.id\}\?tab=activities&schedule=1` : null\}/);
+  const card = readFileSync("src/components/deals/DealNextStepCard.tsx", "utf8");
+  assert.match(card, /\{next\.summary \?\? `Planned for \$\{next\.when\}`\}/);
+  assert.doesNotMatch(card, /Your next step/);
+});
+
+test("a declined or cancelled deal has no main button, nothing to chase and no next-step card", () => {
+  assert.match(page, /const primaryAction = closed\s*\? null/);
+  assert.match(page, /const nextStepCard = lead && !closed \?/);
+  assert.match(page, /closed=\{closed\}/);
+  assert.match(panel, /this deal is closed/);
+});
+
+test("a finance hold is on the panel with its button, and is the main button while it holds", () => {
+  assert.match(page, /holds=\{stand\.holds\}/);
+  assert.match(page, /: hold && stepLinks\[hold\.action\]/);
+  assert.match(panel, /\{buttons\[hold\.action\]\}/);
+  assert.match(panel, /On hold: \{hold\.label\}/);
 });
 
 test("money on the page: total, paid and owed in the deal's own currency, from real payments only", () => {

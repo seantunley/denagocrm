@@ -126,7 +126,6 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
         include: {
           product: true,
           assignedTo: true,
-          activities: { orderBy: { dueDate: "asc" }, take: 20 },
           communications: {
             include: { user: true },
             orderBy: { occurredAt: "desc" },
@@ -251,7 +250,20 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
     ? storedFileSrc(showcaseImageRefFor(vehicleProduct, vehicleColour))
     : null;
   const vehicleName = vehicleProduct?.name ?? vehicleLine?.description ?? quote.lead?.title ?? "Vehicle not selected";
-  const nextActivity = lead?.activities.find((item) => item.status === "planned") ?? null;
+  // THE DEAL'S next step: the lead's earliest planned activity, whoever it is assigned to (the card names them).
+  // Its own read, tenant-named and planned-only, so done ones can't crowd it out. What it says and
+  // its buttons need Activities access; without it the card shows only when, as the page always did.
+  const [canViewActivities, canManageActivities] = await Promise.all([
+    hasAnyPermission(user, "activities.view", "activities.manage"),
+    hasPermission(user, "activities.manage"),
+  ]);
+  const nextActivity = lead
+    ? await prisma.activity.findFirst({
+        where: { tenantId, leadId: lead.id, status: "planned", availabilityBlock: false },
+        orderBy: [{ dueDate: "asc" }, { id: "asc" }],
+        select: { id: true, summary: true, type: true, dueDate: true, assignedToId: true, assignedTo: { select: { name: true } } },
+      })
+    : null;
   const accepted = quote.status === "accepted" || Boolean(quote.signedAt);
   const deliveryBooked = Boolean(quote.deliveryScheduledFor);
   const delivered = Boolean(quote.deliveredAt);
@@ -273,11 +285,10 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
   const ready = readinessLabels(lifecycle);
   const progress = dealProgress(journey);
   // Each step's button goes where it is done — only for someone allowed to do it there.
-  const [canManageDeliveries, canSeeStock, canChangeStatus, canManageActivities] = await Promise.all([
+  const [canManageDeliveries, canSeeStock, canChangeStatus] = await Promise.all([
     hasAnyPermission(user, "deliveries.manage"),
     hasAnyPermission(user, "stock.view", "stock.manage"),
     hasPermission(user, "quotes.change_status"),
-    hasPermission(user, "activities.manage"),
   ]);
   const regional = await getRegionalSettings();
   const date = (d: Date) => formatDate(d, regional);
@@ -316,32 +327,49 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
     Object.entries(stepLinks).map(([key, link]) => [key, <Link key={key} href={link!.href} className="btn-secondary btn-sm">{link!.label}</Link>]),
   );
   if (lead) stepButtons.accept = chase("btn-primary btn-sm", "Chase");
-  // The header's main button: whatever the step the deal is on needs, else editing the quote.
-  const primaryAction =
-    quote.status === "draft"
+  // A declined or cancelled deal is over: no main button, nothing to chase (dealStand gives it no "now" step).
+  const closed = quote.status === "declined" || quote.status === "cancelled";
+  const hold = stand.holds[0] ?? null;
+  // The header's main button: what holds the deal up, else what the step it is on needs, else editing the quote.
+  const primaryAction = closed
+    ? null
+    : quote.status === "draft"
       ? <Link href={`/quotes?edit=${quote.id}`} className="btn-primary">Finish and send the quote</Link>
-      : nowStep?.action === "accept" && lead
-        ? chase("btn-primary", "Chase the customer")
-        : nowStep?.action && stepLinks[nowStep.action]
-          ? <Link href={stepLinks[nowStep.action]!.href} className="btn-primary">{stepLinks[nowStep.action]!.label}</Link>
-          : null;
+      : hold && stepLinks[hold.action]
+        ? <Link href={stepLinks[hold.action]!.href} className="btn-primary">{stepLinks[hold.action]!.label}</Link>
+        : nowStep?.action === "accept" && lead
+          ? chase("btn-primary", "Chase the customer")
+          : nowStep?.action && stepLinks[nowStep.action]
+            ? <Link href={stepLinks[nowStep.action]!.href} className="btn-primary">{stepLinks[nowStep.action]!.label}</Link>
+            : null;
   const warning = nextStepWarning({
     nextDue: nextActivity?.dueDate ?? null,
     validUntil: quote.validUntil,
     accepted,
     delivered,
-    closed: quote.status === "declined" || quote.status === "cancelled",
+    closed,
     now: requestNow,
     date,
   });
   const tomorrow = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(requestNow.getTime() + 24 * 60 * 60 * 1000));
-  const nextStepCard = lead ? (
+  const nextStepCard = lead && !closed ? (
     <DealNextStepCard
-      next={nextActivity ? { id: nextActivity.id, summary: nextActivity.summary, type: nextActivity.type, when: formatDateTime(nextActivity.dueDate) } : null}
+      next={
+        nextActivity
+          ? {
+              id: nextActivity.id,
+              // What it is and who has it: Activities access only. Without it, just when (the page always showed that).
+              summary: canViewActivities ? nextActivity.summary : null,
+              type: canViewActivities ? nextActivity.type : null,
+              who: canViewActivities ? (nextActivity.assignedToId === user.id ? "You" : nextActivity.assignedTo.name) : null,
+              when: formatDateTime(nextActivity.dueDate),
+            }
+          : null
+      }
       warning={warning}
       tomorrow={tomorrow}
-      canManage={canManageActivities}
-      scheduleHref={`/leads/${lead.id}?tab=activities&schedule=1`}
+      canManage={canViewActivities && canManageActivities}
+      scheduleHref={canManageActivities ? `/leads/${lead.id}?tab=activities&schedule=1` : null}
     />
   ) : null;
 
@@ -426,7 +454,7 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
           </div>
         </Surface>
 
-        <DealStandsPanel steps={stand.steps} progress={progress} buttons={stepButtons} />
+        <DealStandsPanel steps={stand.steps} holds={stand.holds} progress={progress} buttons={stepButtons} closed={closed} />
         {/* On a phone or narrow screen the next step comes straight after where the deal stands; on a wide one it sits in the side column. */}
         {nextStepCard && <div className="xl:hidden">{nextStepCard}</div>}
 

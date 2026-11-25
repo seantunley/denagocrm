@@ -51,20 +51,34 @@ export type StandHeadline = { text: string; tone: "success" | "warning" | "dange
 
 const WHO: Partial<Record<MilestoneKey, string>> = { accepted: "Customer", deposit: "Customer", stock: "Sales", pdi: "Workshop", delivery: "Deliveries" };
 
-export function dealStand(facts: StandFacts): { steps: StandStep[]; headline: StandHeadline } {
+/**
+ * Something holding the deal up that is not a step of its own — today only
+ * finance. Shown on the panel above the steps, with its own button.
+ */
+export type StandHold = { key: "finance"; label: string; detail: string; who: string; action: BlockerKey };
+
+export function dealStand(facts: StandFacts): { steps: StandStep[]; headline: StandHeadline; holds: StandHold[] } {
   const draft = facts.status === "draft";
+  // A declined or cancelled deal is over: no step is "now", nothing to chase or do.
+  const closed = !facts.delivered && (facts.status === "declined" || facts.status === "cancelled");
   const open = facts.journey.filter((step) => !step.done && !step.skipped);
   // A draft has not reached the customer: the quote itself is the step it is on.
-  const nowKey: MilestoneKey | null = draft ? "quote" : open[0]?.key ?? null;
-  const nextKey: MilestoneKey | null = draft ? (open[0]?.key ?? null) : open[1]?.key ?? null;
+  const nowKey: MilestoneKey | null = closed ? null : draft ? "quote" : open[0]?.key ?? null;
+  const nextKey: MilestoneKey | null = closed ? null : draft ? (open[0]?.key ?? null) : open[1]?.key ?? null;
 
   const steps = facts.journey.map((step): StandStep => {
     const state: StepState =
       step.key === nowKey ? "now" : step.skipped ? "skipped" : step.done && !(draft && step.key === "quote") ? "done" : step.key === nextKey ? "next" : "later";
-    return { key: step.key, label: step.label, state, ...detailOf(step.key, state, facts) };
+    const detail = { key: step.key, label: step.label, state, ...detailOf(step.key, state, facts) };
+    return closed && state !== "done" ? { ...detail, who: null, action: null } : detail;
   });
 
-  return { steps, headline: headlineOf(facts, steps) };
+  const holds: StandHold[] =
+    facts.financeHolds && facts.accepted && !facts.delivered && !closed
+      ? [{ key: "finance", label: "Finance", detail: "Not approved yet — delivery waits for it", who: "Finance house", action: "finance" }]
+      : [];
+
+  return { steps, headline: headlineOf(facts, steps), holds };
 }
 
 function detailOf(key: MilestoneKey, state: StepState, f: StandFacts): { detail: string; who: string | null; action: BlockerKey | null } {

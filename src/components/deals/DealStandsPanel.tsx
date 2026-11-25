@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
-import { Check, Minus } from "lucide-react";
+import { AlertTriangle, Check, Minus } from "lucide-react";
 import type { BlockerKey } from "@/lib/dealMilestones";
-import type { StandStep, StepState } from "@/lib/dealStand";
+import type { StandHold, StandStep, StepState } from "@/lib/dealStand";
 import { Surface } from "@/components/visual-system";
 import { cn } from "@/lib/utils";
 
@@ -29,11 +29,15 @@ const CARD: Record<StepState, string> = {
  * same thing three times. A step that does not apply says "Not needed" and counts
  * in neither side of "N of M".
  */
-export default function DealStandsPanel({ steps, progress, buttons }: {
+export default function DealStandsPanel({ steps, holds, progress, buttons, closed }: {
   steps: StandStep[];
+  /** What holds the deal up outside the steps (finance), shown above them. */
+  holds: StandHold[];
   progress: { done: number; of: number };
   /** The button for each step's action, already permission-checked by the page. Missing = no button. */
   buttons: Partial<Record<BlockerKey, ReactNode>>;
+  /** Declined or cancelled: no step is current and nothing is left to do. */
+  closed: boolean;
 }) {
   const nowIndex = steps.findIndex((step) => step.state === "now");
   const skipped = steps.filter((step) => step.state === "skipped").map((step) => step.label.toLowerCase());
@@ -44,7 +48,11 @@ export default function DealStandsPanel({ steps, progress, buttons }: {
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Where this deal stands</p>
           <h2 className="mt-1 text-base font-semibold">
-            {nowIndex === -1 ? `All ${progress.of} steps done` : `${progress.done} of ${progress.of} steps done · now: ${steps[nowIndex].label}`}
+            {closed
+              ? `${progress.done} of ${progress.of} steps done · this deal is closed`
+              : nowIndex === -1
+                ? `All ${progress.of} steps done`
+                : `${progress.done} of ${progress.of} steps done · now: ${steps[nowIndex].label}`}
           </h2>
         </div>
         {skipped.length > 0 && <p className="text-xs text-muted-foreground">Not needed on this deal, so not counted: {skipped.join(", ")}</p>}
@@ -52,6 +60,19 @@ export default function DealStandsPanel({ steps, progress, buttons }: {
       <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-muted" role="progressbar" aria-valuemin={0} aria-valuemax={progress.of} aria-valuenow={progress.done} aria-label="Steps done">
         <div className="h-full rounded-full bg-primary" style={{ width: `${pct}%` }} />
       </div>
+      {holds.map((hold) => (
+        <div key={hold.key} role="status" className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-400/40 bg-amber-400/10 p-3.5">
+          <div>
+            <p className="text-sm font-semibold">
+              <AlertTriangle className="mr-1.5 inline size-4 align-[-3px] text-amber-300" aria-hidden="true" />
+              On hold: {hold.label}
+            </p>
+            <p className="mt-0.5 text-xs leading-5 text-foreground/85">{hold.detail}</p>
+            <p className="text-[11px] text-muted-foreground">Waiting on: {hold.who}</p>
+          </div>
+          {buttons[hold.action]}
+        </div>
+      ))}
       <ol className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
         {steps.map((step) => {
           const button = (step.state === "now" || step.state === "next") && step.action ? buttons[step.action] : null;
