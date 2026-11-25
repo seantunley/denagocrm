@@ -67,7 +67,7 @@ export const dealWorkspaceArticles: HelpArticle[] = [
       { type: "h", text: "Moving a deal along" },
       { type: "steps", items: [
         "Open the deal. The line at the top and the highlighted step in **Where this deal stands** say what it is waiting for.",
-        "Press the main button. **Chase the customer** opens the deal in a side panel to log a call or send a WhatsApp or email and book the next step — nothing is sent until you press **Send**. The other steps' buttons open the screen where that step is done (Deliveries, Stock, Finance).",
+        "Press the main button. **Chase the customer** opens the deal in a side panel to log a call or send a WhatsApp or email and book the next step — nothing is sent until you press **Send**. **Record deposit**, **Book delivery** and **Allocate** open the same form as the Deliveries board or the stock page, right here; after you save, the steps update. Where that form can't be used yet — the deal isn't invoiced, its payments come from Xero, finance is holding delivery, or no unit of the quoted vehicle is in stock — the button opens the screen where the step is done instead.",
         "If the customer accepted in person or by email, press **Mark accepted** and confirm. That marks the lead won and puts the deal on Deliveries.",
         "Check **Next step** on the right; move it if the page warns that its date doesn't make sense.",
       ] },

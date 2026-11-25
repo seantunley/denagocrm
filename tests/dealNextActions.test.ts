@@ -97,6 +97,28 @@ test("a finance hold is on the panel with its button, and is the main button whi
   assert.match(panel, /On hold: \{hold\.label\}/);
 });
 
+test("W2-05: deposit, delivery and stock are done on the deal page through the board's own actions, where their rules allow", () => {
+  const forms = readFileSync("src/components/deals/DealStepForms.tsx", "utf8");
+  // The very actions the Deliveries board and the stock page use — nothing new writes a deal.
+  assert.match(forms, /action=\{markDepositPaid\.bind\(null, quoteId\)\}/);
+  assert.match(forms, /action=\{scheduleDelivery\.bind\(null, quoteId\)\}/);
+  assert.match(forms, /action=\{allocateUnitToDeal\.bind\(null, quoteId\)\}/);
+  assert.match(forms, /name="file" required accept=".pdf,image\/\*"/, "a deposit needs its proof, as on the board");
+  const allocate = readFileSync("src/app/actions/dealSteps.ts", "utf8");
+  assert.match(allocate, /form\.set\("quoteId", quoteId\);\s*return allocateUnit\(unitId, form\);/);
+  // A form only where the action would accept it; otherwise the link to where it is done.
+  assert.match(page, /const depositHere = automotiveOn && canManageDeliveries && invoice && Boolean\(quote\.invoicedAt\) && !quote\.depositPaidAt && !paymentsFromXeroHere;/);
+  assert.match(page, /const deliveryHere = automotiveOn && canManageDeliveries && Boolean\(quote\.depositPaidAt\) && !quote\.deliveryScheduledFor && !delivered && !facts\.financeHolds;/);
+  assert.match(page, /canManageStock && quote\.status === "accepted" && !delivered && quotedProductIds\.length > 0/);
+  assert.match(page, /hasPermission\(user, "stock\.manage"\)/);
+  // Units: this quote's products only, available or reserved for THIS lead, in the workspace.
+  assert.match(page, /where: \{\s*tenantId,\s*deletedAt: null,\s*productId: \{ in: quotedProductIds \},\s*OR: \[\{ status: "available" \}, \.\.\.\(quote\.leadId \? \[\{ status: "reserved", reservedForLeadId: quote\.leadId \}\] : \[\]\)\]/);
+  assert.match(page, /const link = stepLinks\[key\];\s*return link \? <Link href=\{link\.href\} className=\{className\}>\{link\.label\}<\/Link> : null;/);
+  // The main button and the panel's buttons are the same controls.
+  assert.match(page, /\? stepControl\(nowStep\.action, "btn-primary"\)/);
+  assert.match(page, /stepControl\(key, "btn-secondary btn-sm"\)/);
+});
+
 test("money on the page: total, paid and owed in the deal's own currency, from real payments only", () => {
   assert.match(page, /const paid = invoice \? receivedCents\(quote, payments\) : 0;/);
   assert.match(page, /\{invoice \? "Owed" : "Owed once accepted"\}/);

@@ -29,6 +29,7 @@ import { financeBlocksDelivery, quoteInPlay } from "@/lib/dealFinanceRules";
 import DealFinancePanel from "@/components/deals/DealFinancePanel";
 import DealStandsPanel from "@/components/deals/DealStandsPanel";
 import DealNextStepCard from "@/components/deals/DealNextStepCard";
+import { AllocateUnitForm, RecordDepositForm, ScheduleDeliveryForm, type AllocatableUnit } from "@/components/deals/DealStepForms";
 import MarkAcceptedButton from "@/components/deals/MarkAcceptedButton";
 import OpenRecordLink from "@/components/records/OpenRecordLink";
 import RecordDrawer from "@/components/records/RecordDrawer";
@@ -36,7 +37,7 @@ import { dealStand, nextStepWarning } from "@/lib/dealStand";
 import { dealMilestones, dealProgress, pdiReady as dealPdiReady, type BlockerKey } from "@/lib/dealMilestones";
 import { getDealLifecycle } from "@/lib/dealLifecycleServer";
 import { readinessLabels } from "@/lib/dealLifecycle";
-import { formatDate, formatDateTime, formatZAR } from "@/lib/format";
+import { currencySymbol, formatDate, formatDateTime, formatZAR } from "@/lib/format";
 import { loadBillToFleet, quoteBillTo } from "@/lib/quoteBillTo";
 import { payableTotalCents } from "@/lib/pricing";
 import { isStatementInvoice, receivedCents } from "@/lib/accountStatement";
@@ -285,11 +286,40 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
   const ready = readinessLabels(lifecycle);
   const progress = dealProgress(journey);
   // Each step's button goes where it is done — only for someone allowed to do it there.
-  const [canManageDeliveries, canSeeStock, canChangeStatus] = await Promise.all([
+  const [canManageDeliveries, canSeeStock, canChangeStatus, canManageStock, automotiveOn] = await Promise.all([
     hasAnyPermission(user, "deliveries.manage"),
     hasAnyPermission(user, "stock.view", "stock.manage"),
     hasPermission(user, "quotes.change_status"),
+    hasPermission(user, "stock.manage"),
+    isModuleEnabled("automotive"),
   ]);
+  // Steps done HERE (W2-05), where the action's own rules allow a form; elsewhere the button links to the board.
+  // Deposit: once invoiced, by hand (Xero-owned payments are recorded in Xero and refreshed on the page).
+  const depositHere = automotiveOn && canManageDeliveries && invoice && Boolean(quote.invoicedAt) && !quote.depositPaidAt && !paymentsFromXeroHere;
+  // Delivery: after the deposit, once, and not while finance holds it.
+  const deliveryHere = automotiveOn && canManageDeliveries && Boolean(quote.depositPaidAt) && !quote.deliveryScheduledFor && !delivered && !facts.financeHolds;
+  // Stock: a unit of a product on this quote (allocateUnit refuses any other), available or already
+  // reserved for this deal's lead — never another deal's reservation. Oldest stock first.
+  const quotedProductIds = [...new Set(quote.items.filter((item) => item.selected && item.productId).map((item) => item.productId!))];
+  const allocatableUnits: AllocatableUnit[] =
+    canManageStock && quote.status === "accepted" && !delivered && quotedProductIds.length > 0
+      ? (
+          await prisma.stockUnit.findMany({
+            where: {
+              tenantId,
+              deletedAt: null,
+              productId: { in: quotedProductIds },
+              OR: [{ status: "available" }, ...(quote.leadId ? [{ status: "reserved", reservedForLeadId: quote.leadId }] : [])],
+            },
+            select: { id: true, stockNumber: true, serial: true, color: true, status: true, product: { select: { name: true } } },
+            orderBy: [{ arrivedAt: "asc" }, { id: "asc" }],
+            take: 100,
+          })
+        ).map((u) => ({
+          id: u.id,
+          label: [u.product.name, u.color, u.stockNumber ?? (u.serial ? `••••${u.serial.slice(-6)}` : null), u.status === "reserved" ? "reserved for this deal" : null].filter(Boolean).join(" · "),
+        }))
+      : [];
   const regional = await getRegionalSettings();
   const date = (d: Date) => formatDate(d, regional);
   // ONE account of where the deal stands (lib/dealStand.ts): the headline, the steps panel and the main button all read it.
@@ -323,8 +353,19 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
   // Chasing the customer happens beside the page, in the record drawer's composer (log a call, WhatsApp, email).
   const chase = (className: string, label: string) =>
     lead ? <OpenRecordLink record={{ type: "lead", id: lead.id }} className={className}>{label}</OpenRecordLink> : null;
+  const moneyHere = withCurrency(regional, quote.currency);
+  /** A step's control: its form on this page when allowed here, else the link to where it is done. */
+  const stepControl = (key: BlockerKey, className: string): ReactNode => {
+    if (key === "deposit" && depositHere) {
+      return <RecordDepositForm quoteId={quote.id} number={quote.number} className={className} currencyLabel={{ placeholder: `Amount received (${currencySymbol(moneyHere)})`, aria: `Deposit amount received in ${moneyHere.currency}` }} />;
+    }
+    if (key === "delivery" && deliveryHere) return <ScheduleDeliveryForm quoteId={quote.id} number={quote.number} className={className} />;
+    if (key === "stock" && allocatableUnits.length > 0) return <AllocateUnitForm quoteId={quote.id} units={allocatableUnits} className={className} />;
+    const link = stepLinks[key];
+    return link ? <Link href={link.href} className={className}>{link.label}</Link> : null;
+  };
   const stepButtons: Partial<Record<BlockerKey, ReactNode>> = Object.fromEntries(
-    Object.entries(stepLinks).map(([key, link]) => [key, <Link key={key} href={link!.href} className="btn-secondary btn-sm">{link!.label}</Link>]),
+    (Object.keys(stepLinks) as BlockerKey[]).map((key) => [key, stepControl(key, "btn-secondary btn-sm")]),
   );
   if (lead) stepButtons.accept = chase("btn-primary btn-sm", "Chase");
   // A declined or cancelled deal is over: no main button, nothing to chase (dealStand gives it no "now" step).
@@ -336,11 +377,11 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
     : quote.status === "draft"
       ? <Link href={`/quotes?edit=${quote.id}`} className="btn-primary">Finish and send the quote</Link>
       : hold && stepLinks[hold.action]
-        ? <Link href={stepLinks[hold.action]!.href} className="btn-primary">{stepLinks[hold.action]!.label}</Link>
+        ? stepControl(hold.action, "btn-primary")
         : nowStep?.action === "accept" && lead
           ? chase("btn-primary", "Chase the customer")
           : nowStep?.action && stepLinks[nowStep.action]
-            ? <Link href={stepLinks[nowStep.action]!.href} className="btn-primary">{stepLinks[nowStep.action]!.label}</Link>
+            ? stepControl(nowStep.action, "btn-primary")
             : null;
   const warning = nextStepWarning({
     nextDue: nextActivity?.dueDate ?? null,
