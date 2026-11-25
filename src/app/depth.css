@@ -130,24 +130,6 @@
   }
 }
 
-/*
- * 8 · The vehicle photo follows a mouse by a few degrees (components/PointerTilt.tsx
- * sets --tilt-x / --tilt-y). Only for a fine pointer that can hover, and never
- * with reduced motion: on a phone, or with motion reduced, the photo is still.
- */
-@utility depth-tilt {
-  & [data-tilt-target] {
-    transform-origin: center;
-  }
-  @media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
-    & [data-tilt-target] {
-      transform: perspective(1100px) rotateX(var(--tilt-x, 0deg)) rotateY(var(--tilt-y, 0deg)) scale(1.04);
-      transition: transform 320ms cubic-bezier(0.2, 0.8, 0.2, 1);
-      will-change: transform;
-    }
-  }
-}
-
 /* 9 · The sign-in screen's background planes (app/login/LoginDepthPlanes.tsx) drift very slowly. */
 @keyframes depth-drift {
   from { transform: translate3d(0, 0, 0) rotate(var(--plane-rotate, 0deg)); }

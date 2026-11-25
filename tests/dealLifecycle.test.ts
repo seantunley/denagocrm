@@ -84,9 +84,12 @@ test("the readiness card speaks the lifecycle: its names, its steps, and 'not ne
     assert.ok(!dealBlockers(facts({ depositCents: 0, depositPaid: false }), lifecycle).some((b) => b.key === "deposit"), key);
   }
   const page = readFileSync("src/app/(app)/deals/[id]/page.tsx", "utf8");
-  assert.match(page, /\{ready\.title\}/);
-  assert.match(page, /skipped=\{depositStep\.skipped\} label=\{ready\.deposit\}/);
-  assert.match(page, /label=\{ready\.delivery\}/);
-  // No fixed vehicle words left on the card.
+  // The deal page tells it once, through the stand panel (W2-05): step names come from the lifecycle's journey,
+  // and "ready" from its readiness words.
+  assert.match(page, /const journey = dealMilestones\(facts, lifecycle\)/);
+  assert.match(page, /readyTitle: ready\.title,/);
+  // No fixed vehicle words left on the page.
   assert.doesNotMatch(page, /Ready to deliver\?|"Agreement accepted"|label="Deposit received"|label="Delivery booked"|No deposit receipt recorded/);
+  // The stand panel shows each step by the lifecycle's own label.
+  assert.match(readFileSync("src/components/deals/DealStandsPanel.tsx", "utf8"), /\{step\.label\}/);
 });

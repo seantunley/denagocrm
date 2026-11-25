@@ -29,9 +29,11 @@ test("deal jacket composes existing records instead of adding a second deal mode
   assert.match(read("src/lib/dealFileData.ts"), /prisma\.signatureRequest\.findMany/);
   // The workspace's own word for a deal (#1003), "Deal" by default.
   assert.match(page, /\{labels\.deal\.one\} timeline/);
-  // The readiness card, in the workspace's own step names (#1231): "Ready for delivery?" by default.
-  assert.match(page, /<h2 className="mt-0\.5 text-base font-semibold">\{ready\.title\}<\/h2>/);
+  // Where the deal stands, in the workspace's own step names (#1231), told once by the stand panel (W2-05);
+  // a finished deal reads "Ready for delivery" (or the lifecycle's own word).
   assert.match(page, /const ready = readinessLabels\(lifecycle\)/);
+  assert.match(page, /readyTitle: ready\.title,/);
+  assert.match(page, /<DealStandsPanel /);
   // No invented payment data: money shown is the deposit recorded on the
   // deliveries board plus real QuotePayment rows from the quote's OWN workspace
   // (customer statements, 2026-10-28) — and no other payment-like model.
@@ -52,7 +54,8 @@ test("a lead's conversations, activities and source are shown only to someone wh
   assert.match(page, /quote\.lead && \(await hasAnyPermission\(user, "leads\.view_all", "leads\.view_owned"\)\) && \(await canAccessLead\(user, quote\.lead\.id\)\)/);
   // Everything lead-owned reads the gated `lead`, never `quote.lead` directly.
   assert.match(page, /\.\.\.lead\?\.communications\.map/);
-  assert.match(page, /lead\?\.activities\.find/);
+  // The next step is read for the gated lead only.
+  assert.match(page, /const nextActivity = lead\s*\? await prisma\.activity\.findFirst/);
   assert.doesNotMatch(page, /quote\.lead\?\.(communications|activities|source|email|phone)/);
   assert.doesNotMatch(page, /quote\.leadId &&/, "no link into a lead the viewer cannot open");
 });
