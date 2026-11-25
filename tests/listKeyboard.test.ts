@@ -64,7 +64,9 @@ test("the board, the leads list, contacts and quotes opt in; the deal ones name 
   // Contacts' list view is the shared data grid (W2-04): every grid row opts in, with the page's own href.
   assert.match(src("src/components/grid/DataGrid.tsx"), /data-nav-row="" data-nav-href=\{href\}/);
   assert.match(src("src/app/(app)/contacts/page.tsx"), /rowHref=\{\(contact\) => `\/contacts\/\$\{contact\.id\}`\}/);
-  assert.match(src("src/app/(app)/quotes/page.tsx"), /data-nav-row="" data-nav-href=\{`\/quotes\/\$\{quote\.id\}`\} data-nav-lead=\{quote\.leadId \?\? undefined\}/);
+  // The quote register is a grid too (W2-04): the grid row names its lead through `rowLead`.
+  assert.match(src("src/components/grid/DataGrid.tsx"), /data-nav-row="" data-nav-href=\{href\} data-nav-lead=\{rowLead\?\.\(row\) \?\? undefined\}/);
+  assert.match(src("src/app/(app)/quotes/page.tsx"), /rowHref=\{\(quote\) => `\/quotes\/\$\{quote\.id\}`\}\s+rowLabel=\{[\s\S]*?\}\s+rowLead=\{\(quote\) => quote\.leadId\}/);
   assert.match(src("src/app/(app)/layout.tsx"), /<ListKeyboard \/>/);
 });
 

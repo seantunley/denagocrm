@@ -52,8 +52,12 @@ import {
   MobileTaskList,
   MobileWorkspaceHeader,
 } from "@/components/mobile-workspace";
-import { getRegionalSettings } from "@/lib/settings";
+import { getRegionalSettings, getWorkspaceSetting } from "@/lib/settings";
 import { formatTotals, totalsByCurrency, withCurrency } from "@/lib/currencyRules";
+import { DataGrid } from "@/components/grid/DataGrid";
+import { actingScopeClass } from "@/lib/actingScope";
+import { gridOrderBy, gridPrefsKey, normalisePrefs, parseSort } from "@/lib/grid/grid";
+import { QUOTE_COLUMNS, QUOTE_DEFAULT_SORT, QUOTE_SORTS, QUOTES_GRID_ID } from "@/lib/grid/quotesGrid";
 
 // "Email quote" (in the editor on this page) renders the PDF in headless Chrome
 // and sends it — the same budget the PDF routes get.
@@ -62,12 +66,20 @@ export const maxDuration = 60;
 export default async function QuotesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ edit?: string; q?: string; status?: string; page?: string }>;
+  searchParams: Promise<{ edit?: string; q?: string; status?: string; page?: string; sort?: string; dir?: string }>;
 }) {
   const user = await requireAnyPermission("quotes.view_all", "quotes.view_owned");
   const dealLabel = (await getRecordLabels()).deal.one;
   const params = await searchParams;
   const { edit, q, status } = params;
+  // The grid's sort and layout only ORDER and PRESENT the rows quoteListFilter chose.
+  const scope = await actingScopeClass();
+  const savedPrefs = scope.mode === "tenant" ? await getWorkspaceSetting(scope.tenantId, gridPrefsKey(QUOTES_GRID_ID, user.id)).catch(() => null) : null;
+  const prefs = normalisePrefs(savedPrefs, QUOTE_COLUMNS);
+  const sort = parseSort(params.sort, params.dir, QUOTE_COLUMNS, QUOTE_DEFAULT_SORT);
+  // Sort links never carry ?edit=: the editor rewrites it in the browser (#696),
+  // so a server-built link would reopen a quote the person had already closed.
+  const { edit: _edit, ...gridParams } = params;
   // RBAC scope + search + status, as one database filter. The export route
   // builds the same one, so the CSV holds exactly what this list shows.
   const { where, all } = await quoteListFilter(user, { q, status });
@@ -93,8 +105,8 @@ export default async function QuotesPage({
   const [quotes, statusCounts, openQuotes, contacts, openLeads, products, quoteDefaults] = await Promise.all([
     prisma.quote.findMany({
       where,
-      // `id` breaks createdAt ties so a row can't appear on two pages.
-      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      // Ends in `id`, so a row can't appear on two pages. Default: newest first.
+      orderBy: gridOrderBy(sort, QUOTE_SORTS),
       include: QUOTE_EDITOR_INCLUDE,
       skip,
       take,
@@ -263,6 +275,7 @@ export default async function QuotesPage({
 
         <WorkspaceToolbar>
           <form action="/quotes" role="search" className="flex flex-col gap-2 lg:flex-row lg:items-center">
+            {params.sort && <><input type="hidden" name="sort" value={sort.column} /><input type="hidden" name="dir" value={sort.dir} /></>}
             <div className="relative min-w-0 flex-1">
               <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input name="q" defaultValue={q ?? ""} placeholder="Search quote, customer or lead" className="h-10 rounded-xl bg-background/50 pl-9" />
@@ -353,60 +366,59 @@ export default async function QuotesPage({
                 <div className="border-b border-border px-5 py-4">
                   <SectionHeading title="Quote register" description={`${total} proposal${total === 1 ? "" : "s"} match this commercial view.`} />
                 </div>
-                <div className="overflow-x-auto">
-                <table className="table-base">
-                  <thead>
-                    <tr>
-                      <th>#</th>
-                      <th>Customer</th>
-                      <th>Lead</th>
-                      <th>Total</th>
-                      <th>Status</th>
-                      <th>Valid until</th>
-                      <th>Created</th>
-                      <th />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {visibleQuotes.map((quote) => {
-                      const total = payableTotalCents(quote);
-                      return (
-                        <RecordContextMenu
-                          key={quote.id}
-                          label={`Quote Q-${quote.number}`}
-                          href={`/quotes/${quote.id}`}
-                          actions={quoteContextActions(quote, dealLabel)}
-                        >
-                        <tr tabIndex={0} data-nav-row="" data-nav-href={`/quotes/${quote.id}`} data-nav-lead={quote.leadId ?? undefined} className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary">
-                          <td>
-                            <QuoteEditorTrigger quoteId={quote.id} className="font-medium text-orange-400 hover:underline">
-                              Q-{quote.number}
-                            </QuoteEditorTrigger>
-                          </td>
-                          <td>
-                            {quote.contact ? <Link href={`/contacts/${quote.contact.id}`} className="text-orange-400 hover:underline">{contactName(quote.contact)}</Link> : quote.lead?.name ?? "—"}
-                          </td>
-                          <td className="max-w-56 truncate">
-                            {quote.lead ? <Link href={`/leads/${quote.lead.id}`} className="text-orange-400 hover:underline">{quote.lead.title}</Link> : "—"}
-                          </td>
-                          <td className="font-medium">{formatZAR(Math.round(total), withCurrency(moneyFmt, quote.currency))}</td>
-                          <td>
-                            <StatusPill tone={quote.status === "accepted" ? "success" : quote.status === "declined" ? "danger" : quote.status === "sent" ? "info" : "neutral"}>
-                              {quote.status}
-                            </StatusPill>
-                          </td>
-                          <td className="text-slate-400">{formatDate(quote.validUntil, quoteDefaults.regional)}</td>
-                          <td className="text-slate-400">{formatDate(quote.createdAt)}{quote.createdBy ? ` · ${quote.createdBy.name}` : ""}</td>
-                          <td className="whitespace-nowrap text-right">
-                            <Link href={`/deals/${quote.id}`} className={`${buttonVariants({ variant: "outline", size: "sm" })} mr-2`}><FolderOpen />Open deal</Link>
-                            <QuoteRowActions quoteId={quote.id} number={quote.number} status={quote.status} signed={Boolean(quote.signedAt)} emailed={Boolean(quote.emailedAt)} canSend={canCancel} canCancel={canCancel} canDuplicate={canDuplicate} deleteAction={deleteQuote.bind(null, quote.id)} canDelete={canDelete} />
-                          </td>
-                        </tr>
-                        </RecordContextMenu>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                <div className="p-3">
+                  <DataGrid
+                    gridId={QUOTES_GRID_ID}
+                    path="/quotes"
+                    params={gridParams}
+                    columns={QUOTE_COLUMNS}
+                    cells={{
+                      number: (quote) => (
+                        <QuoteEditorTrigger quoteId={quote.id} className="font-medium text-orange-400 hover:underline">
+                          Q-{quote.number}
+                        </QuoteEditorTrigger>
+                      ),
+                      customer: (quote) => (
+                        <span className="block truncate">
+                          {quote.contact ? <Link href={`/contacts/${quote.contact.id}`} className="text-orange-400 hover:underline">{contactName(quote.contact)}</Link> : quote.lead?.name ?? "—"}
+                        </span>
+                      ),
+                      lead: (quote) => (
+                        <span className="block truncate">
+                          {quote.lead ? <Link href={`/leads/${quote.lead.id}`} className="text-orange-400 hover:underline">{quote.lead.title}</Link> : "—"}
+                        </span>
+                      ),
+                      // Each quote in its OWN currency; the register never adds them up.
+                      total: (quote) => <span className="font-medium tabular-nums">{formatZAR(Math.round(payableTotalCents(quote)), withCurrency(moneyFmt, quote.currency))}</span>,
+                      status: (quote) => (
+                        <StatusPill tone={quote.status === "accepted" ? "success" : quote.status === "declined" ? "danger" : quote.status === "sent" ? "info" : "neutral"}>
+                          {quote.status}
+                        </StatusPill>
+                      ),
+                      validUntil: (quote) => <span className="text-slate-400">{formatDate(quote.validUntil, quoteDefaults.regional)}</span>,
+                      created: (quote) => <span className="block truncate text-slate-400">{formatDate(quote.createdAt)}{quote.createdBy ? ` · ${quote.createdBy.name}` : ""}</span>,
+                      actions: (quote) => (
+                        <span className="whitespace-nowrap">
+                          <Link href={`/deals/${quote.id}`} className={`${buttonVariants({ variant: "outline", size: "sm" })} mr-2`}><FolderOpen />Open deal</Link>
+                          <QuoteRowActions quoteId={quote.id} number={quote.number} status={quote.status} signed={Boolean(quote.signedAt)} emailed={Boolean(quote.emailedAt)} canSend={canCancel} canCancel={canCancel} canDuplicate={canDuplicate} deleteAction={deleteQuote.bind(null, quote.id)} canDelete={canDelete} />
+                        </span>
+                      ),
+                    }}
+                    rows={visibleQuotes}
+                    rowId={(quote) => quote.id}
+                    rowHref={(quote) => `/quotes/${quote.id}`}
+                    rowLabel={(quote) => `Quote Q-${quote.number}`}
+                    rowLead={(quote) => quote.leadId}
+                    wrapRow={(quote, tr) => (
+                      <RecordContextMenu label={`Quote Q-${quote.number}`} href={`/quotes/${quote.id}`} actions={quoteContextActions(quote, dealLabel)}>
+                        {tr}
+                      </RecordContextMenu>
+                    )}
+                    prefs={prefs}
+                    sort={sort}
+                    total={total}
+                    noun={{ one: "quote", many: "quotes" }}
+                  />
                 </div>
                 <ListPager path="/quotes" page={page} total={total} className="border-t border-border" />
               </Surface>

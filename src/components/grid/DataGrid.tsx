@@ -22,7 +22,7 @@ import {
   type SelectionRequest,
 } from "@/lib/grid/grid";
 import { cn } from "@/lib/utils";
-import { GridPageCheckbox, GridRowCheckbox, GridSelectionProvider, GridSettings } from "./GridClient";
+import { GridPageCheckbox, GridRowCheckbox, GridSelectionProvider, GridSettings, type GridBulkAction } from "./GridClient";
 
 const ALIGN = { left: "text-left", center: "text-center", right: "text-right" } as const;
 
@@ -45,12 +45,14 @@ export function DataGrid<Row>({
   rowId,
   rowHref,
   rowLabel,
+  rowLead,
   wrapRow,
   prefs,
   sort,
   total,
   noun,
   preview,
+  bulk,
 }: {
   gridId: string;
   path: string;
@@ -63,6 +65,8 @@ export function DataGrid<Row>({
   rowId: (row: Row) => string;
   rowHref: (row: Row) => string;
   rowLabel: (row: Row) => string;
+  /** The lead a row belongs to, for the list keys that act on a lead (e / w / a — lib/listKeys.ts). */
+  rowLead?: (row: Row) => string | null | undefined;
   /** E.g. the right-click record menu around each row. */
   wrapRow?: (row: Row, tr: ReactElement) => ReactNode;
   prefs: GridPrefs;
@@ -71,6 +75,8 @@ export function DataGrid<Row>({
   noun: { one: string; many: string };
   /** Server-side re-check of a selection. Omit and the list has no tick boxes. */
   preview?: (request: SelectionRequest) => Promise<ActionResult>;
+  /** One bulk action on the ticked rows, offered only after a preview. Needs `preview`. */
+  bulk?: GridBulkAction;
 }) {
   const shown = visibleColumns(prefs, columns);
   const compact = prefs.density === "compact";
@@ -155,7 +161,7 @@ export function DataGrid<Row>({
             const id = rowId(row);
             const href = rowHref(row);
             const tr = (
-              <tr key={id} tabIndex={0} data-nav-row="" data-nav-href={href} className="group transition-colors hover:bg-white/[0.025] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary">
+              <tr key={id} tabIndex={0} data-nav-row="" data-nav-href={href} data-nav-lead={rowLead?.(row) ?? undefined} className="group transition-colors hover:bg-white/[0.025] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary">
                 {preview && (
                   <td className="pl-4">
                     <GridRowCheckbox id={id} label={rowLabel(row)} />
@@ -196,6 +202,7 @@ export function DataGrid<Row>({
           q={q}
           noun={noun}
           preview={preview}
+          bulk={bulk}
         >
           {grid}
         </GridSelectionProvider>

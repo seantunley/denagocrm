@@ -38,7 +38,7 @@ import { cn } from "@/lib/utils";
 import { isModuleEnabled } from "@/lib/modules/enabled";
 import RecordContextMenu, { type RecordContextAction } from "@/components/RecordContextMenu";
 import { DataGrid } from "@/components/grid/DataGrid";
-import { previewContactSelection } from "@/app/actions/grid";
+import { bulkTagContacts, previewContactSelection } from "@/app/actions/grid";
 import { actingScopeClass } from "@/lib/actingScope";
 import { getWorkspaceSetting } from "@/lib/settings";
 import { gridOrderBy, gridPrefsKey, normalisePrefs, parseSort, type GridPrefs } from "@/lib/grid/grid";
@@ -86,7 +86,7 @@ export default async function ContactsPage({
   const { page, skip, take } = pageWindow(parsePage(params.page), total);
   const matched = { is: { ...where, deletedAt: null } };
 
-  const [contacts, users, picker, vehicleCount, leadCount, regions] = await Promise.all([
+  const [contacts, users, picker, vehicleCount, leadCount, regions, tags] = await Promise.all([
     prisma.contact.findMany({
       where,
       orderBy: gridOrderBy(sort, CONTACT_SORTS),
@@ -111,6 +111,10 @@ export default async function ContactsPage({
     prisma.vehicle.count({ where: { contact: matched } }),
     prisma.lead.count({ where: { status: "open", contact: matched } }),
     canCreate ? getActiveTenantId().then(workspaceRegions) : Promise.resolve(NO_REGIONS),
+    // The bulk "Add tag" choices: this workspace's existing tags, for people who may edit contacts.
+    canEdit && tenantId && !cards
+      ? prisma.tag.findMany({ where: { tenantId }, orderBy: { name: "asc" }, select: { id: true, name: true } })
+      : Promise.resolve([]),
   ]);
 
   const queryString = (target: string) =>
@@ -229,6 +233,7 @@ export default async function ContactsPage({
           total={total}
           noun={{ one: "contact", many: "contacts" }}
           preview={previewContactSelection}
+          bulk={tags.length ? { label: "Add tag", choiceLabel: "Tag", choices: tags.map((tag) => ({ value: tag.id, label: tag.name })), run: bulkTagContacts } : undefined}
         />
       )}
       <ListPager path="/contacts" page={page} total={total} className="px-0" />

@@ -4,7 +4,6 @@ import { Prisma } from "@prisma/client";
 import type { LucideIcon } from "lucide-react";
 import {
   AlertTriangle,
-  ArrowRight,
   Boxes,
   CalendarClock,
   CircleDollarSign,
@@ -30,13 +29,17 @@ import { receivePurchaseOrder, cancelPurchaseOrder, addStockUnit } from "@/app/a
 import { StockReceiveForm } from "@/components/StockReceiveForm";
 import { WorkspaceHero } from "@/components/workspace-hero";
 import { buttonVariants } from "@/components/ui/button";
-import { ResponsiveEntityTable } from "@/components/responsive-patterns";
 import { EmptyState, FeedbackBanner, SectionHeading, StatusPill, Surface } from "@/components/visual-system";
 import { hasPermission, requireAnyPermission } from "@/lib/permissions";
-import { listStockUnits, stockDashboard } from "@/lib/stockPlatform";
+import { countStockUnits, listStockUnits, stockDashboard, type StockUnitRecord } from "@/lib/stockPlatform";
 import { getStockLabels } from "@/lib/stockLabels";
 import RecordContextMenu, { type RecordContextAction } from "@/components/RecordContextMenu";
-import { getRegionalSettings } from "@/lib/settings";
+import { getRegionalSettings, getWorkspaceSetting } from "@/lib/settings";
+import { DataGrid } from "@/components/grid/DataGrid";
+import ListPager from "@/components/ListPager";
+import { pageWindow, parsePage } from "@/lib/listPaging";
+import { gridPrefsKey, normalisePrefs, parseSort } from "@/lib/grid/grid";
+import { STOCK_COLUMNS, STOCK_DEFAULT_SORT, STOCK_GRID_ID } from "@/lib/grid/stockGrid";
 import { getCompanyProfile } from "@/lib/companyProfile";
 import VendorDeliveries from "@/components/deliveries/VendorDeliveries";
 
@@ -66,12 +69,22 @@ type QueueCard = { label: string; value: number; icon: LucideIcon; href: string 
 export default async function StockPage({
   searchParams,
 }: {
-  searchParams: Promise<{ status?: string; q?: string; product?: string; location?: string; age?: string }>;
+  searchParams: Promise<{ status?: string; q?: string; product?: string; location?: string; age?: string; page?: string; sort?: string; dir?: string }>;
 }) {
   const user = await requireAnyPermission("stock.view", "stock.manage");
   const canManage = await hasPermission(user, "stock.manage");
   const params = await searchParams;
   const status = FILTERS.some(([value]) => value === params.status) ? params.status ?? "all" : "all";
+  // The grid's sort and layout only ORDER and PRESENT the units the filters chose.
+  // Cost is a stock.manage figure: without it the column — and sorting by it — is gone.
+  const tenantId = await actingTenantId();
+  const columns = canManage ? STOCK_COLUMNS : STOCK_COLUMNS.filter((c) => c.id !== "cost");
+  const prefs = normalisePrefs(await getWorkspaceSetting(tenantId, gridPrefsKey(STOCK_GRID_ID, user.id)).catch(() => null), columns);
+  const sort = parseSort(params.sort, params.dir, columns, STOCK_DEFAULT_SORT);
+  const filters = { status, query: params.q, productId: params.product, location: params.location, age: params.age };
+  // Paged in the database: every matching unit is reachable, not just the first 150.
+  const totalUnits = await countStockUnits(tenantId, filters);
+  const { page, skip, take } = pageWindow(parsePage(params.page), totalUnits);
 
   // Print/report link carries whatever filter the board is showing, so the PDF
   // reports exactly the same subset the user is looking at.
@@ -92,7 +105,7 @@ export default async function StockPage({
   const [dashboard, products, units, openPos, locations, demand] = await Promise.all([
     stockDashboard(),
     prisma.product.findMany({ where: { active: true }, orderBy: { name: "asc" }, include: { colors: true } }),
-    listStockUnits({ status, query: params.q, productId: params.product, location: params.location, age: params.age, limit: 150 }),
+    listStockUnits({ ...filters, sort, limit: take, offset: skip }),
     prisma.purchaseOrder.findMany({
       where: { deletedAt: null, status: { in: ["ordered", "partially_received"] } },
       orderBy: [{ expectedAt: "asc" }, { orderedAt: "asc" }],
@@ -208,8 +221,9 @@ export default async function StockPage({
 
       <div className="grid gap-5 2xl:grid-cols-[minmax(0,1.55fr)_minmax(20rem,0.8fr)]">
         <Surface className="p-5">
-          <SectionHeading title="Live inventory" description="Search and filter every active unit. Open a row for its complete operational history and next actions." action={<span className="text-xs tabular-nums text-muted-foreground">{units.length} shown</span>} />
+          <SectionHeading title="Live inventory" description="Search and filter every active unit. Open a row for its complete operational history and next actions." action={<span className="text-xs tabular-nums text-muted-foreground">{totalUnits} unit{totalUnits === 1 ? "" : "s"}</span>} />
           <form className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-[minmax(15rem,1fr)_11rem_11rem_9rem_auto]">
+            {params.sort && <><input type="hidden" name="sort" value={sort.column} /><input type="hidden" name="dir" value={sort.dir} /></>}
             <div className="relative"><Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" /><input name="q" defaultValue={params.q ?? ""} className="input pl-9" placeholder="Serial, stock no., model, colour, PO or customer" /></div>
             <select name="product" defaultValue={params.product ?? ""} className="input"><option value="">All models</option>{products.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}</select>
             <select name="location" defaultValue={params.location ?? ""} className="input"><option value="">All locations</option>{locations.map((item) => <option key={item.location} value={item.location}>{item.location}</option>)}</select>
@@ -224,41 +238,49 @@ export default async function StockPage({
               if (params.product) query.set("product", params.product);
               if (params.location) query.set("location", params.location);
               if (params.age) query.set("age", params.age);
+              if (params.sort) { query.set("sort", sort.column); query.set("dir", sort.dir); }
               return <Link key={value} href={`/stock${query.size ? `?${query}` : ""}`} className={status === value ? "rounded-full bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground" : "rounded-full border border-border bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"}>{label}</Link>;
             })}
           </div>
           <div className="mt-4">
-            {units.length === 0 ? <EmptyState icon={Boxes} title="No matching stock" description="Adjust the filters or add a physical unit to begin tracking it." /> : <ResponsiveEntityTable>
-              <table className="table-base"><thead><tr><th>Unit</th><th>Status</th><th>Customer / quote</th><th>Location</th><th className="whitespace-nowrap">Age</th>{canManage && <th className="whitespace-nowrap text-right">Landed cost</th>}<th></th></tr></thead>
-                <tbody>{units.map((unit) => {
+            {units.length === 0 ? <EmptyState icon={Boxes} title="No matching stock" description="Adjust the filters or add a physical unit to begin tracking it." /> : <DataGrid
+              gridId={STOCK_GRID_ID}
+              path="/stock"
+              params={params}
+              columns={columns}
+              cells={{
+                unit: (unit: StockUnitRecord) => <><Link href={`/stock/${unit.id}`} className="block truncate font-medium text-foreground hover:text-primary">{unit.stockNumber ?? unit.productName}</Link><p className="mt-0.5 truncate text-xs text-muted-foreground">{unit.productName}{unit.color ? ` · ${unit.color}` : ""}{unit.serial ? ` · ${unit.serial}` : " · serial pending"}</p></>,
+                status: (unit: StockUnitRecord) => {
                   const meta = STATUS[unit.status] ?? { label: unit.status.replaceAll("_", " "), tone: "neutral" as const };
-                  const actions: RecordContextAction[] = [
-                    ...(unit.reservedForLeadId
-                      ? [{ label: "Open reserved lead", href: `/leads/${unit.reservedForLeadId}`, icon: "lead" as const }]
-                      : []),
-                    ...(unit.soldQuoteId
-                      ? [{ label: "Open linked quote", href: `/quotes/${unit.soldQuoteId}`, icon: "quote" as const }]
-                      : []),
-                  ];
-                  return <RecordContextMenu
-                    key={unit.id}
-                    label={unit.stockNumber ?? unit.productName}
-                    href={`/stock/${unit.id}`}
-                    actions={actions}
-                  >
-                  <tr tabIndex={0} className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary">
-                    <td data-primary data-label="Unit"><Link href={`/stock/${unit.id}`} className="font-medium text-foreground hover:text-primary">{unit.stockNumber ?? unit.productName}</Link><p className="mt-0.5 text-xs text-muted-foreground">{unit.productName}{unit.color ? ` · ${unit.color}` : ""}{unit.serial ? ` · ${unit.serial}` : " · serial pending"}</p></td>
-                    <td data-label="Status"><div className="flex flex-wrap items-center gap-1.5"><StatusPill tone={meta.tone}>{meta.label}</StatusPill>{unit.label && labelBySlug.has(unit.label) && <span className="inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium" style={{ backgroundColor: `${labelBySlug.get(unit.label)!.color}22`, color: labelBySlug.get(unit.label)!.color }}>{labelBySlug.get(unit.label)!.label}</span>}</div></td>
-                    <td data-label="Customer / quote" className="text-sm text-muted-foreground">{unit.reservedForLeadId ? <Link href={`/leads/${unit.reservedForLeadId}`} className="text-primary hover:underline">{unit.reservedLeadName ?? "Lead"}</Link> : unit.soldQuoteId ? <Link href={`/quotes/${unit.soldQuoteId}`} className="text-primary hover:underline">Q-{unit.quoteNumber}</Link> : "—"}{unit.reservationExpiresAt && <p className="text-[11px]">Expires {unit.reservationExpiresAt.toLocaleDateString("en-ZA")}</p>}</td>
-                    <td data-label="Location" className="text-sm text-muted-foreground">{unit.location ?? "—"}</td>
-                    <td data-label="Age" className={`whitespace-nowrap ${unit.ageDays >= 60 ? "font-semibold text-amber-300" : "text-muted-foreground"}`}>{unit.ageDays}d</td>
-                    {canManage && <td data-label="Landed cost" className="whitespace-nowrap text-right tabular-nums">{formatZAR(unit.landedCostCents || unit.costCents, moneyFmt)}</td>}
-                    <td data-actions className="text-right"><Link href={`/stock/${unit.id}`} className="btn-secondary btn-sm inline-flex items-center gap-1 whitespace-nowrap">Open <ArrowRight className="size-3.5" /></Link></td>
-                  </tr>
-                  </RecordContextMenu>;
-                })}</tbody>
-              </table>
-            </ResponsiveEntityTable>}
+                  const label = unit.label ? labelBySlug.get(unit.label) : undefined;
+                  return <div className="flex flex-wrap items-center gap-1.5"><StatusPill tone={meta.tone}>{meta.label}</StatusPill>{label && <span className="inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium" style={{ backgroundColor: `${label.color}22`, color: label.color }}>{label.label}</span>}</div>;
+                },
+                customer: (unit: StockUnitRecord) => <div className="text-sm text-muted-foreground">{unit.reservedForLeadId ? <Link href={`/leads/${unit.reservedForLeadId}`} className="text-primary hover:underline">{unit.reservedLeadName ?? "Lead"}</Link> : unit.soldQuoteId ? <Link href={`/quotes/${unit.soldQuoteId}`} className="text-primary hover:underline">Q-{unit.quoteNumber}</Link> : "—"}{unit.reservationExpiresAt && <p className="text-[11px]">Expires {unit.reservationExpiresAt.toLocaleDateString("en-ZA")}</p>}</div>,
+                location: (unit: StockUnitRecord) => <span className="block truncate text-sm text-muted-foreground">{unit.location ?? "—"}</span>,
+                age: (unit: StockUnitRecord) => <span className={`whitespace-nowrap ${unit.ageDays >= 60 ? "font-semibold text-amber-300" : "text-muted-foreground"}`}>{unit.ageDays}d</span>,
+                cost: (unit: StockUnitRecord) => <span className="whitespace-nowrap tabular-nums">{formatZAR(unit.landedCostCents || unit.costCents, moneyFmt)}</span>,
+              }}
+              rows={units}
+              rowId={(unit) => unit.id}
+              rowHref={(unit) => `/stock/${unit.id}`}
+              rowLabel={(unit) => unit.stockNumber ?? unit.productName}
+              wrapRow={(unit, tr) => {
+                const actions: RecordContextAction[] = [
+                  ...(unit.reservedForLeadId
+                    ? [{ label: "Open reserved lead", href: `/leads/${unit.reservedForLeadId}`, icon: "lead" as const }]
+                    : []),
+                  ...(unit.soldQuoteId
+                    ? [{ label: "Open linked quote", href: `/quotes/${unit.soldQuoteId}`, icon: "quote" as const }]
+                    : []),
+                ];
+                return <RecordContextMenu label={unit.stockNumber ?? unit.productName} href={`/stock/${unit.id}`} actions={actions}>{tr}</RecordContextMenu>;
+              }}
+              prefs={prefs}
+              sort={sort}
+              total={totalUnits}
+              noun={{ one: "unit", many: "units" }}
+            />}
+            <ListPager path="/stock" page={page} total={totalUnits} className="px-0" />
           </div>
         </Surface>
 
