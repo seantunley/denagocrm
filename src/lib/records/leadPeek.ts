@@ -37,6 +37,8 @@ export type LeadPeek = {
   /** In the deal's own currency, formatted by the workspace's regional settings. Null when no value is set. */
   value: string | null;
   status: string;
+  /** A parked deal: why, and when it comes back for review (formatted). Null unless nurturing. */
+  nurture: { reason: string | null; reviewOn: string | null } | null;
   stage: { id: string; name: string };
   owner: { id: string; name: string } | null;
   /** Today's own ranking: why this deal is worth acting on now, and what to do. */
@@ -76,6 +78,8 @@ export async function loadLeadPeek(user: PermissionUser, leadId: string, now = n
       valueCents: true,
       currency: true,
       status: true,
+      nurtureReason: true,
+      nurtureReviewAt: true,
       createdAt: true,
       stageEnteredAt: true,
       stage: { select: { id: true, name: true, isClosed: true, staleAfterDays: true, order: true, pipelineId: true } },
@@ -175,6 +179,10 @@ export async function loadLeadPeek(user: PermissionUser, leadId: string, now = n
     opportunity: lead.title && lead.title !== lead.name ? lead.title : null,
     value: lead.valueCents > 0 ? formatZAR(lead.valueCents, withCurrency(regional, lead.currency)) : null,
     status: lead.status,
+    nurture:
+      lead.status === "nurture"
+        ? { reason: lead.nurtureReason, reviewOn: lead.nurtureReviewAt ? formatDate(lead.nurtureReviewAt, regional) : null }
+        : null,
     stage: { id: lead.stage.id, name: lead.stage.name },
     owner: lead.assignedTo,
     score: scored?.score ?? 0,

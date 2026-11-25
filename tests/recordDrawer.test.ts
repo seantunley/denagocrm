@@ -111,3 +111,24 @@ test("on Today, a deal's name opens it beside the list; the full page is still a
   assert.match(link, /event\.metaKey \|\| event\.ctrlKey \|\| event\.shiftKey/);
   assert.match(src("src/components/records/RecordDrawer.tsx"), /Open full record/);
 });
+
+test("W2-03: in the Sales Centre a deal opens beside the worklist, rows in list order; the row's Enter still opens the full page", () => {
+  const page = src("src/app/(app)/leads/list/page.tsx");
+  assert.equal(page.match(/<OpenRecordLink record=\{\{ type: "lead", id: lead\.id \}\}/g)?.length, 2, "the phone cards and the desktop table");
+  assert.match(page, /data-nav-href=\{`\/leads\/\$\{lead\.id\}`\} data-nav-lead=\{lead\.id\} data-record-open=\{`lead:\$\{lead\.id\}`\}/);
+  assert.match(page, /<span data-record-open=\{`lead:\$\{lead\.id\}`\}><OpenRecordLink/);
+  assert.match(page, /<Suspense fallback=\{null\}>\s*<RecordDrawer \/>\s*<\/Suspense>/);
+  assert.doesNotMatch(page, /<Link href=\{`\/leads\/\$\{lead\.id\}`\} className="(font-medium )?text-primary/, "no name link that skips the drawer");
+  // Next best actions open the deal there too.
+  assert.match(src("src/app/(app)/leads/list/SalesCentreParts.tsx"), /<OpenRecordLink record=\{\{ type: "lead", id: lead\.id \}\} className="btn-secondary btn-sm mt-2">Open deal/);
+  // A list drawn twice (one copy hidden): focus goes back to the copy on screen.
+  assert.match(src("src/components/records/drawerNav.ts"), /\.find\(\(el\) => el\.getClientRects\(\)\.length > 0\)/);
+});
+
+test("W2-03: a nurturing deal says it is parked and until when — waiting, not stale", () => {
+  const peek = src("src/lib/records/leadPeek.ts");
+  assert.match(peek, /lead\.status === "nurture"\s*\? \{ reason: lead\.nurtureReason, reviewOn: lead\.nurtureReviewAt \? formatDate\(lead\.nurtureReviewAt, regional\) : null \}\s*: null/);
+  const view = src("src/components/records/LeadPeekView.tsx");
+  assert.match(view, /Nurturing\{peek\.nurture\.reviewOn \? ` until \$\{peek\.nurture\.reviewOn\}` : ""\}/);
+  assert.match(view, /\{`\$\{peek\.nurture\.reason \?\? "Parked for later\."\} It isn't due for contact before then\.`\}/);
+});

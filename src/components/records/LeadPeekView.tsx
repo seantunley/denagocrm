@@ -37,6 +37,13 @@ export default function LeadPeekView({ peek, onChanged, onNext }: { peek: LeadPe
         <span className="text-muted-foreground">{peek.owner ? `Owner: ${peek.owner.name}` : "Unassigned"}</span>
       </div>
       {peek.opportunity && <p className="-mt-3 text-sm text-muted-foreground">{peek.opportunity}</p>}
+      {/* Parked on purpose: waiting, not stale. Says when it comes back. */}
+      {peek.nurture && (
+        <p className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-sm">
+          <span className="font-medium">Nurturing{peek.nurture.reviewOn ? ` until ${peek.nurture.reviewOn}` : ""}.</span>{" "}
+          <span className="text-muted-foreground">{`${peek.nurture.reason ?? "Parked for later."} It isn't due for contact before then.`}</span>
+        </p>
+      )}
 
       {did && (
         <div role="status" className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-emerald-400/30 bg-emerald-400/10 px-3 py-2 text-sm">

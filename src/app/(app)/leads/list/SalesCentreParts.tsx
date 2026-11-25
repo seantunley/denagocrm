@@ -9,6 +9,7 @@ import type { PermissionUser } from "@/lib/permissions";
 import { rankedLeads, worklistColumns } from "@/lib/salesWorklist";
 import { daysSince } from "@/lib/salesWorklistRules";
 import { MetricCard } from "@/components/visual-system";
+import OpenRecordLink from "@/components/records/OpenRecordLink";
 import { CardEmpty, CardRow, Panel, StatRow } from "@/components/centre";
 
 /**
@@ -64,7 +65,8 @@ export async function NextBestActions({ user, now }: { user: PermissionUser; now
               <p className="text-sm font-medium">{lead.name}</p>
               {lead.opportunity && <p className="text-xs text-muted-foreground">{lead.opportunity}</p>}
               <p className="mt-1 text-xs text-muted-foreground">{lead.reasons.join(" · ")}</p>
-              <Link href={`/leads/${lead.id}`} className="btn-secondary btn-sm mt-2">Open deal<ArrowRight className="size-3.5" /></Link>
+              {/* Beside the list, where the reason's action can be taken (W2-03). */}
+              <OpenRecordLink record={{ type: "lead", id: lead.id }} className="btn-secondary btn-sm mt-2">Open deal<ArrowRight className="size-3.5" /></OpenRecordLink>
             </li>
           ))}
         </ul>
