@@ -222,6 +222,25 @@ export function checkSelectedIds(requested: readonly string[], accessible: reado
   return { allowed: ok, refused: requested.length - ok.length };
 }
 
+/** The most rows one bulk action will change, even with "Select all". */
+export const MAX_BULK_ROWS = 2000;
+
+/**
+ * What a bulk action DID, row by row. Rows it could not touch are counted, never
+ * named: naming them would tell the person about records they may not see.
+ */
+export function bulkResultText(
+  noun: { one: string; many: string },
+  labels: { done: string; unchanged: string },
+  result: { done: number; unchanged: number; refused: number },
+): string {
+  const name = (n: number) => `${n.toLocaleString("en")} ${n === 1 ? noun.one : noun.many}`;
+  const parts = result.done > 0 ? [`${name(result.done)} ${labels.done}`] : ["Nothing changed"];
+  if (result.unchanged > 0) parts.push(`${name(result.unchanged)} ${labels.unchanged}`);
+  if (result.refused > 0) parts.push(`${name(result.refused)} couldn't be changed — no longer available to you`);
+  return parts.join(" · ");
+}
+
 /** The preview sentence: what an action WOULD touch, and what was left out and why. */
 export function selectionPreviewText(
   noun: { one: string; many: string },

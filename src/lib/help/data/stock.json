@@ -5,7 +5,7 @@
     "summary": "Find your way around the Stock page: the headline figures, the stock statuses, searching and filtering, open purchase orders and demand versus supply.",
     "category": "stock",
     "audience": "everyone",
-    "keywords": ["stock", "inventory", "dashboard", "units", "status", "overview", "stock age", "demand", "print report"],
+    "keywords": ["stock", "inventory", "dashboard", "units", "status", "overview", "stock age", "demand", "print report", "sort", "columns"],
     "body": [
       { "type": "p", "text": "The **Stock** page (in the menu under **Sales → Stock**) tracks every physical unit you hold, from the day you order it from a supplier until it is handed over to a customer. Each unit is one physical item with its own stock number, serial number, cost and history." },
       { "type": "h", "text": "Who can use it" },
@@ -47,11 +47,20 @@
           "Type in the search box. It matches the serial number, stock number, model, colour, purchase order reference or customer name.",
           "Narrow the list with **All models**, **All locations** and **Any age** (30+, 60+ or 90+ days), then click **Filter**.",
           "Click a status pill (**All**, **Available**, **Incoming**, **Inspection**, **Reserved**, **Allocated**, **PDI**, **Ready**, **Hold** or **Delivered**) to show one stage. Your search and filters stay in place.",
-          "Click a unit's stock number, or **Open**, to see its full record. Right-click a row for a shortcut to the reserved lead or the linked quote."
+          "Click a unit's stock number, or the arrow at the end of its row, to see its full record. Right-click a row for a shortcut to the reserved lead or the linked quote."
         ]
       },
       { "type": "p", "text": "Each row shows the unit (stock number, model, colour and serial, or **serial pending**), its status and label, the lead or quote it belongs to with any reservation expiry date, its location, and its age in days. Units 60 days or older show their age highlighted." },
-      { "type": "callout", "tone": "tip", "text": "The list shows up to 150 units at a time. When you are looking for one unit, search for it rather than scrolling." },
+      { "type": "h", "text": "Arranging the list" },
+      {
+        "type": "list",
+        "items": [
+          "The list shows 50 units a page. Use **Previous** and **Next** at the bottom; the count at the top is every unit that matches, not just this page.",
+          "Click **Unit**, **Status**, **Location**, **Age** or **Landed cost** (stock managers only) to sort by it; click again to reverse. Sorting covers every page and keeps your search, filters and status pill.",
+          "Press **Columns** to show or hide columns, move them up or down, set a width, and choose **Comfortable** or **Compact** rows. Press **Save layout** — it is yours alone, and **Reset** puts the standard layout back.",
+          "On a phone each unit shows as a card instead of a wide table."
+        ]
+      },
       { "type": "h", "text": "The rest of the page" },
       {
         "type": "list",

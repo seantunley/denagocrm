@@ -141,15 +141,37 @@ export type StockUnitRecord = {
   ageDays: number;
 };
 
-export async function listStockUnits(filters: {
+type StockListFilters = {
   status?: string;
   query?: string;
   productId?: string;
   location?: string;
   age?: string;
-  limit?: number;
-  offset?: number;
-}): Promise<StockUnitRecord[]> {
+};
+
+const STOCK_STATUS_RANK = Prisma.sql`CASE su."status"
+        WHEN 'hold' THEN 0 WHEN 'damaged' THEN 1 WHEN 'ready_for_delivery' THEN 2
+        WHEN 'pdi' THEN 3 WHEN 'allocated' THEN 4 WHEN 'reserved' THEN 5
+        WHEN 'available' THEN 6 WHEN 'received_pending_check' THEN 7 WHEN 'incoming' THEN 8
+        ELSE 9 END`;
+const STOCK_ARRIVED = Prisma.sql`COALESCE(su."arrivedAt", su."createdAt")`;
+
+/**
+ * The /stock grid's sorts (lib/grid/stockGrid.ts): one FIXED fragment per column
+ * id. Nothing from the URL is ever pasted into SQL — parseSort can only name a
+ * key of this map, and the direction is chosen from two literals.
+ *
+ * "age" runs the other way from the date: youngest first is the newest arrival.
+ */
+const STOCK_ORDER: Record<string, (dir: Prisma.Sql, flip: Prisma.Sql) => Prisma.Sql> = {
+  status: (dir) => Prisma.sql`${STOCK_STATUS_RANK} ${dir}, ${STOCK_ARRIVED} ${dir}`,
+  unit: (dir) => Prisma.sql`COALESCE(su."stockNumber", p."name") ${dir}`,
+  location: (dir) => Prisma.sql`COALESCE(su."location", '') ${dir}`,
+  age: (_dir, flip) => Prisma.sql`${STOCK_ARRIVED} ${flip}`,
+  cost: (dir) => Prisma.sql`COALESCE(NULLIF(su."landedCostCents", 0), su."costCents") ${dir}`,
+};
+
+function stockListConditions(filters: StockListFilters): Prisma.Sql[] {
   const conditions: Prisma.Sql[] = [Prisma.sql`su."deletedAt" IS NULL`];
   if (filters.status && filters.status !== "all") conditions.push(Prisma.sql`su."status" = ${filters.status}`);
   if (filters.productId) conditions.push(Prisma.sql`su."productId" = ${filters.productId}`);
@@ -166,8 +188,38 @@ export async function listStockUnits(filters: {
   if (filters.age === "30") conditions.push(Prisma.sql`COALESCE(su."arrivedAt", su."createdAt") <= NOW() - INTERVAL '30 days'`);
   if (filters.age === "60") conditions.push(Prisma.sql`COALESCE(su."arrivedAt", su."createdAt") <= NOW() - INTERVAL '60 days'`);
   if (filters.age === "90") conditions.push(Prisma.sql`COALESCE(su."arrivedAt", su."createdAt") <= NOW() - INTERVAL '90 days'`);
+  return conditions;
+}
+
+/**
+ * How many units match the list's filters — for its pager. The SAME conditions
+ * and joins as listStockUnits, so the count and the rows can never disagree.
+ */
+export async function countStockUnits(tenantId: string, filters: StockListFilters): Promise<number> {
+  const [row] = await prisma.$queryRaw<Array<{ total: number }>>(Prisma.sql`
+    SELECT COUNT(*)::int AS "total"
+    FROM "StockUnit" su
+    JOIN "Product" p ON p."id" = su."productId"
+    LEFT JOIN "PurchaseOrder" po ON po."id" = su."purchaseOrderId"
+    LEFT JOIN "Lead" l ON l."id" = su."reservedForLeadId"
+    WHERE su."tenantId" = ${tenantId} AND ${Prisma.join(stockListConditions(filters), " AND ")}
+  `);
+  return row?.total ?? 0;
+}
+
+export async function listStockUnits(filters: StockListFilters & {
+  limit?: number;
+  offset?: number;
+  /** A STOCK_ORDER key; anything else is the default (status, then oldest). */
+  sort?: { column: string; dir: "asc" | "desc" };
+}): Promise<StockUnitRecord[]> {
+  const conditions = stockListConditions(filters);
   const limit = Math.max(1, Math.min(filters.limit ?? 100, 250));
   const offset = Math.max(0, filters.offset ?? 0);
+  const desc = filters.sort?.dir === "desc";
+  const dir = desc ? Prisma.sql`DESC` : Prisma.sql`ASC`;
+  const flip = desc ? Prisma.sql`ASC` : Prisma.sql`DESC`;
+  const order = (Object.hasOwn(STOCK_ORDER, filters.sort?.column ?? "") ? STOCK_ORDER[filters.sort!.column] : STOCK_ORDER.status)(dir, flip);
 
   return prisma.$queryRaw<StockUnitRecord[]>(Prisma.sql`
     SELECT
@@ -187,13 +239,9 @@ export async function listStockUnits(filters: {
     LEFT JOIN "Quote" q ON q."id" = su."soldQuoteId"
     LEFT JOIN "StockReservation" r ON r."stockUnitId" = su."id" AND r."status" = 'active'
     WHERE ${Prisma.join(conditions, " AND ")}
-    ORDER BY
-      CASE su."status"
-        WHEN 'hold' THEN 0 WHEN 'damaged' THEN 1 WHEN 'ready_for_delivery' THEN 2
-        WHEN 'pdi' THEN 3 WHEN 'allocated' THEN 4 WHEN 'reserved' THEN 5
-        WHEN 'available' THEN 6 WHEN 'received_pending_check' THEN 7 WHEN 'incoming' THEN 8
-        ELSE 9 END,
-      COALESCE(su."arrivedAt", su."createdAt") ASC
+    -- The id last: two units with the same status and arrival otherwise swap
+    -- between pages, and one is shown twice while the other is never shown.
+    ORDER BY ${order}, su."id" ${dir}
     LIMIT ${limit} OFFSET ${offset}
   `);
 }

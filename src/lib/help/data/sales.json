@@ -5,11 +5,18 @@
     "summary": "The Quotes list, quote numbers and statuses, and how a quote goes from draft to accepted.",
     "category": "sales",
     "audience": "everyone",
-    "keywords": ["quotes", "quote status", "proposal", "q-number", "draft", "sent", "accepted", "declined", "cancelled"],
+    "keywords": ["quotes", "quote status", "proposal", "q-number", "draft", "sent", "accepted", "declined", "cancelled", "sort", "columns"],
     "body": [
       { "type": "p", "text": "The **Quotes** page is where you build, price and send every quote. Each one gets a number like **Q-1234**. The list shows only the latest version of each quote; earlier versions are kept in its version history." },
       { "type": "h", "text": "Reading the list" },
       { "type": "p", "text": "Each row shows the customer, the lead it belongs to (if any), the total including VAT, the status, the date it's valid until, and who created it. Click a **Q-number** to open the quote; click the customer or lead to go to them." },
+      { "type": "h", "text": "Arranging the list" },
+      { "type": "list", "items": [
+        "Click a column heading to sort by it; click again to reverse. Newest first is the standard order. Sorting covers every page, and a link you share keeps it. Your search and status filter stay as they are.",
+        "Each total is shown in its own currency. You can't sort by total, because quotes in different currencies can't be compared.",
+        "Press **Columns** to show or hide columns, move them up or down, set a width, and choose **Comfortable** or **Compact** rows. Press **Save layout** — it is yours alone, and **Reset** puts the standard layout back.",
+        "**Export CSV** still holds every matching quote, newest first."
+      ] },
       { "type": "h", "text": "Statuses" },
       { "type": "table", "headers": ["Status", "Meaning"], "rows": [
         ["Draft", "Being prepared. You can change anything."],

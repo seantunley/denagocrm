@@ -158,7 +158,7 @@
     "summary": "Find customers and companies, and add new ones.",
     "category": "crm",
     "audience": "everyone",
-    "keywords": ["contacts", "customers", "companies", "directory", "add contact", "tags", "sort", "columns", "select"],
+    "keywords": ["contacts", "customers", "companies", "directory", "add contact", "tags", "sort", "columns", "select", "bulk tag"],
     "body": [
       { "type": "p", "text": "**Contacts** is your list of customers and companies. The strip at the top shows how many are listed, how many vehicles they own, and how many open deals they have." },
       { "type": "h", "text": "Finding someone" },
@@ -172,7 +172,10 @@
         "In **List**, click a column heading to sort by it; click again to reverse. The order applies to every page, not just the one you are on, and a link you share keeps it.",
         "Press **Columns** to show or hide columns (Owner and City are hidden to start with), move them up or down, set a width in pixels, and choose **Comfortable** or **Compact** rows. Press **Save layout** — it is yours alone, kept for this workspace, and **Reset** puts the standard layout back.",
         "Tick contacts to select them. Ticking the box in the heading selects this page only; to take every matching contact across all pages, press **Select all** — it is never done for you.",
-        "**Preview** checks every selected contact against what you are allowed to see right now and tells you how many are included and how many were left out. There are no bulk changes for contacts yet.",
+        "**Preview** checks every selected contact against what you are allowed to see right now and tells you how many are included and how many were left out.",
+        "To tag them all at once, choose a tag from **Add tag…**, press **Preview**, then press the button that names the tag and how many contacts it will go on (for example **Add tag “VIP” to 12 contacts on this page**). Nothing changes until you press it.",
+        "Only existing tags are offered — add a new tag to one contact first. Contacts that already had the tag are left as they were, and any you can no longer see are skipped and counted, not changed. The result says how many were tagged.",
+        "Adding tags in bulk needs **Edit contacts**. One run covers up to 2,000 contacts; if the list changes after you choose **Select all**, you are asked to preview again.",
         "On a phone the list shows as cards with the most useful details, rather than a wide table."
       ] },
       { "type": "h", "text": "Adding a customer" },

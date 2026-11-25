@@ -126,6 +126,20 @@ export function GridSettings({ gridId, columns, prefs }: { gridId: string; colum
 
 /* --------------------------------------------------------------- selection */
 
+/**
+ * One bulk action for the ticked rows: a choice (e.g. which tag) and the server
+ * action that runs it. The action gets the same selection the preview checked
+ * and must check every row again itself — see bulkTagContacts.
+ */
+export type GridBulkAction = {
+  /** The verb, e.g. "Add tag". */
+  label: string;
+  /** What is being chosen, e.g. "Tag". */
+  choiceLabel: string;
+  choices: { value: string; label: string }[];
+  run: (request: SelectionRequest, choice: string) => Promise<ActionResult>;
+};
+
 type SelectionContext = {
   sel: GridSelection;
   setSel: (next: GridSelection) => void;
@@ -145,6 +159,7 @@ export function GridSelectionProvider({
   q,
   noun,
   preview,
+  bulk,
   children,
 }: {
   pageIds: string[];
@@ -152,22 +167,42 @@ export function GridSelectionProvider({
   q: string;
   noun: { one: string; many: string };
   preview: (request: SelectionRequest) => Promise<ActionResult>;
+  bulk?: GridBulkAction;
   children: ReactNode;
 }) {
   const [sel, setSelState] = useState<GridSelection>(EMPTY_SELECTION);
   const [result, setResult] = useState<ActionResult | null>(null);
+  // Set only by a successful preview of THIS selection; any change to the ticks clears it.
+  const [previewed, setPreviewed] = useState(false);
+  const [choice, setChoice] = useState("");
   const [pending, start] = useTransition();
   const setSel = (next: GridSelection) => {
     setSelState(next);
     setResult(null);
+    setPreviewed(false);
   };
   const count = selectedCount(sel, total);
   const pageAllOn = pageIds.length > 0 && pageIds.every((id) => sel.ids.includes(id));
   const name = (n: number) => `${n.toLocaleString("en")} ${n === 1 ? noun.one : noun.many}`;
+  const request = (): SelectionRequest => (sel.allMatching ? { mode: "all", q, shownTotal: total } : { mode: "ids", ids: sel.ids });
+  const scope = sel.allMatching ? `all ${name(total)} matching` : `${name(count)} on this page`;
+  const chosen = bulk?.choices.find((c) => c.value === choice);
 
   const runPreview = () =>
     start(async () => {
-      setResult(await preview(sel.allMatching ? { mode: "all", q, shownTotal: total } : { mode: "ids", ids: sel.ids }));
+      const next = await preview(request());
+      setResult(next);
+      setPreviewed(!next.error);
+    });
+  // Runs only after a preview of the same ticks; the button then goes away, so one click is one run.
+  const runBulk = () =>
+    start(async () => {
+      if (!bulk || !chosen) return;
+      setPreviewed(false);
+      const next = await bulk.run(request(), chosen.value);
+      setResult(next);
+      if (next.error) toast.error(next.error);
+      else toast.success(next.success ?? "Done");
     });
 
   return (
@@ -182,16 +217,39 @@ export function GridSelectionProvider({
               Select all {name(total)}
             </Button>
           )}
-          <span className="ml-auto flex gap-2">
+          <span className="ml-auto flex flex-wrap items-center gap-2">
+            {bulk && (
+              <select
+                aria-label={bulk.choiceLabel}
+                title={bulk.choiceLabel}
+                className="input h-8 w-44 py-0 text-xs"
+                value={choice}
+                onChange={(e) => setChoice(e.target.value)}
+              >
+                <option value="">{bulk.label}…</option>
+                {bulk.choices.map((c) => (
+                  <option key={c.value} value={c.value}>{c.label}</option>
+                ))}
+              </select>
+            )}
             <Button type="button" variant="outline" size="sm" disabled={pending} onClick={runPreview}>
               {pending ? "Checking…" : "Preview"}
             </Button>
+            {bulk && chosen && previewed && (
+              <Button type="button" size="sm" disabled={pending} onClick={runBulk}>
+                {bulk.label} “{chosen.label}” to {scope}
+              </Button>
+            )}
             <Button type="button" variant="ghost" size="sm" onClick={() => setSel(EMPTY_SELECTION)}>
               Clear
             </Button>
           </span>
           <p aria-live="polite" className={cn("w-full text-xs", result?.error ? "text-destructive" : "text-muted-foreground")}>
-            {result ? result.error ?? result.success : "Preview re-checks every selected row against your access. No bulk actions run from here yet."}
+            {result
+              ? result.error ?? result.success
+              : bulk
+                ? `Choose a ${bulk.choiceLabel.toLowerCase()} and press Preview: it checks every selected row against your access. Nothing changes until you confirm.`
+                : "Preview re-checks every selected row against your access. No bulk actions run from here yet."}
           </p>
         </div>
       )}
