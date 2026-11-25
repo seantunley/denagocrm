@@ -3,6 +3,7 @@ import { Sun } from "lucide-react";
 import {
   CUSTOMER_RECORD_WRITE_PERMISSIONS,
   getAccessibleContactIds,
+  getAccessibleQuoteIds,
   hasAnyPermission,
   hasPermission,
   requireAnyPermission,
@@ -20,6 +21,9 @@ import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/visual-system";
 import { LeadScoreBadge } from "@/components/LeadScoreBadge";
 import TodayRow from "@/components/TodayRow";
+import OpenRecordLink from "@/components/records/OpenRecordLink";
+import RecordDrawer from "@/components/records/RecordDrawer";
+import { Suspense } from "react";
 
 /**
  * Today — who to contact next, best first.
@@ -54,7 +58,8 @@ export default async function TodayPage({
   const leadIds = shown.map((lead) => lead.id);
   // Only customers this viewer may open — the lead page's rule. A customer's own
   // WhatsApps would otherwise leak their timing through whether WhatsApp is offered.
-  const openableContacts = await getAccessibleContactIds(user);
+  // The same for quotes: a sent quote's number goes into the drafts only when this viewer may open that quote.
+  const [openableContacts, openableQuotes] = await Promise.all([getAccessibleContactIds(user), getAccessibleQuoteIds(user)]);
   const contactIds = [
     ...new Set(
       shown
@@ -71,9 +76,9 @@ export default async function TodayPage({
       isSmtpConfigured(),
       isWhatsAppConfigured(),
       getCompanyProfile(),
-      leadIds.length
+      leadIds.length && (openableQuotes === null || openableQuotes.length > 0)
         ? prisma.quote.findMany({
-            where: { leadId: { in: leadIds }, deletedAt: null, status: "sent", signedAt: null, supersededAt: null },
+            where: { leadId: { in: leadIds }, ...(openableQuotes === null ? {} : { id: { in: openableQuotes } }), deletedAt: null, status: "sent", signedAt: null, supersededAt: null },
             select: { leadId: true, number: true },
             orderBy: { createdAt: "desc" },
           })
@@ -174,9 +179,9 @@ export default async function TodayPage({
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                     <LeadScoreBadge score={lead.score} />
-                    <Link href={`/leads/${lead.id}`} className="truncate font-semibold hover:underline">
+                    <OpenRecordLink record={{ type: "lead", id: lead.id }} className="truncate font-semibold hover:underline">
                       {lead.name}
-                    </Link>
+                    </OpenRecordLink>
                     <span className="text-xs text-muted-foreground">{lead.stageName}</span>
                     {lead.valueCents > 0 && (
                       <span className="text-xs tabular-nums text-muted-foreground">{formatZAR(lead.valueCents, withCurrency(moneyFmt, lead.currency))}</span>
@@ -201,6 +206,11 @@ export default async function TodayPage({
           })}
         </ul>
       )}
+
+      {/* A deal's name opens it here, beside the list (?open=lead:<id>) — wave 2, W2-01. */}
+      <Suspense fallback={null}>
+        <RecordDrawer />
+      </Suspense>
     </div>
   );
 }
