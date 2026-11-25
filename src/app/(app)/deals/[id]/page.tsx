@@ -1,5 +1,5 @@
 import Link from "next/link";
-import type { ReactNode } from "react";
+import { Suspense, type ReactNode } from "react";
 import { notFound } from "next/navigation";
 import {
   Activity,
@@ -8,7 +8,6 @@ import {
   CarFront,
   Check,
   CircleDollarSign,
-  Clock3,
   FileSignature,
   FileText,
   Mail,
@@ -17,7 +16,6 @@ import {
   PackageCheck,
   Phone,
   ReceiptText,
-  ShieldCheck,
   Truck,
   UserRound,
   Wrench,
@@ -27,16 +25,21 @@ import { prisma } from "@/lib/db";
 import { canAccessContact, canAccessLead, hasAnyPermission, hasPermission, requireQuoteReadAccess, requireRoute } from "@/lib/permissions";
 import { dealFinanceHouses, loadDealFinance } from "@/lib/dealFinance";
 import { isModuleEnabled } from "@/lib/modules/enabled";
-import { financeBlocksDelivery, financeStatusShort, quoteInPlay } from "@/lib/dealFinanceRules";
+import { financeBlocksDelivery, quoteInPlay } from "@/lib/dealFinanceRules";
 import DealFinancePanel from "@/components/deals/DealFinancePanel";
-import DealNextActions, { type BlockerActions } from "@/components/deals/DealNextActions";
-import { currentMilestone, dealBlockers, dealMilestones, dealProgress, pdiReady as dealPdiReady, type MilestoneKey } from "@/lib/dealMilestones";
+import DealStandsPanel from "@/components/deals/DealStandsPanel";
+import DealNextStepCard from "@/components/deals/DealNextStepCard";
+import MarkAcceptedButton from "@/components/deals/MarkAcceptedButton";
+import OpenRecordLink from "@/components/records/OpenRecordLink";
+import RecordDrawer from "@/components/records/RecordDrawer";
+import { dealStand, nextStepWarning } from "@/lib/dealStand";
+import { dealMilestones, dealProgress, pdiReady as dealPdiReady, type BlockerKey } from "@/lib/dealMilestones";
 import { getDealLifecycle } from "@/lib/dealLifecycleServer";
 import { readinessLabels } from "@/lib/dealLifecycle";
 import { formatDate, formatDateTime, formatZAR } from "@/lib/format";
 import { loadBillToFleet, quoteBillTo } from "@/lib/quoteBillTo";
 import { payableTotalCents } from "@/lib/pricing";
-import { isStatementInvoice } from "@/lib/accountStatement";
+import { isStatementInvoice, receivedCents } from "@/lib/accountStatement";
 import { getRegionalSettings } from "@/lib/settings";
 import DocumentsPanel from "@/components/DocumentsPanel";
 import DealFileSearch from "@/components/deals/DealFileSearch";
@@ -57,15 +60,6 @@ import { storedFileSrc } from "@/lib/storedFileSrc";
 import { getRecordLabels } from "@/lib/recordLabelsServer";
 import { EntityDetailShell } from "@/components/entity-detail-shell";
 import { StatusPill, Surface } from "@/components/visual-system";
-import PointerTilt from "@/components/PointerTilt";
-
-function statusTone(status: string): "neutral" | "success" | "warning" | "danger" | "info" {
-  if (status === "accepted" || status === "completed" || status === "delivered") return "success";
-  if (status === "declined" || status === "cancelled" || status === "rejected") return "danger";
-  if (status === "sent" || status === "viewed" || status === "in_progress") return "info";
-  if (status === "draft" || status === "pending") return "warning";
-  return "neutral";
-}
 
 function Fact({ label, value }: { label: string; value: ReactNode }) {
   return (
@@ -91,17 +85,6 @@ function ReadinessRow({ done, skipped, label, detail, action }: { done: boolean;
   );
 }
 
-function JourneyStep({ label, done, current, skipped }: { label: string; done: boolean; current?: boolean; skipped?: boolean }) {
-  return (
-    <div className="relative flex min-w-0 flex-1 items-center gap-2" title={skipped ? `${label}: not needed on this deal` : undefined}>
-      <span className={`relative z-10 grid size-7 shrink-0 place-items-center rounded-full border ${done ? "border-emerald-400/50 bg-emerald-400/15 text-emerald-300" : current ? "border-primary/60 bg-primary/15 text-primary" : skipped ? "border-dashed border-border bg-background text-muted-foreground/60" : "border-border bg-background text-muted-foreground"}`}>
-        {done ? <Check className="size-3.5" /> : skipped ? <Minus className="size-3.5" /> : <span className="size-1.5 rounded-full bg-current" />}
-      </span>
-      <span className={`truncate text-xs font-medium ${done ? "text-foreground" : current ? "text-primary" : "text-muted-foreground"}`}>{label}{skipped ? " · not needed" : ""}</span>
-      <span className="absolute left-7 right-0 top-3.5 h-px bg-border last:hidden" />
-    </div>
-  );
-}
 
 function TimelineItem({
   icon,
@@ -143,7 +126,6 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
         include: {
           product: true,
           assignedTo: true,
-          activities: { orderBy: { dueDate: "asc" }, take: 20 },
           communications: {
             include: { user: true },
             orderBy: { occurredAt: "desc" },
@@ -268,9 +250,21 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
     ? storedFileSrc(showcaseImageRefFor(vehicleProduct, vehicleColour))
     : null;
   const vehicleName = vehicleProduct?.name ?? vehicleLine?.description ?? quote.lead?.title ?? "Vehicle not selected";
-  const nextActivity = lead?.activities.find((item) => item.status === "planned") ?? null;
+  // THE DEAL'S next step: the lead's earliest planned activity, whoever it is assigned to (the card names them).
+  // Its own read, tenant-named and planned-only, so done ones can't crowd it out. What it says and
+  // its buttons need Activities access; without it the card shows only when, as the page always did.
+  const [canViewActivities, canManageActivities] = await Promise.all([
+    hasAnyPermission(user, "activities.view", "activities.manage"),
+    hasPermission(user, "activities.manage"),
+  ]);
+  const nextActivity = lead
+    ? await prisma.activity.findFirst({
+        where: { tenantId, leadId: lead.id, status: "planned", availabilityBlock: false },
+        orderBy: [{ dueDate: "asc" }, { id: "asc" }],
+        select: { id: true, summary: true, type: true, dueDate: true, assignedToId: true, assignedTo: { select: { name: true } } },
+      })
+    : null;
   const accepted = quote.status === "accepted" || Boolean(quote.signedAt);
-  const stockReady = stock.length > 0;
   const deliveryBooked = Boolean(quote.deliveryScheduledFor);
   const delivered = Boolean(quote.deliveredAt);
 
@@ -287,26 +281,97 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
   const pdiReady = dealPdiReady(stock);
   // The workspace's lifecycle (brief §5): its step names, and which steps its deals have.
   const lifecycle = await getDealLifecycle();
-  const hasStep = (step: MilestoneKey) => lifecycle.steps.includes(step);
   const journey = dealMilestones(facts, lifecycle);
-  const depositStep = journey.find((step) => step.key === "deposit");
   const ready = readinessLabels(lifecycle);
-  const current = currentMilestone(journey);
   const progress = dealProgress(journey);
-  const blockers = dealBlockers(facts, lifecycle);
-  // Each blocker's button goes where it is fixed — only for someone allowed to fix it there.
-  const [canManageDeliveries, canSeeStock] = await Promise.all([
+  // Each step's button goes where it is done — only for someone allowed to do it there.
+  const [canManageDeliveries, canSeeStock, canChangeStatus] = await Promise.all([
     hasAnyPermission(user, "deliveries.manage"),
     hasAnyPermission(user, "stock.view", "stock.manage"),
+    hasPermission(user, "quotes.change_status"),
   ]);
-  const blockerActions: BlockerActions = {
-    accept: { label: "Open quote", href: `/quotes/${quote.id}` },
-    deposit: canManageDeliveries ? { label: "Record deposit", href: "/deliveries" } : null,
-    finance: finance ? { label: "Finance", href: "#finance" } : null,
-    stock: canSeeStock ? { label: "Allocate", href: "/stock" } : null,
-    pdi: canSeeStock && unit ? { label: "Open unit", href: `/stock/${unit.id}` } : null,
-    delivery: canManageDeliveries ? { label: "Book delivery", href: "/deliveries" } : null,
+  const regional = await getRegionalSettings();
+  const date = (d: Date) => formatDate(d, regional);
+  // ONE account of where the deal stands (lib/dealStand.ts): the headline, the steps panel and the main button all read it.
+  const stand = dealStand({
+    journey,
+    status: quote.status,
+    accepted,
+    delivered,
+    financeHolds: facts.financeHolds,
+    sentAt: quote.sentAt,
+    viewedAt: quote.viewedAt,
+    signedAt: quote.signedAt,
+    depositPaid: Boolean(quote.depositPaidAt),
+    depositLabel: depositAmount ? formatZAR(depositAmount, withCurrency(regional, quote.currency)) : null,
+    stockCount: stock.length,
+    pdiReady,
+    deliveryAt: quote.deliveryScheduledFor,
+    deliveredAt: quote.deliveredAt,
+    customer,
+    readyTitle: ready.title,
+    date,
+  });
+  const nowStep = stand.steps.find((step) => step.state === "now") ?? null;
+  const stepLinks: Partial<Record<BlockerKey, { label: string; href: string }>> = {
+    ...(lead ? {} : { accept: { label: "Open quote", href: `/quotes/${quote.id}` } }),
+    ...(canManageDeliveries ? { deposit: { label: "Record deposit", href: "/deliveries" }, delivery: { label: "Book delivery", href: "/deliveries" } } : {}),
+    ...(finance ? { finance: { label: "Finance", href: "#finance" } } : {}),
+    ...(canSeeStock ? { stock: { label: "Allocate", href: "/stock" } } : {}),
+    ...(canSeeStock && unit ? { pdi: { label: "Open unit", href: `/stock/${unit.id}` } } : {}),
   };
+  // Chasing the customer happens beside the page, in the record drawer's composer (log a call, WhatsApp, email).
+  const chase = (className: string, label: string) =>
+    lead ? <OpenRecordLink record={{ type: "lead", id: lead.id }} className={className}>{label}</OpenRecordLink> : null;
+  const stepButtons: Partial<Record<BlockerKey, ReactNode>> = Object.fromEntries(
+    Object.entries(stepLinks).map(([key, link]) => [key, <Link key={key} href={link!.href} className="btn-secondary btn-sm">{link!.label}</Link>]),
+  );
+  if (lead) stepButtons.accept = chase("btn-primary btn-sm", "Chase");
+  // A declined or cancelled deal is over: no main button, nothing to chase (dealStand gives it no "now" step).
+  const closed = quote.status === "declined" || quote.status === "cancelled";
+  const hold = stand.holds[0] ?? null;
+  // The header's main button: what holds the deal up, else what the step it is on needs, else editing the quote.
+  const primaryAction = closed
+    ? null
+    : quote.status === "draft"
+      ? <Link href={`/quotes?edit=${quote.id}`} className="btn-primary">Finish and send the quote</Link>
+      : hold && stepLinks[hold.action]
+        ? <Link href={stepLinks[hold.action]!.href} className="btn-primary">{stepLinks[hold.action]!.label}</Link>
+        : nowStep?.action === "accept" && lead
+          ? chase("btn-primary", "Chase the customer")
+          : nowStep?.action && stepLinks[nowStep.action]
+            ? <Link href={stepLinks[nowStep.action]!.href} className="btn-primary">{stepLinks[nowStep.action]!.label}</Link>
+            : null;
+  const warning = nextStepWarning({
+    nextDue: nextActivity?.dueDate ?? null,
+    validUntil: quote.validUntil,
+    accepted,
+    delivered,
+    closed,
+    now: requestNow,
+    date,
+  });
+  const tomorrow = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(requestNow.getTime() + 24 * 60 * 60 * 1000));
+  const nextStepCard = lead && !closed ? (
+    <DealNextStepCard
+      next={
+        nextActivity
+          ? {
+              id: nextActivity.id,
+              // What it is and who has it: Activities access only. Without it, just when (the page always showed that).
+              summary: canViewActivities ? nextActivity.summary : null,
+              type: canViewActivities ? nextActivity.type : null,
+              who: canViewActivities ? (nextActivity.assignedToId === user.id ? "You" : nextActivity.assignedTo.name) : null,
+              when: formatDateTime(nextActivity.dueDate),
+            }
+          : null
+      }
+      warning={warning}
+      tomorrow={tomorrow}
+      canManage={canViewActivities && canManageActivities}
+      scheduleHref={canManageActivities ? `/leads/${lead.id}?tab=activities&schedule=1` : null}
+    />
+  ) : null;
 
   const commercialLines = quote.items
     .filter((item) => item.selected !== false)
@@ -317,7 +382,9 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
       kind: item.kind,
     }));
   // Every amount on this page is the quote's — in ITS currency (multicurrency module; null = the base).
-  const moneyFmt = withCurrency(await getRegionalSettings(), quote.currency);
+  const moneyFmt = withCurrency(regional, quote.currency);
+  // What has come in: an accepted quote's real payments (the statement's own rule); nothing before it is an invoice.
+  const paid = invoice ? receivedCents(quote, payments) : 0;
   const timeline = [
     ...lead?.communications.map((message) => ({
       key: `comm-${message.id}`,
@@ -351,78 +418,45 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
       backLabel="Quotes"
       eyebrow={labels.deal.one}
       title={`Q-${quote.number} · ${customer}`}
-      status={<StatusPill tone={statusTone(quote.status)}>{quote.status}</StatusPill>}
-      description={vehicleName}
-      meta={`Created ${formatDate(quote.createdAt)}${quote.createdBy ? ` · ${quote.createdBy.name}` : ""}`}
+      status={<StatusPill tone={stand.headline.tone}>{stand.headline.text}</StatusPill>}
+      description={[vehicleName, vehicleColour, stand.headline.detail].filter(Boolean).join(" · ")}
+      meta={`Created ${formatDate(quote.createdAt)}${quote.createdBy ? ` · ${quote.createdBy.name}` : ""} · Owner ${quote.lead?.assignedTo?.name ?? quote.createdBy?.name ?? "unassigned"}`}
       actions={
         <>
-          <Link href={`/quotes?edit=${quote.id}`} className="btn-primary">Edit quote</Link>
-          {lead && <Link href={`/leads/${lead.id}?tab=activities&schedule=1`} className="btn-secondary">Add activity</Link>}
+          {primaryAction}
+          {canChangeStatus && quote.status === "sent" && !quote.signedAt && <MarkAcceptedButton quoteId={quote.id} number={quote.number} />}
+          <Link href={`/quotes?edit=${quote.id}`} className={primaryAction ? "btn-secondary" : "btn-primary"}>Edit quote</Link>
           <a href={`/quotes/${quote.id}/print`} target="_blank" rel="noreferrer" className="btn-secondary">Print</a>
         </>
       }
     >
       <div className="space-y-4">
-        <Surface className="overflow-hidden">
-          <div className="grid min-h-[250px] lg:grid-cols-[minmax(0,1.25fr)_minmax(22rem,.75fr)]">
-            {/* The photo follows a mouse by a few degrees (PointerTilt); still on phones and with reduced motion. */}
-            <PointerTilt className="relative overflow-hidden border-b border-border bg-gradient-to-br from-muted/30 via-background to-background lg:border-b-0 lg:border-r">
-              {vehicleImage ? (
-                <>
-                  {/* eslint-disable-next-line @next/next/no-img-element -- authenticated stored-file route */}
-                  <img src={vehicleImage} alt={vehicleName} data-tilt-target className="absolute inset-0 size-full object-cover opacity-75" />
-                  <div className="absolute inset-0 bg-gradient-to-r from-background via-background/45 to-transparent" />
-                  <div className="absolute inset-0 bg-gradient-to-t from-background via-transparent to-transparent" />
-                </>
-              ) : (
-                <div className="absolute inset-0 grid place-items-center text-muted-foreground/15">
-                  <CarFront className="size-40" strokeWidth={1} />
-                </div>
-              )}
-              <div className="relative flex h-full min-h-[250px] flex-col justify-end p-5 sm:p-6">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-primary">Vehicle</p>
-                <h2 className="mt-2 max-w-2xl text-2xl font-semibold tracking-tight text-foreground">{vehicleName}</h2>
-                <div className="mt-4 grid max-w-2xl grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4">
-                  <Fact label="Colour" value={vehicleColour ?? "—"} />
-                  <Fact label="Stock no." value={unit?.stockNumber ?? "Not allocated"} />
-                  <Fact label="VIN / Serial" value={unit?.serial ? `••••${unit.serial.slice(-6)}` : "—"} />
-                  <Fact label="PDI" value={unit ? unit.pdiStatus.replaceAll("_", " ") : "Pending allocation"} />
-                </div>
-              </div>
-            </PointerTilt>
-
-            <div className="flex flex-col justify-between p-5 sm:p-6">
-              <div>
-                <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">{labels.deal.one} value</p>
-                <p className="mt-1 text-3xl font-semibold tracking-tight text-foreground">{formatZAR(total, moneyFmt)}</p>
-                <div className="mt-5 grid grid-cols-2 gap-4 border-t border-border pt-4">
-                  <Fact label="Customer" value={customer} />
-                  <Fact label="Sales owner" value={quote.lead?.assignedTo?.name ?? quote.createdBy?.name ?? "Unassigned"} />
-                  <Fact label="Deposit" value={depositAmount ? formatZAR(depositAmount, moneyFmt) : "Not set"} />
-                  <Fact label="Next action" value={nextActivity ? formatDateTime(nextActivity.dueDate) : "None planned"} />
-                </div>
-              </div>
-              <div className="mt-5 flex flex-wrap gap-2">
-                {quote.contactId && <Link href={`/contacts/${quote.contactId}`} className="btn-secondary btn-sm"><UserRound className="size-4" />Customer</Link>}
-                {lead && <Link href={`/leads/${lead.id}`} className="btn-secondary btn-sm"><Activity className="size-4" />{labels.lead.one}</Link>}
-                {quote.status === "accepted" && <Link href="/deliveries" className="btn-secondary btn-sm"><Truck className="size-4" />Delivery board</Link>}
-                {quote.status === "accepted" && quote.invoiceNumber && <Link href="/invoices?show=all" className="btn-secondary btn-sm">Invoices</Link>}
-              </div>
-            </div>
-          </div>
-
-          <div className="border-t border-border bg-muted/15 px-5 py-4 sm:px-6">
-            <p className="mb-3 text-xs text-muted-foreground">
-              {delivered ? "Delivered" : <>Current step: <span className="font-medium text-foreground">{current.label}</span></>}
-              <span title="Steps done out of the steps that apply to this deal — a step that does not apply counts in neither."> · {progress.done} of {progress.of} steps done</span>
+        {/* Who, how much, and one click to reach them. */}
+        <Surface className="flex flex-wrap items-center gap-x-8 gap-y-4 p-5">
+          <div className="min-w-[12rem]">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">{labels.deal.one} value</p>
+            <p className="mt-1 text-3xl font-semibold tracking-tight tabular-nums">{formatZAR(total, moneyFmt)}</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {invoice ? `Paid ${formatZAR(paid, moneyFmt)} · owed ${formatZAR(Math.max(0, total - paid), moneyFmt)}` : depositAmount ? `Deposit asked · ${formatZAR(depositAmount, moneyFmt)}` : "No deposit asked · nothing owed until accepted"}
             </p>
-            <div className="flex gap-3 overflow-x-auto pb-1">
-              {journey.map((step) => (
-                <JourneyStep key={step.key} label={step.label} done={step.done} skipped={step.skipped} current={step.key === current.key && !step.done} />
-              ))}
-            </div>
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Customer</p>
+            <p className="mt-1 truncate text-base font-semibold">{customer}</p>
+            {billTo.attention && <p className="text-xs text-muted-foreground">Attention: {billTo.attention}</p>}
+            <p className="mt-0.5 truncate text-xs text-muted-foreground">{[billTo.phone, billTo.email].filter(Boolean).join(" · ") || "No phone or email"}</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {billTo.phone && <a href={`tel:${billTo.phone}`} className="btn-secondary btn-sm"><Phone className="size-4" />Call</a>}
+            {chase("btn-secondary btn-sm", "Log a call or message")}
+            {quote.contactId && <Link href={`/contacts/${quote.contactId}`} className="btn-secondary btn-sm"><UserRound className="size-4" />Customer</Link>}
+            {lead && <Link href={`/leads/${lead.id}`} className="btn-secondary btn-sm"><Activity className="size-4" />{labels.lead.one}</Link>}
           </div>
         </Surface>
+
+        <DealStandsPanel steps={stand.steps} holds={stand.holds} progress={progress} buttons={stepButtons} closed={closed} />
+        {/* On a phone or narrow screen the next step comes straight after where the deal stands; on a wide one it sits in the side column. */}
+        {nextStepCard && <div className="xl:hidden">{nextStepCard}</div>}
 
         <div className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_minmax(19rem,.55fr)]">
           <div className="space-y-4">
@@ -453,12 +487,20 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
                     <p className="text-sm font-semibold tabular-nums">{formatZAR(fee.amountCents, moneyFmt)}</p>
                   </div>
                 ))}
-                <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-4 py-4">
-                  <div>
-                    <p className="font-semibold">{labels.deal.one} total</p>
-                    <p className="mt-0.5 text-xs text-muted-foreground">{quote.depositPaidAt ? "Deposit received" : depositAmount ? `Deposit expected · ${formatZAR(depositAmount, moneyFmt)}` : "No deposit terms set"}</p>
-                  </div>
-                  <p className="text-lg font-semibold tabular-nums">{formatZAR(total, moneyFmt)}</p>
+              </div>
+              {/* Total, what has come in, and what is still owed — in the deal's own currency, never mixed. */}
+              <div className="mt-2 grid gap-3 sm:grid-cols-3">
+                <div className="rounded-xl bg-muted/30 px-4 py-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">{labels.deal.one} total</p>
+                  <p className="mt-1 text-lg font-semibold tabular-nums">{formatZAR(total, moneyFmt)}</p>
+                </div>
+                <div className="rounded-xl bg-muted/30 px-4 py-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Paid</p>
+                  <p className="mt-1 text-lg font-semibold tabular-nums">{formatZAR(paid, moneyFmt)}</p>
+                </div>
+                <div className="rounded-xl bg-muted/30 px-4 py-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">{invoice ? "Owed" : "Owed once accepted"}</p>
+                  <p className="mt-1 text-lg font-semibold tabular-nums">{formatZAR(Math.max(0, total - paid), moneyFmt)}</p>
                 </div>
               </div>
             </Surface>
@@ -606,74 +648,37 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
           </div>
 
           <aside className="space-y-4">
-            <DealNextActions
-              blockers={blockers}
-              actions={blockerActions}
-              noNextStep={!delivered && Boolean(lead) && !nextActivity}
-              scheduleHref={lead ? `/leads/${lead.id}?tab=activities&schedule=1` : null}
-            />
-            <Surface className="p-5">
-              <div className="flex items-center gap-2">
-                <ShieldCheck className="size-5 text-primary" />
-                <div>
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Readiness</p>
-                  <h2 className="mt-0.5 text-base font-semibold">{ready.title}</h2>
-                </div>
-              </div>
-              {/* The same steps, names and "not needed" as the journey above — the workspace's lifecycle (dealLifecycle.ts). */}
-              <div className="mt-3 divide-y divide-border/60">
-                <ReadinessRow done={accepted} label={ready.accepted} detail={quote.signedAt ? `Signed ${formatDateTime(quote.signedAt)}` : accepted ? "Marked accepted — not signed online" : "Customer acceptance outstanding"} />
-                {depositStep && (
-                  <ReadinessRow done={Boolean(quote.depositPaidAt)} skipped={depositStep.skipped} label={ready.deposit} detail={quote.depositPaidAt ? formatDateTime(quote.depositPaidAt) : depositStep.skipped ? "Not needed — none asked on this deal" : `Waiting for ${formatZAR(depositAmount, moneyFmt)}`} />
-                )}
-                {finance && finance.status !== "withdrawn" && (
-                  <ReadinessRow
-                    done={!financeBlocksDelivery(finance.status)}
-                    label="Finance approved"
-                    detail={`${finance.vendor.name}: ${financeStatusShort(finance.status)} since ${formatDate(finance.statusAt)}${financeBlocksDelivery(finance.status) ? " — delivery can be booked once it's approved" : ""}`}
-                  />
-                )}
-                {hasStep("stock") && <ReadinessRow done={stockReady} label={ready.stock} detail={stockReady ? stock.map((item) => item.stockNumber ?? item.product.name).join(", ") : "No physical unit assigned"} />}
-                {hasStep("pdi") && <ReadinessRow done={pdiReady} label={ready.pdi} detail={stockReady ? (pdiReady ? "Allocated stock ready for delivery" : "Workshop preparation still outstanding") : "Requires stock allocation first"} />}
-                <ReadinessRow done={deliveryBooked} label={ready.delivery} detail={deliveryBooked ? formatDateTime(quote.deliveryScheduledFor) : ready.noDeliveryDate} />
-              </div>
-              {quote.status === "accepted" && <Link href="/deliveries" className="btn-primary btn-sm mt-4 w-full"><Truck className="size-4" />Open fulfilment</Link>}
-            </Surface>
+            {nextStepCard && <div className="hidden xl:block">{nextStepCard}</div>}
 
-            <Surface className="p-5">
-              <div className="flex items-center gap-2">
-                <UserRound className="size-5 text-muted-foreground" />
-                <h2 className="text-sm font-semibold">Customer</h2>
-              </div>
-              <div className="mt-4">
-                <p className="text-base font-semibold">{customer}</p>
-                {billTo.attention && <p className="mt-0.5 text-xs text-muted-foreground">Attention: {billTo.attention}</p>}
-                <div className="mt-3 space-y-2 text-sm">
-                  <p className="flex items-center gap-2 text-muted-foreground"><Mail className="size-3.5" /><span className="truncate">{billTo.email || "No email"}</span></p>
-                  <p className="flex items-center gap-2 text-muted-foreground"><Phone className="size-3.5" /><span>{billTo.phone || "No phone"}</span></p>
+            {/* The vehicle, compact: what it is and where its unit stands. The photo is a thumbnail, not the page. */}
+            <Surface className="p-5" aria-label="Vehicle">
+              <div className="flex gap-4">
+                <div className="grid h-20 w-28 shrink-0 place-items-center overflow-hidden rounded-xl bg-muted/40 text-muted-foreground/40">
+                  {vehicleImage ? (
+                    // eslint-disable-next-line @next/next/no-img-element -- authenticated stored-file route
+                    <img src={vehicleImage} alt={vehicleName} className="size-full object-cover" />
+                  ) : (
+                    <CarFront className="size-10" strokeWidth={1.5} aria-hidden="true" />
+                  )}
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Vehicle</p>
+                  <p className="mt-1 truncate text-sm font-semibold">{vehicleName}</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">{vehicleColour ?? "No colour chosen"}</p>
                 </div>
               </div>
               <div className="mt-4 grid grid-cols-2 gap-3 border-t border-border pt-4">
+                <Fact label="Stock no." value={unit?.stockNumber ?? "Not allocated"} />
+                <Fact label="VIN / Serial" value={unit?.serial ? `••••${unit.serial.slice(-6)}` : "—"} />
+                <Fact label="PDI" value={unit ? unit.pdiStatus.replaceAll("_", " ") : "After allocation"} />
                 <Fact label="Source" value={lead?.source ?? "—"} />
-                <Fact label="Owner" value={quote.lead?.assignedTo?.name ?? quote.createdBy?.name ?? "—"} />
               </div>
-            </Surface>
-
-            <Surface className="p-5">
-              <div className="flex items-center gap-2">
-                <Clock3 className="size-5 text-muted-foreground" />
-                <h2 className="text-sm font-semibold">Next action</h2>
-              </div>
-              {nextActivity ? (
-                <div className="mt-4">
-                  <p className="text-sm font-semibold">{nextActivity.summary}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">{nextActivity.type}{nextActivity.location ? ` · ${nextActivity.location}` : ""}</p>
-                  <p className="mt-3 text-xs font-medium text-primary">{formatDateTime(nextActivity.dueDate)}</p>
+              {quote.status === "accepted" && (
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <Link href="/deliveries" className="btn-secondary btn-sm"><Truck className="size-4" />Delivery board</Link>
+                  {quote.invoiceNumber && <Link href="/invoices?show=all" className="btn-secondary btn-sm">Invoices</Link>}
                 </div>
-              ) : (
-                <p className="mt-4 text-sm text-muted-foreground">Nothing scheduled.</p>
               )}
-              {lead && <Link href={`/leads/${lead.id}?tab=activities&schedule=1`} className="btn-secondary btn-sm mt-4 w-full">Schedule activity</Link>}
             </Surface>
 
             <Surface className="p-5">
@@ -713,6 +718,10 @@ export default async function DealWorkspacePage({ params }: { params: Promise<{ 
           </aside>
         </div>
       </div>
+      {/* "Chase the customer" / "Log a call or message" open the deal here, beside the page (?open=lead:<id>). */}
+      <Suspense fallback={null}>
+        <RecordDrawer />
+      </Suspense>
     </EntityDetailShell>
   );
 }
