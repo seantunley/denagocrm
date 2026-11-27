@@ -18,7 +18,7 @@ Module.prototype.require = new Proxy(Module.prototype.require, {
     return args[0] === "server-only" ? {} : Reflect.apply(target, self, args);
   },
 });
-const { generateApiKey, hashApiKey, API_KEY_SCOPES } = createRequire(import.meta.url)("../src/lib/apiKeys.ts") as typeof import("../src/lib/apiKeys");
+const { generateApiKey, hashApiKey, API_KEY_SCOPES, parseApiKeyScopes } = createRequire(import.meta.url)("../src/lib/apiKeys.ts") as typeof import("../src/lib/apiKeys");
 
 const read = (path: string) => readFileSync(path, "utf8");
 
@@ -35,6 +35,23 @@ test("a workspace key is unguessable, header-safe, recognisable — and only its
   for (const [route, scope] of [["src/app/api/intake/route.ts", "intake"], ["src/app/api/bookings/route.ts", "bookings"], ["src/app/api/service-lookup/route.ts", "service-lookup"]]) {
     assert.match(read(route), new RegExp(`authenticateIntakeKey\\(req\\.headers\\.get\\("x-api-key"\\), "${scope}"\\)`));
   }
+});
+
+test("a key may do only what was ticked: website leads by default, never an unknown scope (review of #1240)", () => {
+  assert.deepEqual(parseApiKeyScopes(["intake"]), ["intake"]);
+  assert.deepEqual(parseApiKeyScopes(["service-lookup", "intake", "intake"]), ["intake", "service-lookup"], "canonical order, once each");
+  assert.equal(parseApiKeyScopes([]), null, "a key for nothing");
+  assert.equal(parseApiKeyScopes(["intake", "admin"]), null, "an unknown scope refuses the lot");
+  assert.equal(parseApiKeyScopes("intake"), null, "a list, not a string");
+  assert.equal(parseApiKeyScopes(undefined), null);
+  const lib = read("src/lib/apiKeys.ts");
+  assert.match(lib, /const allowed = parseApiKeyScopes\(\[\.\.\.scopes\]\);\s*if \(!allowed\) throw new Error/, "checked again where it is written");
+  assert.match(lib, /\$\{allowed\.join\(","\)\}, CURRENT_TIMESTAMP\)/, "stored as asked, not every scope");
+  const actions = read("src/app/actions/apiKeys.ts");
+  assert.match(actions, /const allowed = parseApiKeyScopes\(scopes\);\s*if \(!allowed\) refuse\(/, "checked on the server, not trusted from the page");
+  const panel = read("src/components/settings/ApiKeysPanel.tsx");
+  assert.match(panel, /useState<string\[\]>\(\["intake"\]\)/, "website leads only, unless more is ticked");
+  assert.match(panel, /\{scopeWords\(key\.scopes\)\}/, "each key says what it may do");
 });
 
 test("every key query names the workspace — the table is read outside any tenant scope", () => {
@@ -92,13 +109,18 @@ test("every workspace owner gets the AI, voice, Telegram, Maps and website-key r
   assert.match(read("src/lib/apiKeys.ts"), /if \(tenantEnforcing\(\)\) return null; \/\/ enforcement: per-tenant keys only/);
 });
 
-test("a plan that supplies the AI says so — and the key it supplies is never shown", () => {
+test("'supplied with your plan' only when the platform really supplies a key — and the key is never shown (review of #1240)", () => {
+  const settings = read("src/lib/settings.ts");
+  // One rule for use and for display: the plan, an active workspace, AND a key the platform has actually saved.
+  assert.match(settings, /async function platformSuppliedKey\(tenantId: string, key: ProviderKey\): Promise<string \| null> \{[\s\S]*?if \(!tenant\?\.platformAi \|\| !tenant\.active\) return null;\s*return readSetting\(DEFAULT_TENANT_ID, key\);/);
+  assert.match(settings, /if \(own \|\| tenantId === DEFAULT_TENANT_ID\) return own;\s*return platformSuppliedKey\(tenantId, key\);/, "getProviderKey");
+  assert.match(settings, /export async function providerKeySupplied\(key: ProviderKey\): Promise<boolean> \{[\s\S]*?if \(tenantId === DEFAULT_TENANT_ID \|\| \(await readSetting\(tenantId, key\)\)\) return false;\s*return Boolean\(await platformSuppliedKey\(tenantId, key\)\);/, "yes/no only; never for its own key or the founding workspace");
+  const page = read("src/app/(app)/settings/integrations/page.tsx");
+  assert.match(page, /await Promise\.all\(\[providerKeySupplied\("ANTHROPIC_API_KEY"\), providerKeySupplied\("ELEVENLABS_API_KEY"\)\]\)/);
+  assert.match(page, /supplied: \{ claude: claudeSupplied, voice: voiceSupplied \},/);
   const rows = read("src/components/settings/WorkspaceIntegrationRows.tsx");
-  assert.match(rows, /const claudeSupplied = !setting\("ANTHROPIC_API_KEY"\) && platformSupplies;/);
+  assert.match(rows, /const claudeSupplied = supplied\.claude;/);
   assert.match(rows, /Boolean\(setting\("ANTHROPIC_API_KEY"\)\) \|\| claudeSupplied\);/, "counted as aiProvider() counts it");
   assert.match(rows, /Supplied with your plan — save your own key to use your own Anthropic account/);
-  assert.doesNotMatch(rows, /getProviderKey/);
-  const page = read("src/app/(app)/settings/integrations/page.tsx");
-  assert.match(page, /basePrisma\.tenant\.findFirst\(\{ where: \{ id: tenantId, platformAi: true, active: true \}, select: \{ id: true \} \}\)/);
-  assert.match(page, /const planSupplies = tenantId && tenantId !== DEFAULT_TENANT_ID/, "the founding workspace's keys are its own, never 'supplied'");
+  assert.doesNotMatch(rows + page, /getProviderKey/, "the page and rows never read a supplied key");
 });

@@ -290,9 +290,30 @@ export async function getProviderKey(key: ProviderKey): Promise<string | null> {
   const tenantId = await settingsTenantId();
   const own = await readSetting(tenantId, key);
   if (own || tenantId === DEFAULT_TENANT_ID) return own;
+  return platformSuppliedKey(tenantId, key);
+}
+
+/**
+ * The key the platform supplies to a workspace that has none of its own: only on a plan with platformAi, only while
+ * the workspace is active, and only if the founding workspace actually HAS one saved — an entitlement with no key
+ * behind it supplies nothing. Shared by getProviderKey (use) and providerKeySupplied (yes/no, for display).
+ */
+async function platformSuppliedKey(tenantId: string, key: ProviderKey): Promise<string | null> {
   const tenant = await basePrisma.tenant.findUnique({ where: { id: tenantId }, select: { platformAi: true, active: true } });
   if (!tenant?.platformAi || !tenant.active) return null;
   return readSetting(DEFAULT_TENANT_ID, key);
+}
+
+/**
+ * Whether the acting workspace's AI / voice is running on a key the PLATFORM supplies right now — getProviderKey's
+ * own rule, answered yes/no so a settings page can say "supplied with your plan" without ever holding the key
+ * (review of #1240: entitlement alone is not supply). False for the founding workspace (its keys are its own) and
+ * for a workspace with a key of its own.
+ */
+export async function providerKeySupplied(key: ProviderKey): Promise<boolean> {
+  const tenantId = await settingsTenantId();
+  if (tenantId === DEFAULT_TENANT_ID || (await readSetting(tenantId, key))) return false;
+  return Boolean(await platformSuppliedKey(tenantId, key));
 }
 
 /** Where each Regional field lives in AppSetting. */

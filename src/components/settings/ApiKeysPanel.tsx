@@ -5,7 +5,16 @@ import { useRouter } from "next/navigation";
 import { SaveButton, SaveForm } from "@/components/SaveForm";
 import { createApiKey, revokeApiKey } from "@/app/actions/apiKeys";
 
-export type ApiKeyRow = { id: string; label: string; prefix: string; createdAt: string; lastUsedAt: string | null };
+export type ApiKeyRow = { id: string; label: string; prefix: string; scopes: string; createdAt: string; lastUsedAt: string | null };
+
+/** What each scope lets a key do, in words. Website leads only, unless more is ticked (least privilege). */
+const SCOPES: { id: string; label: string; hint: string }[] = [
+  { id: "intake", label: "Website leads", hint: "post enquiries from your website and landing pages" },
+  { id: "bookings", label: "Bookings", hint: "show free slots and book appointments" },
+  { id: "service-lookup", label: "Service lookup", hint: "look up a customer's vehicle — texts them a one-time PIN" },
+];
+const scopeWords = (csv: string) =>
+  csv.split(",").map((scope) => SCOPES.find((known) => known.id === scope.trim())?.label ?? scope.trim()).filter(Boolean).join(", ");
 
 const day = (iso: string | null) =>
   iso ? new Date(iso).toLocaleDateString("en-ZA", { day: "numeric", month: "short", year: "numeric" }) : "never";
@@ -17,6 +26,7 @@ const day = (iso: string | null) =>
 export default function ApiKeysPanel({ keys, endpoint }: { keys: ApiKeyRow[]; endpoint: string }) {
   const router = useRouter();
   const [label, setLabel] = useState("");
+  const [scopes, setScopes] = useState<string[]>(["intake"]);
   const [made, setMade] = useState<{ rawKey: string; label: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -26,13 +36,14 @@ export default function ApiKeysPanel({ keys, endpoint }: { keys: ApiKeyRow[]; en
     start(async () => {
       setError(null);
       setCopied(false);
-      const result = await createApiKey(label);
+      const result = await createApiKey(label, scopes);
       if ("error" in result) {
         setError(result.error);
         return;
       }
       setMade({ rawKey: result.rawKey, label: label.trim() });
       setLabel("");
+      setScopes(["intake"]);
       router.refresh();
     });
 
@@ -41,7 +52,7 @@ export default function ApiKeysPanel({ keys, endpoint }: { keys: ApiKeyRow[]; en
       <p className="text-xs text-muted-foreground">
         POST leads from your website or landing pages to <code>{endpoint}</code> with the key in an <code>X-Api-Key</code> header.
         Fields: name (required), email, phone, message, model, color, source. The same key works for bookings and the service
-        lookup. Each key belongs to this workspace only.
+        lookup if you allow it. Each key belongs to this workspace only, and can do only what you tick when you make it.
       </p>
 
       {made && (
@@ -70,6 +81,20 @@ export default function ApiKeysPanel({ keys, endpoint }: { keys: ApiKeyRow[]; en
           {pending ? "Making…" : "Make key"}
         </button>
       </div>
+      <fieldset className="space-y-1">
+        <legend className="label">This key may</legend>
+        {SCOPES.map((scope) => (
+          <label key={scope.id} className="flex items-start gap-2 text-sm text-muted-foreground">
+            <input
+              type="checkbox"
+              className="mt-0.5 h-4 w-4"
+              checked={scopes.includes(scope.id)}
+              onChange={(event) => setScopes((current) => (event.target.checked ? [...current, scope.id] : current.filter((id) => id !== scope.id)))}
+            />
+            <span><span className="text-foreground">{scope.label}</span> — {scope.hint}</span>
+          </label>
+        ))}
+      </fieldset>
       {error && <p className="text-xs text-red-400" role="alert">{error}</p>}
 
       {keys.length === 0 ? (
@@ -81,7 +106,7 @@ export default function ApiKeysPanel({ keys, endpoint }: { keys: ApiKeyRow[]; en
               <div className="min-w-0">
                 <p className="truncate font-medium text-foreground">{key.label}</p>
                 <p className="text-xs text-muted-foreground">
-                  <span className="font-mono">{key.prefix}…</span> · made {day(key.createdAt)} · last used {day(key.lastUsedAt)}
+                  <span className="font-mono">{key.prefix}…</span> · {scopeWords(key.scopes)} · made {day(key.createdAt)} · last used {day(key.lastUsedAt)}
                 </p>
               </div>
               <SaveForm success="Key revoked" action={revokeApiKey.bind(null, key.id)}>

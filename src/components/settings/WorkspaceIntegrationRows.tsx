@@ -74,14 +74,18 @@ export type PlatformIntegrationRow = {
 export default async function platformIntegrationRows({
   xAccountId,
   platformSetup,
-  platformSupplies,
+  supplied,
   apiKeys,
 }: {
   xAccountId: string | null;
   /** The platform owner, in the founding workspace: the platform's own webhook / Meta app setup. */
   platformSetup: boolean;
-  /** This workspace's plan has the platform supply its AI and voice keys (Tenant.platformAi). Never the key itself. */
-  platformSupplies: boolean;
+  /**
+   * Whether the platform IS supplying this workspace's Claude / ElevenLabs key right now (settings.ts
+   * providerKeySupplied: the plan, an active workspace, AND a key the platform has saved; never when the workspace
+   * has its own). Yes/no only — never the key itself.
+   */
+  supplied: { claude: boolean; voice: boolean };
   /** This workspace's API keys, for the website-intake row. */
   apiKeys: ApiKeyRow[];
 }): Promise<PlatformIntegrationRow[]> {
@@ -93,9 +97,9 @@ export default async function platformIntegrationRows({
   const voices = setting("ELEVENLABS_API_KEY") ? await elevenLabsVoices().catch(() => null) : null;
   // What the chatbot and AI helpers actually run on now: the choice — or ChatGPT when Claude is chosen without a key.
   // Never Claude in place of ChatGPT (pickAiProvider): then the AI is off, and the row says so.
-  // A Claude key the plan supplies counts, exactly as aiProvider() counts it. The key itself is never read here.
-  const claudeSupplied = !setting("ANTHROPIC_API_KEY") && platformSupplies;
-  const voiceSupplied = !setting("ELEVENLABS_API_KEY") && platformSupplies;
+  // A Claude key the platform is supplying counts, exactly as aiProvider() counts it. The key itself is never read here.
+  const claudeSupplied = supplied.claude;
+  const voiceSupplied = supplied.voice;
   const aiInUse = pickAiProvider(setting("AI_PROVIDER"), chatGpt.state === "connected", Boolean(setting("ANTHROPIC_API_KEY")) || claudeSupplied);
   const aiChosen = setting("AI_PROVIDER") === "claude" ? "claude" : "chatgpt";
   // The one model picker: the models each provider lists for this workspace (lib/aiModelCatalog), the built-in lists

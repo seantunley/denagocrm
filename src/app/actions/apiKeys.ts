@@ -5,7 +5,7 @@ import { requireTenantOwner } from "@/lib/auth";
 import { asActionResult, refuse } from "@/lib/actionResult";
 import { actingTenantId } from "@/lib/actingTenant";
 import { logAudit } from "@/lib/audit";
-import { createWorkspaceApiKey, revokeWorkspaceApiKey } from "@/lib/apiKeys";
+import { createWorkspaceApiKey, parseApiKeyScopes, revokeWorkspaceApiKey } from "@/lib/apiKeys";
 
 /*
  * A workspace's own public API keys — what its website, booking widget and
@@ -16,18 +16,23 @@ import { createWorkspaceApiKey, revokeWorkspaceApiKey } from "@/lib/apiKeys";
 
 const MAX_LABEL = 60;
 
-/** Make a key. The raw key comes back this once — it is stored only as a hash. */
-export async function createApiKey(label: string): Promise<{ rawKey: string; prefix: string } | { error: string }> {
+/**
+ * Make a key that may do exactly what was ticked (intake, bookings, service lookup — checked here, not trusted from
+ * the page). The raw key comes back this once — it is stored only as a hash.
+ */
+export async function createApiKey(label: string, scopes: unknown): Promise<{ rawKey: string; prefix: string } | { error: string }> {
   const made: { key?: { rawKey: string; prefix: string } } = {};
   const result = await asActionResult(async () => {
     const user = await requireTenantOwner();
     const name = String(label ?? "").trim().slice(0, MAX_LABEL);
     if (!name) refuse("Name the key after where it is used, e.g. “Website”.");
+    const allowed = parseApiKeyScopes(scopes);
+    if (!allowed) refuse("Choose what the key may do — at least one of website leads, bookings or service lookup.");
     const tenantId = await actingTenantId();
-    const key = await createWorkspaceApiKey(tenantId, name);
+    const key = await createWorkspaceApiKey(tenantId, name, allowed);
     await logAudit({
       action: "api_key.created",
-      summary: `Created the API key “${name}” (${key.prefix}…)`,
+      summary: `Created the API key “${name}” (${key.prefix}…) for ${allowed.join(", ")}`,
       entityType: "TenantApiKey",
       entityId: key.id,
       user,

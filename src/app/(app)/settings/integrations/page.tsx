@@ -1,7 +1,7 @@
 import { requireTenantOwner, getActiveTenantId } from "@/lib/auth";
-import { basePrisma, prisma } from "@/lib/db";
+import { prisma } from "@/lib/db";
 import { listWorkspaceApiKeys } from "@/lib/apiKeys";
-import { getWorkspaceSetting, hasTenantCredentialOverride, isSecretSettingKey, resolveIntegrationBundle } from "@/lib/settings";
+import { getWorkspaceSetting, hasTenantCredentialOverride, isSecretSettingKey, providerKeySupplied, resolveIntegrationBundle } from "@/lib/settings";
 import XeroItemPicker from "@/components/XeroItemPicker";
 import { linkFeeToXeroItem, setXeroPaymentsSource } from "@/app/actions/xero";
 import { XERO_FEE_ITEM_KEYS, XERO_PAYMENTS_SOURCE_KEY, XERO_TAX_CHOICES_KEY, parseXeroItemLink, parseXeroTaxChoices } from "@/lib/xeroInvoice";
@@ -418,14 +418,17 @@ export default async function IntegrationsPage({ searchParams }: { searchParams?
   // This workspace's AI, voice, Telegram, Maps and website keys — for EVERY workspace owner, their own values
   // (Sean, 2026-11-27: "each workspace has to have their own details"); the platform's webhook / Meta app setup
   // only for the platform owner, in the founding workspace whose values it is. Filed under the same purposes.
-  const planSupplies = tenantId && tenantId !== DEFAULT_TENANT_ID
-    ? Boolean(await basePrisma.tenant.findFirst({ where: { id: tenantId, platformAi: true, active: true }, select: { id: true } }))
-    : false;
+  // Whether the platform is ACTUALLY supplying this workspace's AI / voice key right now (the plan, the workspace
+  // active, and a key really saved by the platform) — yes/no only; the key never reaches this page.
+  const [claudeSupplied, voiceSupplied] = tenantId
+    ? await Promise.all([providerKeySupplied("ANTHROPIC_API_KEY"), providerKeySupplied("ELEVENLABS_API_KEY")])
+    : [false, false];
   const apiKeys = tenantId
     ? (await listWorkspaceApiKeys(tenantId)).map((key) => ({
         id: key.id,
         label: key.label,
         prefix: key.prefix,
+        scopes: key.scopes,
         createdAt: new Date(key.createdAt).toISOString(),
         lastUsedAt: key.lastUsedAt ? new Date(key.lastUsedAt).toISOString() : null,
       }))
@@ -434,7 +437,7 @@ export default async function IntegrationsPage({ searchParams }: { searchParams?
     ? await platformIntegrationRows({
         xAccountId: effectiveShown.X_ACCOUNT_ID ?? null,
         platformSetup: isPlatformOwner && tenantId === DEFAULT_TENANT_ID,
-        platformSupplies: planSupplies,
+        supplied: { claude: claudeSupplied, voice: voiceSupplied },
         apiKeys,
       })
     : [];
