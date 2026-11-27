@@ -156,7 +156,7 @@ async function messageScope(user: User, needle: string): Promise<MessageScope | 
               // lead_brief's own matching: a lead id, a customer's id, or the name.
               looksLikeId
                 ? { OR: [{ id: needle }, { contactId: needle }] }
-                : { OR: [{ name: fuzzy(needle) }, { title: fuzzy(needle) }, { contact: { OR: [{ firstName: fuzzy(needle) }, { lastName: fuzzy(needle) }] } }] },
+                : { OR: [{ name: fuzzy(needle) }, { title: fuzzy(needle) }, { contact: { OR: [{ firstName: fuzzy(needle) }, { lastName: fuzzy(needle) }, { company: fuzzy(needle) }] } }] },
             ],
           },
           orderBy: { updatedAt: "desc" },

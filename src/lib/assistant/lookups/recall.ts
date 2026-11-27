@@ -122,7 +122,7 @@ export async function recallLeadRefs(user: User, needle: string): Promise<string
             OR: [
               { name: fuzzy(needle) },
               { title: fuzzy(needle) },
-              { contact: { OR: [{ firstName: fuzzy(needle) }, { lastName: fuzzy(needle) }] } },
+              { contact: { OR: [{ firstName: fuzzy(needle) }, { lastName: fuzzy(needle) }, { company: fuzzy(needle) }] } },
             ],
           }),
     },
