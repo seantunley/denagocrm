@@ -51,7 +51,7 @@ export async function stuckLookup(user: PermissionUser, needle: string): Promise
       // A lead id, a customer's id (the bubble on a customer page), or a name.
       ...(ID.test(needle)
         ? { OR: [{ id: needle }, { contactId: needle }] }
-        : { OR: [{ name: fuzzy(needle) }, { title: fuzzy(needle) }, { contact: { OR: [{ firstName: fuzzy(needle) }, { lastName: fuzzy(needle) }] } }] }),
+        : { OR: [{ name: fuzzy(needle) }, { title: fuzzy(needle) }, { contact: { OR: [{ firstName: fuzzy(needle) }, { lastName: fuzzy(needle) }, { company: fuzzy(needle) }] } }] }),
     },
     orderBy: { updatedAt: "desc" },
     take: 5,

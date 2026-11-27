@@ -105,7 +105,7 @@ async function resolve(user: PermissionUser, needle: string): Promise<Target | n
       where: {
         deletedAt: null,
         ...(ids === null ? {} : { id: { in: ids } }),
-        OR: [{ name: fuzzy(needle) }, { title: fuzzy(needle) }, { contact: { OR: [{ firstName: fuzzy(needle) }, { lastName: fuzzy(needle) }] } }],
+        OR: [{ name: fuzzy(needle) }, { title: fuzzy(needle) }, { contact: { OR: [{ firstName: fuzzy(needle) }, { lastName: fuzzy(needle) }, { company: fuzzy(needle) }] } }],
       },
       orderBy: { updatedAt: "desc" },
       take: 5,

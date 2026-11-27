@@ -58,7 +58,9 @@ export async function leadBrief(user: User, raw: z.infer<typeof leadBriefArgs>):
             OR: [
               { name: fuzzy(needle) },
               { title: fuzzy(needle) },
-              { contact: { OR: [{ firstName: fuzzy(needle) }, { lastName: fuzzy(needle) }] } },
+              // The customer's COMPANY too: "Tekili Farm" is Leon van Rooyen's deal (Sean, 2026-11-28 — it found the customer
+              // record by company, said there was no deal, and could not give its delivery date).
+              { contact: { OR: [{ firstName: fuzzy(needle) }, { lastName: fuzzy(needle) }, { company: fuzzy(needle) }] } },
             ],
           }),
     },
