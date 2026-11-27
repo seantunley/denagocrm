@@ -17,6 +17,7 @@ import { DEFAULT_TTS_MODEL, TTS_MODELS, VOICE_SPEEDS, elevenLabsVoices, modelTak
 import { STT_CUSTOMER_NAMES_KEY, TTS_MODEL_KEY, VOICE_SPEED_KEY } from "@/lib/voiceSettings";
 import { PRONUNCIATIONS_KEY } from "@/lib/spokenText";
 import { PLATFORM_URL } from "@/lib/platformLegal";
+import ApiKeysPanel, { type ApiKeyRow } from "@/components/settings/ApiKeysPanel";
 
 /** The workspace settings these rows read. Never per-tenant-credential keys — those are the page's own forms. */
 const KEYS = [
@@ -39,16 +40,23 @@ const KEYS = [
   "ELEVENLABS_PRONUNCIATIONS",
   "ELEVENLABS_STT_CUSTOMER_NAMES",
   "WHATSAPP_VOICE_REPLIES",
-  "INTAKE_API_KEY",
 ] as const;
 
 /**
- * The platform owner's integration rows on Settings → Integrations (batch 6,
- * one Integrations page). These used to be the rest of the old Settings →
- * Integrations tab: webhook endpoints, Telegram, Maps, the AI and voice keys and
- * the intake API. They are `AppSetting` values written by owner-only actions
- * (saveSetting, connectTelegram…), so the page renders this only for a platform
- * owner — exactly who could see the old tab.
+ * The integration rows that are settings rather than per-integration credential
+ * forms: Telegram, Maps, the AI and voice, the website's API keys — and the
+ * platform's own webhook / Meta app setup.
+ *
+ * EVERY WORKSPACE OWNER gets their workspace's rows (Sean, 2026-11-27: "tenant
+ * fourbuy has no access to setup chatgpt and whatsapp… each workspace has to have
+ * their own details"). They were the platform owner's alone, from when the old
+ * Settings tab was the platform's; but each value is the ACTING workspace's own —
+ * `saveSetting`, `connectTelegram`, the ChatGPT sign-in and the model picker all
+ * accept the workspace's owner and write that workspace's row under enforcement
+ * (settings.ts settingsOwnerTenantId), and the AI reads its own (settings.ts's
+ * provider-key rule, aiProvider). Only the Webhooks row is the platform's: the Meta app every
+ * workspace's WhatsApp / Facebook sign-up goes through, read from the founding
+ * workspace (whatsappSignupApp) — so it shows for the platform owner, there.
  *
  * The credentials that also have a per-workspace override (X, WhatsApp, Meta's
  * page token, SMTP, IMAP, BulkSMS, Google reviews) are NOT here: the page's own
@@ -63,7 +71,24 @@ export type PlatformIntegrationRow = {
   body: ReactNode;
 };
 
-export default async function platformIntegrationRows({ xAccountId }: { xAccountId: string | null }): Promise<PlatformIntegrationRow[]> {
+export default async function platformIntegrationRows({
+  xAccountId,
+  platformSetup,
+  supplied,
+  apiKeys,
+}: {
+  xAccountId: string | null;
+  /** The platform owner, in the founding workspace: the platform's own webhook / Meta app setup. */
+  platformSetup: boolean;
+  /**
+   * Whether the platform IS supplying this workspace's Claude / ElevenLabs key right now (settings.ts
+   * providerKeySupplied: the plan, an active workspace, AND a key the platform has saved; never when the workspace
+   * has its own). Yes/no only — never the key itself.
+   */
+  supplied: { claude: boolean; voice: boolean };
+  /** This workspace's API keys, for the website-intake row. */
+  apiKeys: ApiKeyRow[];
+}): Promise<PlatformIntegrationRow[]> {
   const values = new Map(await Promise.all(KEYS.map(async (key) => [key, (await getSetting(key)) ?? ""] as const)));
   const setting = (key: (typeof KEYS)[number]) => values.get(key) ?? "";
   // A read that fails must not take the page down with it.
@@ -72,7 +97,10 @@ export default async function platformIntegrationRows({ xAccountId }: { xAccount
   const voices = setting("ELEVENLABS_API_KEY") ? await elevenLabsVoices().catch(() => null) : null;
   // What the chatbot and AI helpers actually run on now: the choice — or ChatGPT when Claude is chosen without a key.
   // Never Claude in place of ChatGPT (pickAiProvider): then the AI is off, and the row says so.
-  const aiInUse = pickAiProvider(setting("AI_PROVIDER"), chatGpt.state === "connected", Boolean(setting("ANTHROPIC_API_KEY")));
+  // A Claude key the platform is supplying counts, exactly as aiProvider() counts it. The key itself is never read here.
+  const claudeSupplied = supplied.claude;
+  const voiceSupplied = supplied.voice;
+  const aiInUse = pickAiProvider(setting("AI_PROVIDER"), chatGpt.state === "connected", Boolean(setting("ANTHROPIC_API_KEY")) || claudeSupplied);
   const aiChosen = setting("AI_PROVIDER") === "claude" ? "claude" : "chatgpt";
   // The one model picker: the models each provider lists for this workspace (lib/aiModelCatalog), the built-in lists
   // when it can't be asked. ChatGPT's model is read through the same scoped read as the status, connected or not.
@@ -95,7 +123,7 @@ export default async function platformIntegrationRows({ xAccountId }: { xAccount
   const modelInUse = aiInUse === "chatgpt" ? chatGptModel : claudeChosen || "automatic";
 
   const on = (value: string): IntegrationState => (value ? "connected" : "not-set-up");
-  return [
+  const rows: PlatformIntegrationRow[] = [
     {
       id: "webhooks",
       title: "Webhooks (X, Meta, WhatsApp)",
@@ -323,7 +351,8 @@ export default async function platformIntegrationRows({ xAccountId }: { xAccount
     {
       id: "claude",
       title: "AI Assist (Claude)",
-      state: on(setting("ANTHROPIC_API_KEY")),
+      state: claudeSupplied ? "connected" : on(setting("ANTHROPIC_API_KEY")),
+      detail: claudeSupplied ? "Supplied with your plan — save your own key to use your own Anthropic account" : null,
       body: (
       <>
         <p className="text-xs text-muted-foreground mb-4">
@@ -401,8 +430,10 @@ export default async function platformIntegrationRows({ xAccountId }: { xAccount
     {
       id: "elevenlabs",
       title: "ElevenLabs (Voice)",
-      state: on(setting("ELEVENLABS_API_KEY")),
-      detail: setting("ELEVENLABS_API_KEY") && setting("WHATSAPP_VOICE_REPLIES") === "true" ? "Replies to voice notes with a voice note" : null,
+      state: voiceSupplied ? "connected" : on(setting("ELEVENLABS_API_KEY")),
+      detail: voiceSupplied
+        ? "Supplied with your plan — save your own key to use your own ElevenLabs account"
+        : setting("ELEVENLABS_API_KEY") && setting("WHATSAPP_VOICE_REPLIES") === "true" ? "Replies to voice notes with a voice note" : null,
       body: (
       <>
         <p className="text-xs text-muted-foreground mb-4">
@@ -486,26 +517,13 @@ export default async function platformIntegrationRows({ xAccountId }: { xAccount
     {
       id: "intake",
       title: "Website lead intake",
-      state: on(setting("INTAKE_API_KEY")),
-      body: (
-      <>
-        <p className="text-xs text-muted-foreground mb-4">
-          POST leads from the website or landing pages with the <code>X-Api-Key</code> header. Fields: name
-          (required), email, phone, message, model, color, source.
-        </p>
-        <div className="space-y-3">
-          <div>
-            <label className="label">API key</label>
-            <div className="flex gap-2">
-              <SecretReveal settingKey="INTAKE_API_KEY" isSet={Boolean(setting("INTAKE_API_KEY"))} />
-              <SaveForm success="New value generated" resetOnSuccess={false} action={regenerateSetting.bind(null, "INTAKE_API_KEY")}>
-                <SaveButton className="btn-secondary">Regenerate</SaveButton>
-              </SaveForm>
-            </div>
-          </div>
-        </div>
-      </>
-      ),
+      // The public intake / bookings / service lookup accept ONLY a workspace's own keys under enforcement
+      // (authenticateIntakeKey); the old single INTAKE_API_KEY setting is not one, so it is no longer offered here.
+      state: apiKeys.length ? "connected" : "not-set-up",
+      detail: apiKeys.length ? `${apiKeys.length} key${apiKeys.length === 1 ? "" : "s"}` : null,
+      body: <ApiKeysPanel keys={apiKeys} endpoint={`${PLATFORM_URL}/api/intake`} />,
     },
   ];
+  // The platform's own setup, for the platform owner in the founding workspace only.
+  return rows.filter((row) => row.id !== "webhooks" || platformSetup);
 }

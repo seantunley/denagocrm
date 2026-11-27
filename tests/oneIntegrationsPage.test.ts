@@ -49,10 +49,15 @@ test("one nav entry, open to tenant owners", () => {
   assert.match(page, /const user = await requireTenantOwner\(\);/);
 });
 
-test("the platform owner's rows are owner-only and never edit a per-workspace credential", () => {
+test("every workspace owner gets their workspace's AI, voice, Telegram, Maps and API-key rows; the platform's setup stays the platform's", () => {
   assert.match(page, /const isPlatformOwner = user\.role === "owner";/);
-  // Since the screen was grouped by purpose (2026-11-12) its rows are listed with the workspace's own — for the platform owner only.
-  assert.match(page, /const platformRows = isPlatformOwner \? await platformIntegrationRows\(/);
+  // Sean, 2026-11-27: "tenant fourbuy has no access to setup chatgpt… each workspace has to have their own details".
+  // The rows are rendered for any workspace owner (the page's requireTenantOwner), not only the platform owner.
+  assert.match(page, /const platformRows = tenantId\s*\? await platformIntegrationRows\(\{/);
+  assert.doesNotMatch(page, /isPlatformOwner \? await platformIntegrationRows/);
+  // The webhook / Meta app setup is the platform's, read from the founding workspace: the platform owner, there.
+  assert.match(page, /platformSetup: isPlatformOwner && tenantId === DEFAULT_TENANT_ID,/);
+  assert.match(rows, /return rows\.filter\(\(row\) => row\.id !== "webhooks" \|\| platformSetup\);/);
   // Those keys have exactly one form: the page's own, which writes the override.
   const keys = TENANT_CREDENTIAL_INTEGRATIONS.flatMap((integration) => integration.fields.map((field) => field.key));
   for (const key of keys) {

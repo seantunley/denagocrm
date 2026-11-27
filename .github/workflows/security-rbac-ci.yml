@@ -390,6 +390,14 @@ jobs:
         # payment kept but not counted; a trashed quote's figures only for all-quote access; no cross-workspace FK.
         run: npm run test:quote-payments
 
+      - name: Each workspace's own integration details -- keys, AI, ChatGPT, Telegram, WhatsApp, never another's
+        # Sean, 2026-11-27 ("tenant fourbuy has no access to setup chatgpt"); review of #1240. Real actions and the
+        # real /api/intake route, enforcement on, OpenAI / Telegram / Meta answered by a stand-in fetch:
+        # a key does only what was ticked and files its website's leads in its workspace (not revocable by another
+        # owner, not made by a member, refused once revoked); plan-supplied AI only with a real platform key; an AI
+        # key, a ChatGPT sign-in, a Telegram bot and a WhatsApp number are each that workspace's alone.
+        run: npm run test:workspace-integrations
+
       - name: QR codes -- a QR never takes over or deletes an ordinary chatbot route; new flows start as drafts
         # Review of #955: in an empty workspace the QR starter and a blank flow are created as drafts, nothing published.
         # Review of #948, the real actions as the owner: a QR on an ordinary route's message is refused and that route

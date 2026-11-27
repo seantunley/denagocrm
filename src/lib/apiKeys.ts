@@ -68,3 +68,79 @@ export async function authenticateIntakeKey(
   if (legacy && key === legacy) return { tenantId: null };
   return null;
 }
+
+// ── A workspace's own keys, managed by its owner (Settings → Integrations) ────────
+//
+// Until now a key could only be made by scripts/backfill-tenant-api-keys.ts, for
+// the founding workspace's old global key — so no other workspace could take
+// leads from its website at all (Sean, 2026-11-27: "each workspace has to have
+// their own details"). Every query below names the workspace: the table is read
+// through basePrisma, before and outside any tenant scope, so nothing else would.
+
+/** Public API scopes a workspace key may carry — the routes that call authenticateIntakeKey. */
+export const API_KEY_SCOPES = ["intake", "bookings", "service-lookup"] as const;
+export type ApiKeyScope = (typeof API_KEY_SCOPES)[number];
+
+/**
+ * What a new key may do, chosen when it is made (review of #1240: least privilege — a website that only sends leads
+ * must not also be able to book, or start a service lookup that texts a customer a one-time PIN). The scopes asked
+ * for, in the canonical order, once each — or null when none is asked for or any is not a real scope.
+ */
+export function parseApiKeyScopes(input: unknown): ApiKeyScope[] | null {
+  if (!Array.isArray(input) || input.length === 0) return null;
+  const asked = new Set<string>();
+  for (const value of input) {
+    if (typeof value !== "string" || !(API_KEY_SCOPES as readonly string[]).includes(value)) return null;
+    asked.add(value);
+  }
+  return API_KEY_SCOPES.filter((scope) => asked.has(scope));
+}
+
+/** A new raw key: unguessable, URL- and header-safe, recognisable by its prefix. */
+export function generateApiKey(): string {
+  return `dcrm_${crypto.randomBytes(32).toString("base64url")}`;
+}
+
+export type WorkspaceApiKey = {
+  id: string;
+  label: string;
+  /** The first characters of the key, for telling keys apart. Never enough to use it. */
+  prefix: string;
+  scopes: string;
+  createdAt: Date;
+  lastUsedAt: Date | null;
+};
+
+/** The workspace's keys that still work, newest first. */
+export async function listWorkspaceApiKeys(tenantId: string): Promise<WorkspaceApiKey[]> {
+  return basePrisma.$queryRaw<WorkspaceApiKey[]>`
+    SELECT "id", "label", "prefix", "scopes", "createdAt", "lastUsedAt"
+    FROM "TenantApiKey"
+    WHERE "tenantId" = ${tenantId} AND "revokedAt" IS NULL
+    ORDER BY "createdAt" DESC`;
+}
+
+/** Make a key for this workspace, for exactly these scopes. The raw key is returned ONCE; only its hash is kept. */
+export async function createWorkspaceApiKey(
+  tenantId: string,
+  label: string,
+  scopes: readonly ApiKeyScope[],
+): Promise<{ id: string; rawKey: string; prefix: string }> {
+  const allowed = parseApiKeyScopes([...scopes]);
+  if (!allowed) throw new Error("An API key needs at least one known scope.");
+  const rawKey = generateApiKey();
+  const id = crypto.randomUUID();
+  const prefix = rawKey.slice(0, 12);
+  await basePrisma.$executeRaw`
+    INSERT INTO "TenantApiKey" ("id", "tenantId", "label", "hashedKey", "prefix", "scopes", "createdAt")
+    VALUES (${id}, ${tenantId}, ${label}, ${hashApiKey(rawKey)}, ${prefix}, ${allowed.join(",")}, CURRENT_TIMESTAMP)`;
+  return { id, rawKey, prefix };
+}
+
+/** Stop a key working, at once. Only this workspace's, only once. True when it was revoked now. */
+export async function revokeWorkspaceApiKey(tenantId: string, id: string): Promise<boolean> {
+  const count = await basePrisma.$executeRaw`
+    UPDATE "TenantApiKey" SET "revokedAt" = CURRENT_TIMESTAMP
+    WHERE "id" = ${id} AND "tenantId" = ${tenantId} AND "revokedAt" IS NULL`;
+  return count === 1;
+}
