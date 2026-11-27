@@ -220,12 +220,16 @@ export async function reassignApproval(
   return { ok: true };
 }
 
-/** Whether a user is allowed to act on this approval step from inside the app. */
+/**
+ * Whether a user is allowed to act on this approval step from inside the app. `ownsWorkspace`: the caller's
+ * ownsActingWorkspace — this workspace's owner may decide any step in it, as the platform owner may.
+ */
 export function canActOnStep(
   step: { assigneeType: string; assigneeUserId: string | null },
   user: { id: string; role: string },
+  ownsWorkspace = user.role === "owner",
 ): boolean {
-  if (user.role === "owner") return true;
+  if (ownsWorkspace) return true;
   if (step.assigneeType === "staff") return step.assigneeUserId === user.id;
   return false;
 }

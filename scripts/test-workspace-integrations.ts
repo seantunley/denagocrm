@@ -41,6 +41,10 @@ import { disconnectChatGpt, pollChatGptLogin, startChatGptLogin } from "../src/a
 import { connectTelegram, disconnectTelegram, telegramStatus } from "../src/app/actions/bot";
 import { saveTenantCredentialOverride } from "../src/app/actions/tenantCredentials";
 import { POST as intakePost } from "../src/app/api/intake/route";
+import { PERMISSIONS, hasPermission, ownsActingWorkspace, type PermissionUser } from "../src/lib/permissions";
+import { WORKSPACE_OWNER, getUserPermissions } from "../src/lib/permissionQuery";
+import { moduleForPermission } from "../src/lib/modules/registry";
+import { canActOnStep } from "../src/lib/signing/approvals";
 import { runAsSession, type ActingSession } from "./harness/actingSession";
 
 const SFX = Math.random().toString(16).slice(2, 10);
@@ -159,6 +163,39 @@ async function main() {
   __setTenantEnforcingForTests(true);
   standInFetch();
   await seed();
+
+  console.log("\nA workspace's owner holds everything its modules allow — in that workspace only (Sean, 2026-11-28)");
+  {
+    // Provisioned owners are `member`s, as on production (Fourbuy, Breastfeeding Art): no role assigned at all here.
+    const asUser = (person: Person): PermissionUser => ({ ...person, role: "member" });
+    const core = PERMISSIONS.filter((key) => !moduleForPermission(key));
+    const moduled = PERMISSIONS.filter((key) => moduleForPermission(key));
+    const held = async (person: Person, keys: readonly (typeof PERMISSIONS)[number][]) => {
+      const out: string[] = [];
+      for (const key of keys) if (await as(person, () => hasPermission(asUser(person), key))) out.push(key);
+      return out;
+    };
+    const ownerCore = await held(ownerA, core);
+    check("the owner holds every permission outside a module, with no role assigned", ownerCore.length === core.length, `missing: ${core.filter((k) => !ownerCore.includes(k)).join(", ")}`);
+    check("…including the ones the CRM administrator role lacks", ["leads.override_stage_rules"].every((k) => ownerCore.includes(k)));
+    const ownerOff = await held(ownerA, moduled);
+    check("…but none whose module is switched off in that workspace", ownerOff.length === 0, ownerOff.join(", "));
+    const onModule = moduleForPermission(moduled[0])!;
+    await basePrisma.tenant.update({ where: { id: A }, data: { modules: onModule } });
+    const nowOn = moduled.filter((key) => moduleForPermission(key) === onModule);
+    check(`…and every one of a module once it is switched on (${onModule})`, (await held(ownerA, nowOn)).length === nowOn.length);
+    await basePrisma.tenant.update({ where: { id: A }, data: { modules: "" } });
+    check("a member of the same workspace gains nothing", (await held(memberA, core)).length === 0);
+    check("the owner of ANOTHER workspace gains nothing here", (await runInTenantScope({ tenantId: A, system: false }, () => getUserPermissions(ownerB.id))).has(WORKSPACE_OWNER) === false);
+    const crossed = await runInTenantScope({ tenantId: B, system: false }, () => getUserPermissions(ownerA.id));
+    check("…and this owner gains nothing in another workspace", !crossed.has(WORKSPACE_OWNER) && !crossed.has("leads.view_all"), [...crossed].join(", "));
+    check("'the owner' of approvals and the assistant is the workspace's owner", await as(ownerA, () => ownsActingWorkspace(asUser(ownerA))));
+    check("…not its members", !(await as(memberA, () => ownsActingWorkspace(asUser(memberA)))));
+    const ownerStep = { assigneeType: "owner", assigneeUserId: null };
+    check("the owner may decide a step addressed to the owner; a member may not",
+      canActOnStep(ownerStep, asUser(ownerA), await as(ownerA, () => ownsActingWorkspace(asUser(ownerA))))
+      && !canActOnStep(ownerStep, asUser(memberA), await as(memberA, () => ownsActingWorkspace(asUser(memberA)))));
+  }
 
   console.log("\nA workspace's own website keys — and only what each is for");
   let intakeKey = "";

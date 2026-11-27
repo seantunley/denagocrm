@@ -12,6 +12,7 @@ import {
   getAccessibleLeadIds,
   getAccessibleQuoteIds,
   hasAnyPermission,
+  ownsActingWorkspace,
   type PermissionUser,
 } from "@/lib/permissions";
 import { pendingApprovalsFor } from "@/lib/signing/access";
@@ -199,8 +200,10 @@ async function myCases(user: PermissionUser): Promise<WorkItem[]> {
 async function myApprovals(user: PermissionUser): Promise<WorkItem[]> {
   if (!(await hasAnyPermission(user, "signing.view", "signing.manage"))) return [];
   const steps = await pendingApprovalsFor(user);
+  // "The owner" is this workspace's owner — not only the platform's (ownsActingWorkspace).
+  const owner = await ownsActingWorkspace(user);
   return steps
-    .filter((step) => (step.assigneeType === "owner" ? user.role === "owner" : step.assigneeType === "staff" && step.assigneeUserId === user.id))
+    .filter((step) => (step.assigneeType === "owner" ? owner : step.assigneeType === "staff" && step.assigneeUserId === user.id))
     .map((step) => ({
       area: "Approvals",
       source: { type: "approval", id: step.id },

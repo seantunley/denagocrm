@@ -61,7 +61,17 @@ const actingWorkspaceId = () =>
  * ENFORCING: scoped to the active tenant's assignments only, so a user who belongs
  * to two tenants no longer receives the UNION of both tenants' privileges — only the
  * one they're currently acting in.
+ *
+ * THE WORKSPACE'S OWNER (Tenant.ownerUserId) holds EVERY permission there, as the
+ * platform owner does (Sean, 2026-11-28: "the primary workspace user should have
+ * everything if the modules are turned on"). A provisioned owner is a `member` with
+ * the CRM administrator role, which lacks some permissions (cases, the document
+ * builder, stage-rule override) and every one added after it was written — so
+ * Fourbuy's owner could not reach them. A switched-off module still takes its
+ * permissions away from them too (permissions.ts moduleHolds).
  */
+export const WORKSPACE_OWNER = "__workspace_owner__";
+
 export async function getUserPermissions(userId: string): Promise<Set<string>> {
   try {
     const enforcing = tenantEnforcing();
@@ -76,6 +86,9 @@ export async function getUserPermissions(userId: string): Promise<Set<string>> {
           UNION
           SELECT ${RBAC_INITIALIZED} AS key
           WHERE EXISTS (SELECT 1 FROM "Role" LIMIT 1)
+          UNION
+          SELECT ${WORKSPACE_OWNER} AS key
+          WHERE EXISTS (SELECT 1 FROM "Tenant" t WHERE t.id = ${tenantId} AND t."ownerUserId" = ${userId})
         `
       : await basePrisma.$queryRaw<Array<{ key: string }>>`
           SELECT DISTINCT rp."permissionKey" AS key
@@ -86,7 +99,13 @@ export async function getUserPermissions(userId: string): Promise<Set<string>> {
           SELECT ${RBAC_INITIALIZED} AS key
           WHERE EXISTS (SELECT 1 FROM "Role" LIMIT 1)
         `;
-    return new Set(rows.map((row) => row.key));
+    const granted = new Set(rows.map((row) => row.key));
+    if (granted.has(WORKSPACE_OWNER)) {
+      // Loaded here, not at the top: permissions.ts imports this module (the cycle the header describes).
+      const { PERMISSIONS } = await import("./permissions");
+      for (const key of PERMISSIONS) granted.add(key);
+    }
+    return granted;
   } catch {
     return new Set([RBAC_UNAVAILABLE]);
   }

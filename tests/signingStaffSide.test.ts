@@ -132,9 +132,11 @@ test("the request page checks the record, not just the Signatures permission", (
   assert.doesNotMatch(list, /approvalStep\.findMany/, "the page keeps no approvals query of its own");
   const access = code("src/lib/signing/access.ts");
   assert.match(access, /request: \{ deletedAt: null, status: \{ notIn: \[\.\.\.CLOSED_REQUEST_STATUSES\] \}, AND: \[mine\] \}/);
-  assert.match(access, /return steps\.filter\(\(step\) => canActOnStep\(step, user\)\);/);
+  // `owner`: ownsActingWorkspace — the workspace's owner decides any of its steps, as the platform owner does.
+  assert.match(access, /return steps\.filter\(\(step\) => canActOnStep\(step, user, owner\)\);/);
   // The assignee rule is also in the query, so the 100-row limit can't hide this person's steps behind others'.
-  assert.match(access, /\.\.\.\(user\.role === "owner" \? \{\} : \{ assigneeType: "staff", assigneeUserId: user\.id \}\),/);
+  assert.match(access, /const owner = await ownsActingWorkspace\(user\);/);
+  assert.match(access, /\.\.\.\(owner \? \{\} : \{ assigneeType: "staff", assigneeUserId: user\.id \}\),/);
   assert.ok(access.indexOf('assigneeUserId: user.id }') < access.indexOf("take: 100"), "filtered before the limit");
 });
 

@@ -6,6 +6,7 @@ import {
   getAccessibleLeadIds,
   getAccessibleQuoteIds,
   hasAnyPermission,
+  ownsActingWorkspace,
   type PermissionUser,
 } from "./permissions";
 import { loadAttentionList } from "./attention/load";
@@ -184,7 +185,7 @@ const NURTURE_REVIEWS_LOADED = 25;
  * the active teams they manage, `undefined` = nobody, so no team view at all.
  */
 async function teamMembers(user: PermissionUser): Promise<Set<string> | null | undefined> {
-  if (user.role === "owner") return null;
+  if (await ownsActingWorkspace(user)) return null;
   const teams = await prisma.team.findMany({
     where: { managerId: user.id, active: true, deletedAt: null },
     select: { members: { select: { userId: true } } },
