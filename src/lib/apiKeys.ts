@@ -68,3 +68,57 @@ export async function authenticateIntakeKey(
   if (legacy && key === legacy) return { tenantId: null };
   return null;
 }
+
+// ── A workspace's own keys, managed by its owner (Settings → Integrations) ────────
+//
+// Until now a key could only be made by scripts/backfill-tenant-api-keys.ts, for
+// the founding workspace's old global key — so no other workspace could take
+// leads from its website at all (Sean, 2026-11-27: "each workspace has to have
+// their own details"). Every query below names the workspace: the table is read
+// through basePrisma, before and outside any tenant scope, so nothing else would.
+
+/** Public API scopes a workspace key may carry — the routes that call authenticateIntakeKey. */
+export const API_KEY_SCOPES = ["intake", "bookings", "service-lookup"] as const;
+
+/** A new raw key: unguessable, URL- and header-safe, recognisable by its prefix. */
+export function generateApiKey(): string {
+  return `dcrm_${crypto.randomBytes(32).toString("base64url")}`;
+}
+
+export type WorkspaceApiKey = {
+  id: string;
+  label: string;
+  /** The first characters of the key, for telling keys apart. Never enough to use it. */
+  prefix: string;
+  scopes: string;
+  createdAt: Date;
+  lastUsedAt: Date | null;
+};
+
+/** The workspace's keys that still work, newest first. */
+export async function listWorkspaceApiKeys(tenantId: string): Promise<WorkspaceApiKey[]> {
+  return basePrisma.$queryRaw<WorkspaceApiKey[]>`
+    SELECT "id", "label", "prefix", "scopes", "createdAt", "lastUsedAt"
+    FROM "TenantApiKey"
+    WHERE "tenantId" = ${tenantId} AND "revokedAt" IS NULL
+    ORDER BY "createdAt" DESC`;
+}
+
+/** Make a key for this workspace. The raw key is returned ONCE; only its hash is kept. */
+export async function createWorkspaceApiKey(tenantId: string, label: string): Promise<{ id: string; rawKey: string; prefix: string }> {
+  const rawKey = generateApiKey();
+  const id = crypto.randomUUID();
+  const prefix = rawKey.slice(0, 12);
+  await basePrisma.$executeRaw`
+    INSERT INTO "TenantApiKey" ("id", "tenantId", "label", "hashedKey", "prefix", "scopes", "createdAt")
+    VALUES (${id}, ${tenantId}, ${label}, ${hashApiKey(rawKey)}, ${prefix}, ${API_KEY_SCOPES.join(",")}, CURRENT_TIMESTAMP)`;
+  return { id, rawKey, prefix };
+}
+
+/** Stop a key working, at once. Only this workspace's, only once. True when it was revoked now. */
+export async function revokeWorkspaceApiKey(tenantId: string, id: string): Promise<boolean> {
+  const count = await basePrisma.$executeRaw`
+    UPDATE "TenantApiKey" SET "revokedAt" = CURRENT_TIMESTAMP
+    WHERE "id" = ${id} AND "tenantId" = ${tenantId} AND "revokedAt" IS NULL`;
+  return count === 1;
+}

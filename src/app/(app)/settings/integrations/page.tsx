@@ -1,5 +1,6 @@
 import { requireTenantOwner, getActiveTenantId } from "@/lib/auth";
-import { prisma } from "@/lib/db";
+import { basePrisma, prisma } from "@/lib/db";
+import { listWorkspaceApiKeys } from "@/lib/apiKeys";
 import { getWorkspaceSetting, hasTenantCredentialOverride, isSecretSettingKey, resolveIntegrationBundle } from "@/lib/settings";
 import XeroItemPicker from "@/components/XeroItemPicker";
 import { linkFeeToXeroItem, setXeroPaymentsSource } from "@/app/actions/xero";
@@ -55,8 +56,11 @@ export const dynamic = "force-dynamic";
  * keeps using its settings values and any other workspace has none. Existing
  * settings values are read, never moved or deleted.
  *
- * Always the viewer's own active tenant. The platform owner additionally sees
- * the owner-only rows (WorkspaceIntegrationRows) that used to fill the old tab.
+ * Always the viewer's own active tenant. Every workspace owner also gets the
+ * workspace's AI, voice, Telegram, Maps and website-key rows
+ * (WorkspaceIntegrationRows) — their own values, never another workspace's
+ * (Sean, 2026-11-27). The platform's webhook / Meta app setup is the platform
+ * owner's, in the founding workspace.
  */
 /** What the Xero connect round trip came back with (?xero=…), in words. */
 const XERO_NOTICES: Record<string, string> = {
@@ -411,10 +415,29 @@ export default async function IntegrationsPage({ searchParams }: { searchParams?
             ) };
           });
 
-  // The platform owner's own rows (webhooks, Telegram, AI, voice, intake…), from
-  // the old Settings → Integrations tab — owner-only, as that tab was — filed
-  // under the same purposes as the workspace's own.
-  const platformRows = isPlatformOwner ? await platformIntegrationRows({ xAccountId: effectiveShown.X_ACCOUNT_ID ?? null }) : [];
+  // This workspace's AI, voice, Telegram, Maps and website keys — for EVERY workspace owner, their own values
+  // (Sean, 2026-11-27: "each workspace has to have their own details"); the platform's webhook / Meta app setup
+  // only for the platform owner, in the founding workspace whose values it is. Filed under the same purposes.
+  const planSupplies = tenantId && tenantId !== DEFAULT_TENANT_ID
+    ? Boolean(await basePrisma.tenant.findFirst({ where: { id: tenantId, platformAi: true, active: true }, select: { id: true } }))
+    : false;
+  const apiKeys = tenantId
+    ? (await listWorkspaceApiKeys(tenantId)).map((key) => ({
+        id: key.id,
+        label: key.label,
+        prefix: key.prefix,
+        createdAt: new Date(key.createdAt).toISOString(),
+        lastUsedAt: key.lastUsedAt ? new Date(key.lastUsedAt).toISOString() : null,
+      }))
+    : [];
+  const platformRows = tenantId
+    ? await platformIntegrationRows({
+        xAccountId: effectiveShown.X_ACCOUNT_ID ?? null,
+        platformSetup: isPlatformOwner && tenantId === DEFAULT_TENANT_ID,
+        platformSupplies: planSupplies,
+        apiKeys,
+      })
+    : [];
   const grouped = groupIntegrationRows([...workspaceRows, ...platformRows]);
 
   return (

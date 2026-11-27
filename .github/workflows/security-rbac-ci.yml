@@ -390,6 +390,13 @@ jobs:
         # payment kept but not counted; a trashed quote's figures only for all-quote access; no cross-workspace FK.
         run: npm run test:quote-payments
 
+      - name: Each workspace's own integration details -- website keys and AI keys, never another workspace's
+        # Sean, 2026-11-27 ("tenant fourbuy has no access to setup chatgpt"): a second workspace's owner makes an
+        # API key that signs its website's leads into that workspace (hash only, revocable, not by another owner,
+        # not by a member); an AI key saved by one workspace's owner is its own -- not the founding workspace's,
+        # not read or revealed by another.
+        run: npm run test:workspace-integrations
+
       - name: QR codes -- a QR never takes over or deletes an ordinary chatbot route; new flows start as drafts
         # Review of #955: in an empty workspace the QR starter and a blank flow are created as drafts, nothing published.
         # Review of #948, the real actions as the owner: a QR on an ordinary route's message is refused and that route
