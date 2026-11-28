@@ -68,7 +68,7 @@ export const INTEGRATION_FLOWS: readonly IntegrationFlow[] = [
         id: "server",
         title: "Mail server",
         blurb:
-          "Where your mail is submitted. Your provider lists this as the SMTP or outgoing server — port 587 with encryption on suits almost every provider.",
+          "Where your mail is submitted. Your provider lists this as the SMTP or outgoing server. Port 587 with Encryption Off (STARTTLS — it still encrypts) suits almost every provider; port 465 needs Encryption On.",
         fieldKeys: ["SMTP_HOST", "SMTP_PORT", "SMTP_SECURE"],
       },
       {

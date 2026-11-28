@@ -345,6 +345,30 @@ test("SMTP failures are classified into distinct, actionable causes", () => {
   }
 });
 
+// Fourbuy, 2026-11-27: nine failed tests (auth_failed, then timeouts) with details its owner knew were right — and
+// the server's own reply hidden. It is shown now, without the password or the username, and timeouts name the
+// likelier causes.
+test("a rejected sign-in shows the server's own reply, never the password or username", () => {
+  const result = classifySmtpError(
+    { code: "EAUTH", responseCode: 535, response: `535 Incorrect authentication data for ${SMTP_INPUT.user} ${SMTP_PASSWORD}\r\nmore` },
+    SMTP_INPUT,
+  );
+  assert.equal(result.code, "auth_failed");
+  assert.match(result.message, /The server said: "535 Incorrect authentication data for … …"/);
+  assert.ok(!result.message.includes(SMTP_PASSWORD) && !result.message.includes(SMTP_INPUT.user));
+  assert.match(result.message, /refusing sign-ins from this CRM's address/);
+  // An AUTH dialogue echoed back (base64) is cut out too.
+  const echoed = classifySmtpError({ code: "EAUTH", response: "535 5.7.8 dXNlckBleGFtcGxlLmNvbTpodW50ZXIyaHVudGVyMg== rejected" }, SMTP_INPUT);
+  assert.ok(!echoed.message.includes("dXNlckBleGFtcGxlLmNvbTpodW50ZXIy"));
+});
+
+test("a timeout names the likelier cause: 465 without encryption, or the server blocking the CRM", () => {
+  const plain465 = classifySmtpError({ code: "ETIMEDOUT" }, { ...SMTP_INPUT, port: 465, secure: false });
+  assert.match(plain465.message, /port 465 expects an encrypted connection/);
+  const blocked = classifySmtpError({ code: "ETIMEDOUT" }, SMTP_INPUT);
+  assert.match(blocked.message, /blocked this CRM's address/);
+});
+
 test("Graph API failures distinguish a bad token from a bad phone number id", () => {
   const badToken = classifyGraphError(401, { error: { code: 190 } }, WA_PROBE);
   assert.equal(badToken.code, "auth_failed");
@@ -379,6 +403,7 @@ test("a valid token with an unreachable webhook passes, but warns specifically",
         headers: { "content-type": "application/json" },
       }),
     checkWebhook: async () => ({ reachable: false, detail: "the webhook route returned 404 Not Found" }),
+    checkSubscription: async () => ({ state: "subscribed", apps: ["Denago CRM"], subscribedNow: false }),
   });
 
   assert.equal(result.ok, true, "a working token must not be rejected because the webhook is down — sending still works");
@@ -396,10 +421,67 @@ test("a reachable webhook produces no warning", async () => {
   const result = await probeWhatsApp(WA_PROBE, {
     fetch: async () => new Response(JSON.stringify({ verified_name: "Denago" }), { status: 200 }),
     checkWebhook: async () => ({ reachable: true, detail: "answered 403" }),
+    checkSubscription: async () => ({ state: "subscribed", apps: ["Denago CRM"], subscribedNow: false }),
   });
   assert.equal(result.ok, true);
   if (!result.ok) return;
   assert.deepEqual(result.warnings, []);
+  assert.ok(result.facts.some((f) => f.label === "Incoming messages" && /Denago CRM/.test(f.value)));
+});
+
+// Fourbuy, 2026-11-27: token, number and webhook all passed; Meta sent nothing, because no app was subscribed to the
+// WhatsApp account. The Connected screen now says which — never a green tick over silence.
+const META_OK = (path: string, method: string, apps: unknown[] = [], subscribe = true) => {
+  if (path.includes("debug_token")) return { data: { granular_scopes: [{ scope: "whatsapp_business_management", target_ids: ["waba-other", "waba-1"] }] } };
+  if (path.includes("waba-other/phone_numbers")) return { data: [{ id: "someone-elses-number" }] };
+  if (path.includes("waba-1/phone_numbers")) return { data: [{ id: WA_PROBE.phoneNumberId }] };
+  if (path.includes("subscribed_apps")) return method === "POST" ? { success: subscribe } : { data: apps };
+  return { verified_name: "Fourbuy", display_phone_number: "+1 555-880-8782" };
+};
+const metaFetch = (apps: unknown[] = [], subscribe = true, calls: string[] = []) => async (url: string, init?: RequestInit) => {
+  const method = init?.method ?? "GET";
+  calls.push(`${method} ${url.replace(/^https:\/\/graph\.facebook\.com\/v[\d.]+\//, "")}`);
+  return new Response(JSON.stringify(META_OK(url, method, apps, subscribe)), { status: 200 });
+};
+const reachable = async () => ({ reachable: true, detail: "answered 403" });
+
+test("an account Meta sends nothing from is subscribed — the number's own account, never another", async () => {
+  const calls: string[] = [];
+  const result = await probeWhatsApp(WA_PROBE, { fetch: metaFetch([], true, calls), checkWebhook: reachable });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.deepEqual(result.warnings, []);
+  assert.ok(result.facts.some((f) => f.label === "Incoming messages" && /Turned on now/.test(f.value)));
+  assert.ok(calls.includes("POST waba-1/subscribed_apps"));
+  assert.ok(!calls.some((c) => c.startsWith("POST waba-other")), "only the account this number is on is touched");
+});
+
+test("already subscribed: nothing is changed, and the app is named", async () => {
+  const calls: string[] = [];
+  const result = await probeWhatsApp(WA_PROBE, { fetch: metaFetch([{ whatsapp_business_api_data: { name: "Fourbuy CRM" } }], true, calls), checkWebhook: reachable });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.ok(result.facts.some((f) => f.label === "Incoming messages" && /Fourbuy CRM/.test(f.value)));
+  assert.ok(!calls.some((c) => c.startsWith("POST")), "no change when it already works");
+});
+
+test("not subscribed and it can't be: the Connected screen says incoming messages will NOT arrive", async () => {
+  const result = await probeWhatsApp(WA_PROBE, { fetch: metaFetch([], false), checkWebhook: reachable });
+  assert.equal(result.ok, true, "sending still works, so it is saved");
+  if (!result.ok) return;
+  assert.equal(result.warnings[0]?.code, "not_subscribed");
+  assert.match(result.warnings[0].message, /Incoming messages will NOT arrive/);
+});
+
+test("when Meta won't say which account the number is on, it says so — never silence", async () => {
+  const result = await probeWhatsApp(WA_PROBE, {
+    fetch: async (url: string) => new Response(JSON.stringify(url.includes("debug_token") ? { error: { code: 100 } } : { verified_name: "X" }), { status: url.includes("debug_token") ? 400 : 200 }),
+    checkWebhook: reachable,
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.warnings[0]?.code, "subscription_unconfirmed");
+  assert.match(result.warnings[0].message, /Incoming messages couldn't be confirmed/);
 });
 
 // ── Reauth policy ───────────────────────────────────────────────────────────

@@ -190,7 +190,19 @@ const defaultSmtpVerifier: SmtpVerifier = async (input) => {
   }
 };
 
-type ErrorShape = { code?: unknown; responseCode?: unknown; message?: unknown; command?: unknown };
+type ErrorShape = { code?: unknown; responseCode?: unknown; message?: unknown; command?: unknown; response?: unknown };
+
+/**
+ * The mail server's own reply line, for the person setting it up ("535 Incorrect authentication data" is not "535
+ * Too many failed logins from your address"). Cut short, and run through the same secret scrub as every message
+ * (`fail`), with the username taken out as well. Empty when the server sent nothing.
+ */
+function serverSaid(e: ErrorShape, input: SmtpProbeInput): string {
+  let line = typeof e.response === "string" ? e.response.split(/\r?\n/)[0].trim() : "";
+  for (const value of [input.pass, input.user]) if (value) line = line.split(value).join("…");
+  line = line.replace(/[A-Za-z0-9+/=]{24,}/g, "…").slice(0, 160);
+  return line ? ` The server said: "${line}".` : "";
+}
 
 /**
  * Maps a nodemailer/Node socket error onto a specific cause and the flow step
@@ -211,7 +223,7 @@ export function classifySmtpError(err: unknown, input: SmtpProbeInput): ProbeFai
   if (code === "EAUTH" || responseCode === 535 || responseCode === 534 || responseCode === 538) {
     return fail(
       "auth_failed",
-      `${where} accepted the connection but rejected the username and password. If this mailbox has two-factor authentication, it will need an app-specific password rather than the account password.`,
+      `${where} accepted the connection but rejected the username and password.${serverSaid(e, input)} The username is usually the full email address. If this mailbox has two-factor authentication, it needs an app-specific password. If the details are right, your mail server may be refusing sign-ins from this CRM's address (some hosts block sign-ins from abroad or from cloud servers, and cPanel's brute-force protection blocks an address after failed attempts) — your host can allow it.`,
       "credentials",
       secrets,
     );
@@ -231,7 +243,9 @@ export function classifySmtpError(err: unknown, input: SmtpProbeInput): ProbeFai
   if (code === "ETIMEDOUT" || code === "ECONNRESET" || /timed?\s*out/i.test(raw)) {
     return fail(
       "timeout",
-      `${where} didn't respond in time. That usually means a firewall is dropping traffic to that port rather than refusing it.`,
+      input.port === 465 && !input.secure
+        ? `${where} didn't respond: port 465 expects an encrypted connection from the first byte. Set Encryption to On for port 465, or use port 587 with Encryption Off.`
+        : `${where} didn't respond in time. Either a firewall drops traffic to that port, or the mail server has blocked this CRM's address — many do for a while after failed sign-ins. If an earlier test said the password was wrong, wait a few minutes, check the details and test once, or ask your host to allow this CRM.`,
       "server",
       secrets,
     );
@@ -332,6 +346,48 @@ async function defaultWebhookCheck(baseUrl: string, deps: { fetch?: FetchLike })
   }
 }
 
+/**
+ * Whether Meta will send this number's incoming messages to an app at all. A WhatsApp Business account delivers
+ * webhooks only to the apps subscribed to it (`/{waba}/subscribed_apps`); with none, the token, the number and our
+ * webhook all test fine and not one customer message ever arrives (Fourbuy, 2026-11-27: "Connected", then silence).
+ */
+export type SubscriptionCheck =
+  | { state: "subscribed"; apps: string[]; subscribedNow: boolean }
+  | { state: "not_subscribed" }
+  | { state: "unknown"; detail: string };
+
+/**
+ * Finds the ONE account that holds this number (of those the token manages — debug_token's granular scopes), then its
+ * subscribed apps. With none, that account is subscribed to the token's own app — what Meta requires and what embedded
+ * signup does (whatsappConnect.ts). Never reads or sends a message; touches only the account this number is on.
+ */
+async function defaultSubscriptionCheck(input: WhatsAppProbeInput, doFetch: FetchLike): Promise<SubscriptionCheck> {
+  const call = async (method: "GET" | "POST", path: string) => {
+    const res = await doFetch(`${GRAPH}/${path}`, { method, headers: { Authorization: `Bearer ${input.accessToken}` }, signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
+    return { ok: res.ok, body: (await res.json().catch(() => null)) as Record<string, unknown> | null };
+  };
+  const rows = (body: Record<string, unknown> | null) => ((body?.data as Record<string, unknown>[] | undefined) ?? []);
+  try {
+    const debug = await call("GET", `debug_token?input_token=${encodeURIComponent(input.accessToken)}`);
+    const scopes = ((debug.body?.data as { granular_scopes?: { scope?: string; target_ids?: string[] }[] } | undefined)?.granular_scopes ?? []);
+    const accounts = [...new Set(scopes.filter((s) => s.scope?.startsWith("whatsapp_business_")).flatMap((s) => s.target_ids ?? []))];
+    let waba: string | null = null;
+    for (const account of accounts.slice(0, 10)) {
+      const numbers = await call("GET", `${encodeURIComponent(account)}/phone_numbers?fields=id`);
+      if (rows(numbers.body).some((row) => String(row.id) === input.phoneNumberId)) { waba = account; break; }
+    }
+    if (!waba) return { state: "unknown", detail: "Meta didn't say which WhatsApp Business account this number is on" };
+    const listed = await call("GET", `${encodeURIComponent(waba)}/subscribed_apps`);
+    if (!listed.ok) return { state: "unknown", detail: "Meta didn't say which app this account sends its messages to" };
+    const apps = rows(listed.body).map((app) => String((app.whatsapp_business_api_data as { name?: unknown } | undefined)?.name ?? "an app"));
+    if (apps.length) return { state: "subscribed", apps, subscribedNow: false };
+    const made = await call("POST", `${encodeURIComponent(waba)}/subscribed_apps`);
+    return made.ok && made.body?.success === true ? { state: "subscribed", apps: ["this token's app"], subscribedNow: true } : { state: "not_subscribed" };
+  } catch {
+    return { state: "unknown", detail: "Meta didn't answer in time" };
+  }
+}
+
 type GraphError = { message?: unknown; code?: unknown; type?: unknown; error_subcode?: unknown };
 
 /**
@@ -413,6 +469,7 @@ export async function probeWhatsApp(
     fetch?: FetchLike;
     baseUrl?: string;
     checkWebhook?: () => Promise<WebhookCheck>;
+    checkSubscription?: () => Promise<SubscriptionCheck>;
   } = {},
 ): Promise<ProbeResult> {
   const doFetch = deps.fetch ?? fetch;
@@ -462,11 +519,32 @@ export async function probeWhatsApp(
     });
   }
 
+  // Said on the Connected screen either way — never a green tick over an account Meta sends nothing from.
+  const subscription = deps.checkSubscription ? await deps.checkSubscription() : await defaultSubscriptionCheck(input, doFetch);
+  if (subscription.state === "not_subscribed") {
+    warnings.push({
+      code: "not_subscribed",
+      message:
+        "Incoming messages will NOT arrive: Meta isn't sending this WhatsApp account's messages to any app, and subscribing it failed. " +
+        "Messages you send will go. In Meta's App Dashboard → WhatsApp → Configuration, set the webhook to this CRM's address and subscribe it to \"messages\", then test again.",
+    });
+  } else if (subscription.state === "unknown") {
+    warnings.push({
+      code: "subscription_unconfirmed",
+      message:
+        `Incoming messages couldn't be confirmed — ${subscription.detail}. Messages you send will go. Check Meta's App Dashboard → WhatsApp → Configuration: ` +
+        "the webhook must be this CRM's address and subscribed to \"messages\". Send this number a WhatsApp from your phone; it should appear in the Inbox within a minute.",
+    });
+  }
+
   const facts: { label: string; value: string }[] = [];
   if (displayNumber) facts.push({ label: "Number", value: displayNumber });
   if (verifiedName) facts.push({ label: "Verified name", value: verifiedName });
   if (quality) facts.push({ label: "Quality rating", value: quality });
   facts.push({ label: "Phone number ID", value: input.phoneNumberId });
+  if (subscription.state === "subscribed") {
+    facts.push({ label: "Incoming messages", value: subscription.subscribedNow ? "Turned on now — Meta will send them here" : `Sent by Meta to ${subscription.apps.join(", ")}` });
+  }
 
   return succeed(
     verifiedName
