@@ -43,7 +43,7 @@ import { saveTenantCredentialOverride } from "../src/app/actions/tenantCredentia
 import { POST as intakePost } from "../src/app/api/intake/route";
 import { PERMISSIONS, hasPermission, ownsActingWorkspace, type PermissionUser } from "../src/lib/permissions";
 import { WORKSPACE_OWNER, getUserPermissions } from "../src/lib/permissionQuery";
-import { moduleForPermission } from "../src/lib/modules/registry";
+import { MODULE_REGISTRY, moduleForPermission } from "../src/lib/modules/registry";
 import { canActOnStep } from "../src/lib/signing/approvals";
 import { runAsSession, type ActingSession } from "./harness/actingSession";
 
@@ -181,7 +181,9 @@ async function main() {
     const ownerOff = await held(ownerA, moduled);
     check("…but none whose module is switched off in that workspace", ownerOff.length === 0, ownerOff.join(", "));
     const onModule = moduleForPermission(moduled[0])!;
-    await basePrisma.tenant.update({ where: { id: A }, data: { modules: onModule } });
+    // With the module it is built on, if any (Warranty needs Automotive) — on its own it stays off, rightly.
+    const needs = MODULE_REGISTRY.find((mod) => mod.id === onModule)?.requires;
+    await basePrisma.tenant.update({ where: { id: A }, data: { modules: [onModule, needs].filter(Boolean).join(",") } });
     const nowOn = moduled.filter((key) => moduleForPermission(key) === onModule);
     check(`…and every one of a module once it is switched on (${onModule})`, (await held(ownerA, nowOn)).length === nowOn.length);
     await basePrisma.tenant.update({ where: { id: A }, data: { modules: "" } });
