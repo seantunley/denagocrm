@@ -16,7 +16,7 @@ import "server-only";
  * stays there, shown as "may have gone — check the timeline", and is never retried.
  */
 import { basePrisma, prisma } from "@/lib/db";
-import { canAccessContact, canAccessLead, CUSTOMER_RECORD_WRITE_PERMISSIONS, hasAnyPermission, type PermissionUser } from "@/lib/permissions";
+import { canAccessContact, canAccessLead, CUSTOMER_RECORD_WRITE_PERMISSIONS, hasAnyPermission, ownsActingWorkspace, type PermissionUser } from "@/lib/permissions";
 import { getUserPermissions, RBAC_UNAVAILABLE } from "@/lib/permissionQuery";
 import { resolveTenantMemberUser } from "@/lib/tenantActor";
 import { currentTenantScope, runInTenantScope } from "@/lib/tenantScope";
@@ -192,7 +192,7 @@ export async function cancelScheduled(user: PermissionUser, id: string): Promise
   if (!tenantId) return { error: "No workspace attached to this sign-in — sign out and back in." };
   const row = await prisma.emailDraft.findFirst({ where: { id, tenantId }, select: { userId: true, status: true, to: true, subject: true, contactId: true, leadId: true, files: true } });
   if (!row) return { error: "That scheduled email no longer exists." };
-  if (row.userId !== user.id && user.role !== "owner") return { error: "Only the person who scheduled it, or the owner, can cancel it." };
+  if (row.userId !== user.id && !(await ownsActingWorkspace(user))) return { error: "Only the person who scheduled it, or the owner, can cancel it." };
   if (!(await mayUseRecord(user, row.contactId, row.leadId))) return { error: "You don't have access to that customer." };
   const done = await prisma.emailDraft.updateMany({ where: { id, tenantId, status: { in: ["scheduled", "failed"] } }, data: { status: "cancelled" } });
   if (done.count !== 1) return { error: row.status === "sending" || row.status === "sent" ? "Too late — it has already gone, or is going now." : "It was not waiting to be sent." };

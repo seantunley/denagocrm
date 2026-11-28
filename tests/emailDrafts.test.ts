@@ -80,7 +80,8 @@ test("a draft is its author's alone; every scheduled send on a record is shown t
   assert.match(list, /if \(!\(await mayUseRecord\(user, contactId, leadId\)\)\) return \[\];/);
   // Cancel: the author, or the owner — and the record's access either way.
   const cancel = fn(drafts, "cancelScheduled");
-  assert.match(cancel, /if \(row\.userId !== user\.id && user\.role !== "owner"\)/);
+  // "The owner" is the workspace's owner (permissions.ts ownsActingWorkspace), not only the platform's.
+  assert.match(cancel, /if \(row\.userId !== user\.id && !\(await ownsActingWorkspace\(user\)\)\)/);
   assert.match(cancel, /mayUseRecord\(user, row\.contactId, row\.leadId\)/);
   assert.match(cancel, /logAudit\(\{ action: "email\.schedule_cancelled"/);
 });

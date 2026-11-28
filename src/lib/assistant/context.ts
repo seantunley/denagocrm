@@ -6,7 +6,7 @@ import { listActingTenantStaff } from "../tenantActor";
 import { ownedWriteTenantId } from "../tenantWrite";
 import { liveTurnsWhere } from "../assistantConversation";
 import { accessibleTestDriveWhere } from "../testDriveAccess";
-import { canAccessConversation, canAccessLead, canAccessQuote, canAccessVehicle, hasAnyPermission } from "../permissions";
+import { canAccessConversation, canAccessLead, canAccessQuote, canAccessVehicle, hasAnyPermission, ownsActingWorkspace } from "../permissions";
 import { stripInvisible } from "../invisibleText";
 import { splitListed } from "../assistantListedRules";
 import { type PriorTurn } from "../crmAssistantPlan";
@@ -56,15 +56,17 @@ export async function planContext(user: User) {
  * Only this person's own record; teams through the tenant-scoped client.
  */
 export async function personContext(user: User): Promise<string> {
-  const [me, memberships, manages] = await Promise.all([
+  const [me, memberships, manages, owner] = await Promise.all([
     prisma.user.findUnique({ where: { id: user.id }, select: { jobTitle: true } }),
     prisma.teamMember.findMany({ where: { userId: user.id, team: { active: true, deletedAt: null } }, select: { team: { select: { name: true } } }, take: 10 }),
     prisma.team.findMany({ where: { managerId: user.id, active: true, deletedAt: null }, select: { name: true }, take: 10 }),
+    // The workspace's owner sees everything in it, not only the platform owner.
+    ownsActingWorkspace(user),
   ]);
   return describePerson({
     name: user.name || "this person",
     jobTitle: me?.jobTitle ?? null,
-    sees: user.role === "owner" ? "everything" : "their own",
+    sees: owner ? "everything" : "their own",
     teams: [...new Set(memberships.map((m) => m.team.name))],
     manages: manages.map((t) => t.name),
   });

@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { requirePermission, requireAnyPermission } from "@/lib/permissions";
+import { ownsActingWorkspace, requirePermission, requireAnyPermission } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { dispatchRequest, notifyRecipient, sendToRecipient } from "@/lib/signing/dispatch";
 import { logSignEvent, staffActor } from "@/lib/signing/events";
@@ -37,7 +37,7 @@ export async function decideApproval(stepId: string, decision: "approve" | "reje
     const step = await prisma.approvalStep.findUnique({ where: { id: stepId } });
     if (!step) return { ok: false, error: "Not found" };
     if (step.status !== "pending") return { ok: false, error: "Already actioned." };
-    if (!canActOnStep(step, user)) return { ok: false, error: "You are not the assigned approver." };
+    if (!canActOnStep(step, user, await ownsActingWorkspace(user))) return { ok: false, error: "You are not the assigned approver." };
     const res = decision === "approve"
       ? await approveStep(step.id, { userId: user.id, name: user.name })
       : await rejectStep(step.id, { userId: user.id, name: user.name }, reason ?? "");

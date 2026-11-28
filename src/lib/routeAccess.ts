@@ -155,9 +155,11 @@ export function routeGrants(
   if (role === "owner") return ROUTE_RULES.map((rule) => rule.prefix).join(",");
   const held = permissions instanceof Set ? permissions : new Set(permissions);
   const tenantOwner = opts?.tenantOwner === true;
+  // The workspace's owner holds every permission in it (permissionQuery WORKSPACE_OWNER), so every permission-gated
+  // route too — never the platform-owner ("owner") ones. The page re-checks live (requireRoute), module switches included.
   return ROUTE_RULES.filter((rule) =>
     "anyOf" in rule
-      ? rule.anyOf.some((key) => held.has(key))
+      ? tenantOwner || rule.anyOf.some((key) => held.has(key))
       : "tenantOwner" in rule && tenantOwner,
   )
     .map((rule) => rule.prefix)

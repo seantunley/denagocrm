@@ -10,6 +10,7 @@ import { governingDocumentLink } from "./documents/governing";
 import {
   RBAC_INITIALIZED,
   RBAC_UNAVAILABLE,
+  WORKSPACE_OWNER,
   getUserPermissions,
   usablePermissions,
 } from "./permissionQuery";
@@ -96,6 +97,17 @@ export async function hasAnyPermission(user: PermissionUser, ...permissions: Per
   if (user.role === "owner") return true;
   const granted = await getUserPermissions(user.id);
   return !granted.has(RBAC_UNAVAILABLE) && granted.has(RBAC_INITIALIZED) && live.some((permission) => granted.has(permission));
+}
+
+/**
+ * The platform owner, or THIS workspace's owner (Tenant.ownerUserId) — "the owner" wherever a feature means the
+ * person who runs the workspace (approval steps addressed to the owner, the assistant's "sees everything"), for any
+ * user, not only the signed-in one. `user.role === "owner"` alone is the platform owner, which a provisioned
+ * workspace owner never is. The same lookup as their permissions (permissionQuery WORKSPACE_OWNER).
+ */
+export async function ownsActingWorkspace(user: PermissionUser): Promise<boolean> {
+  if (user.role === "owner") return true;
+  return (await getUserPermissions(user.id)).has(WORKSPACE_OWNER);
 }
 
 export async function requirePermission(permission: PermissionKey): Promise<PermissionUser> {

@@ -33,9 +33,10 @@ loader._load = function (this: unknown, request: string, parent, isMain) {
     switch (request) {
       case "./db": return {
         basePrisma: {
-          // Tagged template: the values are (userId, tenantId, marker) when enforcing, (userId, marker) otherwise.
+          // Tagged template: the values are (userId, tenantId, marker, owner marker, tenantId, userId) when enforcing,
+          // (userId, marker) otherwise.
           $queryRaw: async (_strings: TemplateStringsArray, ...values: unknown[]) => {
-            const tenantId = values.length === 3 ? (values[1] as string | null) : "ANY";
+            const tenantId = values.length === 6 ? (values[1] as string | null) : "ANY";
             state.askedIn.push(tenantId);
             const rows = [{ key: "__rbac_initialized__" }];
             if (tenantId === "t1" || tenantId === "ANY") rows.push({ key: "leads.edit" });
